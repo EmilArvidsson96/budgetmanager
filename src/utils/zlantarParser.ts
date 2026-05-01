@@ -7,8 +7,10 @@ import type {
   AccountBalance,
   AccountType,
   Account,
+  RecurringItem,
   CategoryDef,
 } from '@/types'
+import { AGREEMENT_CATEGORY_MAP } from '@/store/defaultCategories'
 
 // ─── Parse raw JSON files ─────────────────────────────────────────────────────
 
@@ -17,67 +19,103 @@ export function parseZlantarFiles(
   transactionsJson: unknown
 ): ZlantarImport {
   const data = (dataJson ?? {}) as ZlantarData
-  const raw = transactionsJson
 
-  // transactions.json may be wrapped in an object or be a bare array
+  // transactions.json is a bare array
   let txList: ZlantarTransaction[] = []
-  if (Array.isArray(raw)) {
-    txList = raw as ZlantarTransaction[]
-  } else if (raw && typeof raw === 'object') {
-    const obj = raw as Record<string, unknown>
-    const key = Object.keys(obj).find((k) =>
-      Array.isArray(obj[k]) && (obj[k] as unknown[]).length > 0
-    )
+  if (Array.isArray(transactionsJson)) {
+    txList = transactionsJson as ZlantarTransaction[]
+  } else if (transactionsJson && typeof transactionsJson === 'object') {
+    const obj = transactionsJson as Record<string, unknown>
+    const key = Object.keys(obj).find((k) => Array.isArray(obj[k]))
     if (key) txList = obj[key] as ZlantarTransaction[]
   }
 
-  const dates = txList
-    .map((t) => t.date)
-    .filter(Boolean)
-    .sort()
-
-  const yearMonth =
-    dates.length > 0
-      ? dates[0].slice(0, 7)
-      : undefined
+  const dates = txList.map((t) => t.date).filter(Boolean).sort()
 
   return {
     data,
     transactions: txList,
     importedAt: new Date().toISOString(),
-    yearMonth,
+    yearMonth: dates.length > 0 ? dates[0].slice(0, 7) : undefined,
   }
 }
 
-// ─── Derive accounts from data.json ──────────────────────────────────────────
+// ─── Derive accounts from data.json banks array ───────────────────────────────
 
 export function deriveAccounts(data: ZlantarData): Account[] {
-  const rawAccounts = data.accounts ?? []
-  return rawAccounts.map((a) => ({
-    id: a.id,
-    name: a.name,
-    type: normalizeAccountType(a.type),
-    bankName: a.bankName,
-    currency: a.currency ?? 'SEK',
-    interestRate: a.interestRate,
-    loanBalance: a.loanAmount,
-    loanOriginalAmount: a.loanOriginalAmount,
-    includeInLiquidity: true,
-  }))
+  const result: Account[] = []
+  for (const bank of data.banks ?? []) {
+    for (const acc of bank.accounts ?? []) {
+      result.push({
+        id: `${bank.name}_${acc.account_index}`,
+        name: acc.name,
+        type: normalizeAccountType(acc.type),
+        bankName: formatBankName(bank.name),
+        currency: 'SEK',
+        loanBalance: acc.balance < 0 ? Math.abs(acc.balance) : undefined,
+        includeInLiquidity: acc.type !== 'Loan',
+      })
+    }
+  }
+  return result
 }
 
-function normalizeAccountType(raw?: string): AccountType {
-  const s = (raw ?? '').toLowerCase()
-  if (s.includes('loan') || s.includes('lån') || s.includes('kredit_lan')) return 'loan'
-  if (s.includes('credit') || s.includes('kreditkort')) return 'credit'
-  if (s.includes('saving') || s.includes('spar')) return 'savings'
-  if (s.includes('isk')) return 'isk'
-  if (s.includes('invest') || s.includes('depot') || s.includes('fond')) return 'investment'
-  if (s.includes('check') || s.includes('privat') || s.includes('lön')) return 'checking'
-  return 'other'
+function formatBankName(raw: string): string {
+  const MAP: Record<string, string> = {
+    lansforsakringar: 'Länsförsäkringar',
+    sj: 'SJ',
+    ziklo: 'Ziklo / Carpay',
+    swedbank: 'Swedbank',
+    nordea: 'Nordea',
+    seb: 'SEB',
+    handelsbanken: 'Handelsbanken',
+    icabanken: 'ICA Banken',
+  }
+  return MAP[raw.toLowerCase()] ?? raw
 }
 
-// ─── Build monthly actuals per YYYY-MM ───────────────────────────────────────
+function normalizeAccountType(raw: string): AccountType {
+  switch (raw) {
+    case 'Loan':          return 'loan'
+    case 'Credit':        return 'credit'
+    case 'Savings':       return 'savings'
+    case 'Transactional': return 'checking'
+    default:              return 'other'
+  }
+}
+
+// ─── Derive recurring items from Zlantar agreements ──────────────────────────
+
+export function deriveRecurringItems(data: ZlantarData): RecurringItem[] {
+  const items: RecurringItem[] = []
+
+  for (const ag of data.agreements ?? []) {
+    const mapKey = `${ag.agreement_type}/${ag.agreement_subtype}`
+    const catRef = AGREEMENT_CATEGORY_MAP[mapKey] ?? { categoryId: 'other', subcategoryId: 'other' }
+    const company = ag.companies?.[0] ?? ag.agreement_type
+
+    // Convert frequency to monthly amount
+    let monthlyAmount = ag.amount
+    switch (ag.frequency) {
+      case 'quarterly':          monthlyAmount = ag.amount / 3;  break
+      case 'yearly':             monthlyAmount = ag.amount / 12; break
+      case 'every_other_month':  monthlyAmount = ag.amount / 2;  break
+    }
+
+    items.push({
+      id: `agreement_${company.replace(/\s+/g, '_').toLowerCase()}`,
+      name: company,
+      amount: Math.round(monthlyAmount * 100) / 100,
+      categoryId: catRef.categoryId,
+      subcategoryId: catRef.subcategoryId,
+      type: 'expense',
+    })
+  }
+
+  return items
+}
+
+// ─── Build monthly actuals grouped by YYYY-MM ────────────────────────────────
 
 export function buildMonthlyActuals(
   imp: ZlantarImport,
@@ -85,53 +123,53 @@ export function buildMonthlyActuals(
 ): Record<string, MonthlyActuals> {
   const { transactions, data } = imp
 
-  // Group transactions by YYYY-MM
+  // Pre-build category lookup: catId → Set<subId>
+  const catIds = new Set(categories.map((c) => c.id))
+
+  // Group by YYYY-MM, skipping transfers (no category)
   const byMonth: Record<string, ZlantarTransaction[]> = {}
   for (const tx of transactions) {
     if (!tx.date) continue
+    if (tx.transaction_type === 'transfer') continue  // internal account transfers, skip
     const key = tx.date.slice(0, 7)
     if (!byMonth[key]) byMonth[key] = []
     byMonth[key].push(tx)
   }
 
   const accountBalances = buildAccountBalances(data)
-  const catMap = buildCategoryMap(categories)
-
   const result: Record<string, MonthlyActuals> = {}
 
   for (const [ym, txs] of Object.entries(byMonth)) {
     const [yearStr, monthStr] = ym.split('-')
-    const year = parseInt(yearStr)
-    const month = parseInt(monthStr)
 
-    // Aggregate by category + subcategory
+    // Aggregate by category + subcategory (direct key lookup — no fuzzy matching needed)
     const aggMap: Record<string, ActualEntry> = {}
 
     for (const tx of txs) {
-      const key = `${tx.category ?? 'ovrigt'}|||${tx.subcategory ?? ''}`
+      const catId = tx.category && catIds.has(tx.category) ? tx.category : 'other'
+      const subId = tx.subcategory ?? ''
+      const key = `${catId}|||${subId}`
+
       if (!aggMap[key]) {
-        const { catId, catName, subId, subName } = resolveCategoryIds(
-          tx.category,
-          tx.subcategory,
-          catMap
-        )
+        const catDef = categories.find((c) => c.id === catId)
+        const subDef = catDef?.subcategories.find((s) => s.id === subId)
         aggMap[key] = {
           categoryId: catId,
-          categoryName: catName,
+          categoryName: catDef?.name ?? catId,
           subcategoryId: subId || undefined,
-          subcategoryName: subName || undefined,
+          subcategoryName: subDef?.name ?? (subId || undefined),
           totalAmount: 0,
           transactionCount: 0,
         }
       }
-      aggMap[key].totalAmount += tx.amount ?? 0
+      aggMap[key].totalAmount += tx.amount
       aggMap[key].transactionCount += 1
     }
 
     result[ym] = {
       id: ym,
-      year,
-      month,
+      year: parseInt(yearStr),
+      month: parseInt(monthStr),
       entries: Object.values(aggMap),
       accountBalances,
       importedAt: imp.importedAt,
@@ -141,82 +179,25 @@ export function buildMonthlyActuals(
   return result
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Account balance snapshot ─────────────────────────────────────────────────
 
 function buildAccountBalances(data: ZlantarData): AccountBalance[] {
-  return (data.accounts ?? []).map((a) => ({
-    accountId: a.id,
-    accountName: a.name,
-    accountType: normalizeAccountType(a.type),
-    balance: a.balance ?? 0,
-    currency: a.currency ?? 'SEK',
-  }))
-}
-
-type CatMap = Map<string, { id: string; name: string; subMap: Map<string, { id: string; name: string }> }>
-
-function buildCategoryMap(categories: CategoryDef[]): CatMap {
-  const map: CatMap = new Map()
-  for (const cat of categories) {
-    const subMap = new Map<string, { id: string; name: string }>()
-    for (const sub of cat.subcategories) {
-      subMap.set(normalizeKey(sub.name), { id: sub.id, name: sub.name })
-    }
-    map.set(normalizeKey(cat.name), { id: cat.id, name: cat.name, subMap })
-  }
-  return map
-}
-
-function normalizeKey(s: string): string {
-  return s.toLowerCase().replace(/[åä]/g, 'a').replace(/ö/g, 'o').replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
-}
-
-function resolveCategoryIds(
-  rawCat?: string,
-  rawSub?: string,
-  catMap?: CatMap
-): { catId: string; catName: string; subId: string; subName: string } {
-  if (!catMap || !rawCat) {
-    return { catId: 'ovrigt', catName: rawCat ?? 'Övrigt', subId: rawSub ?? '', subName: rawSub ?? '' }
-  }
-
-  const catKey = normalizeKey(rawCat)
-  let match = catMap.get(catKey)
-
-  if (!match) {
-    // fuzzy: find first key that contains or is contained in catKey
-    for (const [k, v] of catMap.entries()) {
-      if (catKey.includes(k) || k.includes(catKey)) {
-        match = v
-        break
-      }
+  const result: AccountBalance[] = []
+  for (const bank of data.banks ?? []) {
+    for (const acc of bank.accounts ?? []) {
+      result.push({
+        accountId: `${bank.name}_${acc.account_index}`,
+        accountName: acc.name,
+        accountType: normalizeAccountType(acc.type),
+        balance: acc.balance,
+        currency: 'SEK',
+      })
     }
   }
-
-  if (!match) {
-    return { catId: normalizeKey(rawCat), catName: rawCat, subId: rawSub ?? '', subName: rawSub ?? '' }
-  }
-
-  const subKey = rawSub ? normalizeKey(rawSub) : ''
-  let subMatch = subKey ? match.subMap.get(subKey) : undefined
-  if (!subMatch && subKey) {
-    for (const [k, v] of match.subMap.entries()) {
-      if (subKey.includes(k) || k.includes(subKey)) {
-        subMatch = v
-        break
-      }
-    }
-  }
-
-  return {
-    catId: match.id,
-    catName: match.name,
-    subId: subMatch?.id ?? subKey,
-    subName: subMatch?.name ?? rawSub ?? '',
-  }
+  return result
 }
 
-// ─── Discover unknown categories from import ─────────────────────────────────
+// ─── Report categories that came in but aren't mapped ────────────────────────
 
 export interface UnknownCategory {
   rawCategory: string
@@ -229,25 +210,18 @@ export function findUnknownCategories(
   transactions: ZlantarTransaction[],
   categories: CategoryDef[]
 ): UnknownCategory[] {
-  const catMap = buildCategoryMap(categories)
-  const knownIds = new Set(categories.map((c) => c.id))
+  const catIds = new Set(categories.map((c) => c.id))
   const result: Record<string, UnknownCategory> = {}
 
   for (const tx of transactions) {
-    if (!tx.category) continue
-    const { catId } = resolveCategoryIds(tx.category, tx.subcategory, catMap)
-    if (!knownIds.has(catId)) {
+    if (!tx.category || tx.transaction_type === 'transfer') continue
+    if (!catIds.has(tx.category)) {
       const key = `${tx.category}|||${tx.subcategory ?? ''}`
       if (!result[key]) {
-        result[key] = {
-          rawCategory: tx.category,
-          rawSubcategory: tx.subcategory,
-          count: 0,
-          totalAmount: 0,
-        }
+        result[key] = { rawCategory: tx.category, rawSubcategory: tx.subcategory, count: 0, totalAmount: 0 }
       }
       result[key].count++
-      result[key].totalAmount += tx.amount ?? 0
+      result[key].totalAmount += tx.amount
     }
   }
 

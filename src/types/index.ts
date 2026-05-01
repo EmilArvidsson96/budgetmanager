@@ -1,61 +1,52 @@
-// ─── Zlantar import types ────────────────────────────────────────────────────
+// ─── Zlantar import types (matches actual export schema) ─────────────────────
 
-export interface ZlantarAccount {
-  id: string
+export interface ZlantarRawAccount {
   name: string
-  type: string           // 'checking' | 'savings' | 'credit' | 'loan' | 'isk' | 'investment' | ...
-  bankName?: string
-  balance?: number
-  currency?: string
-  interestRate?: number
-  loanAmount?: number
-  loanOriginalAmount?: number
-  accountNumber?: string
+  account_number: string
+  balance: number
+  type: string           // 'Loan' | 'Transactional' | 'Savings' | 'Credit'
+  account_index: number
+}
+
+export interface ZlantarBank {
+  name: string
+  accounts: ZlantarRawAccount[]
 }
 
 export interface ZlantarAgreement {
-  id: string
-  name: string
+  agreement_type: string   // 'media' | 'leisure' | 'transport' | 'finance' | 'household' | 'insurance'
+  agreement_subtype: string
   amount: number
-  currency?: string
-  category?: string
-  subcategory?: string
-  accountId?: string
-  nextDate?: string
-  intervalDays?: number
-  active?: boolean
-}
-
-export interface ZlantarBudget {
-  id?: string
-  category: string
-  subcategory?: string
-  amount: number
-  period?: string
+  frequency: string        // 'monthly' | 'quarterly' | 'every_other_month' | 'yearly'
+  companies: string[]
+  start_date?: string
+  end_date?: string
+  notes?: string
 }
 
 export interface ZlantarTransaction {
-  id: string
+  index: number
   date: string
   amount: number
-  currency?: string
   description?: string
-  name?: string
-  category?: string
+  transaction_type: string  // 'expense' | 'income' | 'savings' | 'transfer'
+  category?: string         // 'food' | 'household' | 'transport' | 'shopping' | 'leisure' | 'other' | 'salary' | 'interest' | 'refund' | 'sale' | 'stocks' | ''
   subcategory?: string
-  accountId?: string
-  accountName?: string
-  type?: string          // 'expense' | 'income' | 'transfer' | 'loan_payment' | ...
-  note?: string
+  account_index: number
+  bank_name: string
+  account_number: string
+  account_name: string
   tags?: string[]
+  notes?: string
 }
 
 export interface ZlantarData {
-  accounts?: ZlantarAccount[]
+  banks?: ZlantarBank[]
   agreements?: ZlantarAgreement[]
-  budgets?: ZlantarBudget[]
   user?: Record<string, unknown>
-  properties?: unknown[]
+  budget?: unknown[]
+  residenceValuation?: unknown[]
+  receipts?: unknown[]
   [key: string]: unknown
 }
 

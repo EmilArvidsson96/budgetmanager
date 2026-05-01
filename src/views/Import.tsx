@@ -5,8 +5,9 @@ import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
-import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, findUnknownCategories } from '@/utils/zlantarParser'
+import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories } from '@/utils/zlantarParser'
 import { formatCurrency } from '@/utils/budgetHelpers'
+import type { RecurringItem } from '@/types'
 
 type Step = 'upload' | 'preview' | 'done'
 
@@ -17,6 +18,8 @@ export function ImportView() {
   const [preview, setPreview] = useState<ReturnType<typeof buildMonthlyActuals> | null>(null)
   const [unknownCats, setUnknownCats] = useState<ReturnType<typeof findUnknownCategories>>([])
   const [newAccounts, setNewAccounts] = useState<ReturnType<typeof deriveAccounts>>([])
+  const [newRecurring, setNewRecurring] = useState<RecurringItem[]>([])
+  const [importRecurring, setImportRecurring] = useState(true)
   const [importing, setImporting] = useState(false)
   const dataRef = useRef<HTMLInputElement>(null)
   const txRef = useRef<HTMLInputElement>(null)
@@ -39,15 +42,18 @@ export function ImportView() {
       const actuals = buildMonthlyActuals(imp, store.settings.categories)
       const unknown = findUnknownCategories(imp.transactions, store.settings.categories)
       const accounts = deriveAccounts(imp.data)
+      const recurring = deriveRecurringItems(imp.data)
 
-      // Find accounts not yet in settings
-      const existingIds = new Set(store.settings.accounts.map((a) => a.id))
-      const newAccs = accounts.filter((a) => !existingIds.has(a.id))
+      const existingAccountIds = new Set(store.settings.accounts.map((a) => a.id))
+      const existingRecurringIds = new Set(store.settings.recurringItems.map((r) => r.id))
+      const newAccs = accounts.filter((a) => !existingAccountIds.has(a.id))
+      const newRec = recurring.filter((r) => !existingRecurringIds.has(r.id))
 
       store.setZlantarImport(imp)
       setPreview(actuals)
       setUnknownCats(unknown)
       setNewAccounts(newAccs)
+      setNewRecurring(newRec)
       setStep('preview')
     } catch (err) {
       alert(`Fel vid inläsning: ${(err as Error).message}`)
@@ -64,6 +70,11 @@ export function ImportView() {
     for (const acc of newAccounts) {
       store.upsertAccount(acc)
     }
+    if (importRecurring) {
+      for (const rec of newRecurring) {
+        store.upsertRecurring(rec)
+      }
+    }
     setStep('done')
   }
 
@@ -74,6 +85,7 @@ export function ImportView() {
     setPreview(null)
     setUnknownCats([])
     setNewAccounts([])
+    setNewRecurring([])
   }
 
   const months = preview ? Object.keys(preview).sort() : []
@@ -187,6 +199,35 @@ export function ImportView() {
                     <Badge variant={a.type === 'loan' ? 'red' : a.type === 'savings' || a.type === 'isk' ? 'blue' : 'gray'}>
                       {a.type}
                     </Badge>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* Recurring items from agreements */}
+          {newRecurring.length > 0 && (
+            <Card>
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <h3 className="font-semibold text-gray-900">{newRecurring.length} återkommande poster från Zlantar</h3>
+                  <p className="text-sm text-gray-500">Hittades i dina avtal och prenumerationer</p>
+                </div>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={importRecurring}
+                    onChange={(e) => setImportRecurring(e.target.checked)}
+                    className="rounded"
+                  />
+                  Importera
+                </label>
+              </div>
+              <div className="space-y-1.5">
+                {newRecurring.map((r) => (
+                  <div key={r.id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+                    <span className="text-sm text-gray-800">{r.name}</span>
+                    <span className="text-sm font-medium text-gray-700">{r.amount.toLocaleString('sv-SE')} kr/mån</span>
                   </div>
                 ))}
               </div>
