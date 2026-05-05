@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      // GitHub Pages SPA redirect: encode the current path into a query param
+      // and send back to index.html, which will restore it via history.replaceState.
+      var base = '/budgetmanager';
+      var path = window.location.pathname.slice(base.length) || '/';
+      var search = window.location.search;
+      var hash = window.location.hash;
+      window.location.replace(
+        base + '/?redirect=' + encodeURIComponent(path + search + hash)
+      );
+    </script>
+  </head>
+</html>
