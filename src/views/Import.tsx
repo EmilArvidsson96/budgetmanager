@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { Upload, CheckCircle, AlertTriangle, Info } from 'lucide-react'
+import { Upload, CheckCircle, AlertTriangle, Info, ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
@@ -19,8 +19,15 @@ export function ImportView() {
   const [unknownCats, setUnknownCats] = useState<ReturnType<typeof findUnknownCategories>>([])
   const [newAccounts, setNewAccounts] = useState<ReturnType<typeof deriveAccounts>>([])
   const [newRecurring, setNewRecurring] = useState<RecurringItem[]>([])
-  const [importRecurring, setImportRecurring] = useState(true)
   const [importing, setImporting] = useState(false)
+
+  // Selection state for preview step
+  const [selectedMonths, setSelectedMonths] = useState<Set<string>>(new Set())
+  const [deselectedCatKeys, setDeselectedCatKeys] = useState<Set<string>>(new Set())
+  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set())
+  const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set())
+  const [selectedRecurringIds, setSelectedRecurringIds] = useState<Set<string>>(new Set())
+
   const dataRef = useRef<HTMLInputElement>(null)
   const txRef = useRef<HTMLInputElement>(null)
 
@@ -54,6 +61,11 @@ export function ImportView() {
       setUnknownCats(unknown)
       setNewAccounts(newAccs)
       setNewRecurring(newRec)
+      setSelectedMonths(new Set(Object.keys(actuals)))
+      setSelectedAccountIds(new Set(newAccs.map((a) => a.id)))
+      setSelectedRecurringIds(new Set(newRec.map((r) => r.id)))
+      setDeselectedCatKeys(new Set())
+      setExpandedMonths(new Set())
       setStep('preview')
     } catch (err) {
       alert(`Fel vid inläsning: ${(err as Error).message}`)
@@ -64,16 +76,19 @@ export function ImportView() {
 
   const confirmImport = () => {
     if (!preview) return
-    for (const actuals of Object.values(preview)) {
-      store.upsertActuals(actuals)
+    for (const [ym, act] of Object.entries(preview)) {
+      if (!selectedMonths.has(ym)) continue
+      const filteredEntries = act.entries.filter(
+        (e) => !deselectedCatKeys.has(`${ym}:${e.categoryId}`)
+      )
+      if (filteredEntries.length === 0) continue
+      store.upsertActuals({ ...act, entries: filteredEntries })
     }
     for (const acc of newAccounts) {
-      store.upsertAccount(acc)
+      if (selectedAccountIds.has(acc.id)) store.upsertAccount(acc)
     }
-    if (importRecurring) {
-      for (const rec of newRecurring) {
-        store.upsertRecurring(rec)
-      }
+    for (const rec of newRecurring) {
+      if (selectedRecurringIds.has(rec.id)) store.upsertRecurring(rec)
     }
     setStep('done')
   }
@@ -86,9 +101,51 @@ export function ImportView() {
     setUnknownCats([])
     setNewAccounts([])
     setNewRecurring([])
+    setSelectedMonths(new Set())
+    setDeselectedCatKeys(new Set())
+    setExpandedMonths(new Set())
+    setSelectedAccountIds(new Set())
+    setSelectedRecurringIds(new Set())
   }
 
+  const toggleMonth = (ym: string) =>
+    setSelectedMonths((prev) => {
+      const next = new Set(prev)
+      if (next.has(ym)) next.delete(ym); else next.add(ym)
+      return next
+    })
+
+  const toggleCatKey = (key: string) =>
+    setDeselectedCatKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+
+  const toggleExpanded = (ym: string) =>
+    setExpandedMonths((prev) => {
+      const next = new Set(prev)
+      if (next.has(ym)) next.delete(ym); else next.add(ym)
+      return next
+    })
+
+  const toggleAccount = (id: string) =>
+    setSelectedAccountIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+
+  const toggleRecurring = (id: string) =>
+    setSelectedRecurringIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+
   const months = preview ? Object.keys(preview).sort() : []
+  const importedMonths = months.filter((m) => selectedMonths.has(m))
+  const existingActuals = Object.keys(store.actuals).sort()
 
   return (
     <Layout>
@@ -153,6 +210,38 @@ export function ImportView() {
               Granska import
             </Button>
           </div>
+
+          {/* Existing actuals — remove previous imports */}
+          {existingActuals.length > 0 && (
+            <Card padding={false}>
+              <div className="p-4 border-b border-gray-100">
+                <h3 className="font-semibold text-gray-900">Importerade utfall</h3>
+                <p className="text-sm text-gray-500">{existingActuals.length} månader · klicka på papperskorgen för att ta bort</p>
+              </div>
+              {existingActuals.map((ym) => {
+                const act = store.actuals[ym]
+                const total = act.entries.reduce((s, e) => s + e.totalAmount, 0)
+                return (
+                  <div key={ym} className="flex items-center justify-between px-4 py-2.5 border-t border-gray-100">
+                    <div>
+                      <span className="text-sm font-medium text-gray-800">{ym}</span>
+                      <span className="text-xs text-gray-400 ml-2">{act.entries.length} poster</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm text-gray-600">{formatCurrency(total)}</span>
+                      <button
+                        onClick={() => store.removeActuals(ym)}
+                        className="p-1 text-gray-300 hover:text-red-500 rounded transition-colors"
+                        title="Ta bort"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </Card>
+          )}
         </div>
       )}
 
@@ -188,24 +277,30 @@ export function ImportView() {
           {/* New accounts */}
           {newAccounts.length > 0 && (
             <Card>
-              <CardHeader title={`${newAccounts.length} nya konton hittades`} subtitle="Dessa läggs till i dina kontoinställningar" />
+              <CardHeader title={`${newAccounts.length} nya konton hittades`} subtitle="Välj vilka som ska läggas till" />
               <div className="space-y-2">
                 {newAccounts.map((a) => (
-                  <div key={a.id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
-                    <div>
+                  <label key={a.id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedAccountIds.has(a.id)}
+                        onChange={() => toggleAccount(a.id)}
+                        className="rounded"
+                      />
                       <span className="text-sm font-medium text-gray-800">{a.name}</span>
-                      {a.bankName && <span className="text-xs text-gray-400 ml-2">{a.bankName}</span>}
+                      {a.bankName && <span className="text-xs text-gray-400">{a.bankName}</span>}
                     </div>
                     <Badge variant={a.type === 'loan' ? 'red' : a.type === 'savings' || a.type === 'isk' ? 'blue' : 'gray'}>
                       {a.type}
                     </Badge>
-                  </div>
+                  </label>
                 ))}
               </div>
             </Card>
           )}
 
-          {/* Recurring items from agreements */}
+          {/* Recurring items */}
           {newRecurring.length > 0 && (
             <Card>
               <div className="flex items-start justify-between mb-3">
@@ -213,45 +308,134 @@ export function ImportView() {
                   <h3 className="font-semibold text-gray-900">{newRecurring.length} återkommande poster från Zlantar</h3>
                   <p className="text-sm text-gray-500">Hittades i dina avtal och prenumerationer</p>
                 </div>
-                <label className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={importRecurring}
-                    onChange={(e) => setImportRecurring(e.target.checked)}
-                    className="rounded"
-                  />
-                  Importera
-                </label>
+                <button
+                  className="text-xs text-brand-600 hover:underline"
+                  onClick={() => {
+                    if (selectedRecurringIds.size === newRecurring.length) {
+                      setSelectedRecurringIds(new Set())
+                    } else {
+                      setSelectedRecurringIds(new Set(newRecurring.map((r) => r.id)))
+                    }
+                  }}
+                >
+                  {selectedRecurringIds.size === newRecurring.length ? 'Avmarkera alla' : 'Markera alla'}
+                </button>
               </div>
               <div className="space-y-1.5">
                 {newRecurring.map((r) => (
-                  <div key={r.id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
-                    <span className="text-sm text-gray-800">{r.name}</span>
+                  <label key={r.id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedRecurringIds.has(r.id)}
+                        onChange={() => toggleRecurring(r.id)}
+                        className="rounded"
+                      />
+                      <span className="text-sm text-gray-800">{r.name}</span>
+                    </div>
                     <span className="text-sm font-medium text-gray-700">{r.amount.toLocaleString('sv-SE')} kr/mån</span>
-                  </div>
+                  </label>
                 ))}
               </div>
             </Card>
           )}
 
-          {/* Month summaries */}
+          {/* Month summaries with per-category selection */}
           <Card padding={false}>
-            <div className="p-5 border-b border-gray-100">
-              <h3 className="font-semibold text-gray-900">Månadsutfall som importeras</h3>
-              <p className="text-sm text-gray-500">{months.length} månader med transaktionsdata</p>
+            <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-gray-900">Månadsutfall</h3>
+                <p className="text-sm text-gray-500">{importedMonths.length} av {months.length} månader valda</p>
+              </div>
+              <button
+                className="text-xs text-brand-600 hover:underline"
+                onClick={() => {
+                  if (selectedMonths.size === months.length) {
+                    setSelectedMonths(new Set())
+                  } else {
+                    setSelectedMonths(new Set(months))
+                  }
+                }}
+              >
+                {selectedMonths.size === months.length ? 'Avmarkera alla' : 'Markera alla'}
+              </button>
             </div>
 
             {months.map((ym) => {
               const act = preview[ym]
               const total = act.entries.reduce((s, e) => s + e.totalAmount, 0)
-              const catCount = new Set(act.entries.map((e) => e.categoryId)).size
+              const isSelected = selectedMonths.has(ym)
+              const isExpanded = expandedMonths.has(ym)
+
+              // Group entries by category, summing subcategory amounts
+              const catGroups = Object.values(
+                act.entries.reduce((acc, e) => {
+                  if (!acc[e.categoryId]) acc[e.categoryId] = { id: e.categoryId, name: e.categoryName, total: 0 }
+                  acc[e.categoryId].total += e.totalAmount
+                  return acc
+                }, {} as Record<string, { id: string; name: string; total: number }>)
+              ).sort((a, b) => Math.abs(b.total) - Math.abs(a.total))
+
+              const deselectedCount = catGroups.filter((c) => deselectedCatKeys.has(`${ym}:${c.id}`)).length
+
               return (
-                <div key={ym} className="flex items-center justify-between px-5 py-3 border-t border-gray-100">
-                  <div>
-                    <span className="font-medium text-gray-800">{ym}</span>
-                    <span className="text-sm text-gray-400 ml-3">{act.entries.length} poster · {catCount} kategorier</span>
+                <div key={ym} className={`border-t border-gray-100 ${!isSelected ? 'opacity-50' : ''}`}>
+                  <div className="flex items-center gap-3 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleMonth(ym)}
+                      className="rounded shrink-0"
+                    />
+                    <button
+                      className="flex-1 flex items-center justify-between text-left min-w-0"
+                      onClick={() => isSelected && toggleExpanded(ym)}
+                      disabled={!isSelected}
+                    >
+                      <div className="min-w-0">
+                        <span className="font-medium text-gray-800">{ym}</span>
+                        <span className="text-sm text-gray-400 ml-3">
+                          {catGroups.length} kategorier
+                          {deselectedCount > 0 && <span className="text-amber-600"> · {deselectedCount} avmarkerade</span>}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0 ml-3">
+                        <span className="font-medium text-gray-700">{formatCurrency(total)}</span>
+                        {isSelected && (
+                          isExpanded
+                            ? <ChevronDown className="w-4 h-4 text-gray-400" />
+                            : <ChevronRight className="w-4 h-4 text-gray-400" />
+                        )}
+                      </div>
+                    </button>
                   </div>
-                  <span className="font-medium text-gray-700">{formatCurrency(total)}</span>
+
+                  {isSelected && isExpanded && (
+                    <div className="px-4 pb-3 space-y-0.5 border-t border-gray-50 pt-2">
+                      {catGroups.map((cat) => {
+                        const catKey = `${ym}:${cat.id}`
+                        const isChecked = !deselectedCatKeys.has(catKey)
+                        return (
+                          <label key={cat.id} className="flex items-center justify-between pl-7 py-1.5 rounded hover:bg-gray-50 cursor-pointer">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => toggleCatKey(catKey)}
+                                className="rounded"
+                              />
+                              <span className={`text-sm ${isChecked ? 'text-gray-700' : 'text-gray-400 line-through'}`}>
+                                {cat.name}
+                              </span>
+                            </div>
+                            <span className={`text-sm ${isChecked ? 'text-gray-500' : 'text-gray-300'}`}>
+                              {formatCurrency(cat.total)}
+                            </span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -259,8 +443,9 @@ export function ImportView() {
 
           <div className="flex justify-between">
             <Button variant="secondary" onClick={reset}>Börja om</Button>
-            <Button onClick={confirmImport}>
-              <CheckCircle className="w-4 h-4" /> Bekräfta import
+            <Button onClick={confirmImport} disabled={importedMonths.length === 0}>
+              <CheckCircle className="w-4 h-4" />
+              Bekräfta import ({importedMonths.length} {importedMonths.length === 1 ? 'månad' : 'månader'})
             </Button>
           </div>
         </div>
@@ -272,7 +457,7 @@ export function ImportView() {
           <CheckCircle className="w-12 h-12 text-green-500 mx-auto mb-4" />
           <h3 className="text-xl font-semibold text-gray-800 mb-2">Import klar!</h3>
           <p className="text-gray-500 mb-6">
-            {months.length} månader med utfallsdata har importerats.
+            {importedMonths.length} {importedMonths.length === 1 ? 'månad' : 'månader'} med utfallsdata har importerats.
             Gå till månads- eller årsbudgeten för att jämföra med dina budgetar.
           </p>
           <div className="flex justify-center gap-3">
