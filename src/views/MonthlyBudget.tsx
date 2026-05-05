@@ -260,7 +260,7 @@ export function MonthlyBudgetView() {
           <div className="overflow-x-auto">
             <div className="min-w-[760px]">
               {/* Table header */}
-              <div className="grid grid-cols-[1fr_150px_150px_130px_120px] bg-gray-50 border-b border-gray-100 px-5 py-2.5 text-[11px] font-semibold text-gray-400 uppercase tracking-widest">
+              <div className="grid grid-cols-[1fr_150px_150px_130px_120px] bg-warm-50 border-b border-warm-200 px-5 py-2.5 text-[11px] font-semibold text-warm-500 uppercase tracking-widest">
                 <div>Kategori</div>
                 <div className="text-right">Budget</div>
                 <div className="text-right">Utfall</div>
@@ -314,11 +314,11 @@ function CategorySection({
   const hasSubcategories = cat.subcategories.length > 0
 
   return (
-    <div className="border-b border-gray-50 last:border-0">
+    <div className="border-b border-warm-100 last:border-0">
       {/* Category row */}
       <div
         className={`grid grid-cols-[1fr_150px_150px_130px_120px] px-5 py-3.5 items-center
-          hover:bg-gray-50/60 transition-colors cursor-pointer select-none`}
+          hover:bg-warm-50 transition-colors cursor-pointer select-none`}
         onClick={hasSubcategories ? onToggle : undefined}
       >
         <div className="flex items-center gap-2.5 min-w-0">
@@ -369,7 +369,7 @@ function CategorySection({
 
       {/* Subcategory rows */}
       {expanded && hasSubcategories && (
-        <div className="bg-gray-50/40">
+        <div className="bg-warm-50/60">
           {cat.subcategories.map((sub) => {
             const subBudget = budget?.subcategories.find((s) => s.subcategoryId === sub.id)?.amount ?? 0
             const subActual = actual
@@ -382,7 +382,7 @@ function CategorySection({
             return (
               <div
                 key={sub.id}
-                className="grid grid-cols-[1fr_150px_150px_130px_120px] px-5 py-2.5 items-center border-t border-gray-100/60"
+                className="grid grid-cols-[1fr_150px_150px_130px_120px] px-5 py-2.5 items-center border-t border-warm-200/60"
               >
                 <div className="pl-9 text-sm text-gray-500">{sub.name}</div>
                 <div className="text-right">
@@ -437,7 +437,7 @@ function SummaryCard({
     blue:  'text-brand-700',
   }
   return (
-    <div className={`bg-white border border-gray-100 border-t-2 ${topBorder[variant]} rounded-xl p-4`}>
+    <div className={`bg-white border border-warm-300 border-t-2 ${topBorder[variant]} rounded-xl p-4`}>
       <div className="text-[11px] font-medium text-gray-400 uppercase tracking-wide mb-2">{label}</div>
       <div className={`text-xl font-semibold tabular-nums tracking-tight ${valueColor[variant]}`}>
         {formatCurrency(value)}

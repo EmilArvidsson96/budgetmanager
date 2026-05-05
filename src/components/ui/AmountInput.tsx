@@ -37,9 +37,9 @@ export function AmountInput({ value, onChange, placeholder = '0', className = ''
           }
           setRaw('')
         }}
-        className="w-full text-right rounded-md border border-gray-200 bg-gray-50 pl-3 pr-8 py-1.5
-          text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent
-          placeholder:text-gray-300"
+        className="w-full text-right rounded-md border border-warm-300 bg-warm-50 pl-3 pr-8 py-1.5
+          text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent
+          placeholder:text-warm-400"
       />
       <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-gray-400 pointer-events-none select-none">
         kr

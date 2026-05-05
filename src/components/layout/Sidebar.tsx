@@ -22,13 +22,13 @@ export function Sidebar() {
   return (
     <>
       {/* ── Desktop sidebar ── */}
-      <aside className="hidden md:flex w-56 min-h-screen bg-zinc-950 flex-col py-6 px-3 shrink-0">
+      <aside className="hidden md:flex w-56 min-h-screen bg-warm-200 flex-col py-6 px-3 shrink-0 border-r border-warm-300">
         {/* Logo */}
         <div className="flex items-center gap-2.5 px-3 mb-8">
-          <div className="w-7 h-7 rounded-lg bg-brand-500 flex items-center justify-center shrink-0">
+          <div className="w-7 h-7 rounded-lg bg-brand-500 flex items-center justify-center shrink-0 shadow-sm">
             <TrendingUp className="w-4 h-4 text-white" />
           </div>
-          <span className="text-white font-semibold text-sm tracking-tight leading-tight">
+          <span className="text-warm-900 font-semibold text-sm tracking-tight leading-tight">
             Budget&shy;hanteraren
           </span>
         </div>
@@ -40,16 +40,16 @@ export function Sidebar() {
               key={to}
               to={to}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors duration-150
+                `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150
                 ${isActive
-                  ? 'bg-zinc-800 text-white'
-                  : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100'
+                  ? 'bg-warm-100 text-warm-900 shadow-sm'
+                  : 'text-warm-600 hover:bg-warm-300 hover:text-warm-900'
                 }`
               }
             >
               {({ isActive }) => (
                 <>
-                  <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-brand-400' : ''}`} />
+                  <Icon className={`w-4 h-4 shrink-0 transition-colors ${isActive ? 'text-brand-500' : ''}`} />
                   {label}
                 </>
               )}
@@ -57,13 +57,13 @@ export function Sidebar() {
           ))}
         </nav>
 
-        <div className="px-3 text-[11px] text-zinc-600 tracking-wide">
+        <div className="px-3 text-[11px] text-warm-500 tracking-wide">
           v1.0
         </div>
       </aside>
 
       {/* ── Mobile bottom nav ── */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-gray-100">
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-warm-200 border-t border-warm-300">
         <div className="flex">
           {NAV_ITEMS.map(({ to, icon: Icon, short }) => (
             <NavLink
@@ -71,7 +71,7 @@ export function Sidebar() {
               to={to}
               className={({ isActive }) =>
                 `flex-1 flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition-colors
-                ${isActive ? 'text-brand-600' : 'text-gray-400'}`
+                ${isActive ? 'text-brand-500' : 'text-warm-500'}`
               }
             >
               <Icon className="w-5 h-5" />
