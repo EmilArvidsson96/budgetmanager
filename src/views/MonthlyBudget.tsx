@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { AmountInput } from '@/components/ui/AmountInput'
 import { ProgressBar } from '@/components/ui/ProgressBar'
+import { Dialog, OptionRow } from '@/components/ui/Dialog'
 import {
   MONTH_NAMES_LONG,
   makeMonthId,
@@ -14,9 +15,14 @@ import {
   calcBudgetTotals,
   calcActualTotals,
   createBlankMonthlyBudget,
+  createMonthlyBudgetFromActuals,
+  createMonthlyBudgetFrom6AvgBudget,
+  createMonthlyBudgetFrom6AvgActuals,
 } from '@/utils/budgetHelpers'
 import { exportToExcel } from '@/utils/excelExport'
 import type { CategoryDef, SubcategoryBudget } from '@/types'
+
+type MonthInitMode = 'prev-budget' | 'prev-actuals' | 'avg6-budget' | 'avg6-actuals' | 'blank'
 
 export function MonthlyBudgetView() {
   const today = new Date()
@@ -24,6 +30,8 @@ export function MonthlyBudgetView() {
   const [month, setMonth] = useState(today.getMonth() + 1)
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set())
   const [exporting, setExporting] = useState(false)
+  const [showInitDialog, setShowInitDialog] = useState(false)
+  const [initMode, setInitMode] = useState<MonthInitMode>('prev-budget')
 
   const store = useAppStore()
   const { settings, monthlyBudgets, actuals } = store
@@ -42,10 +50,35 @@ export function MonthlyBudgetView() {
     else setMonth((m) => m + 1)
   }
 
-  const initBudget = () => {
-    const prevId = makeMonthId(month === 1 ? year - 1 : year, month === 1 ? 12 : month - 1)
-    const prev = monthlyBudgets[prevId]
-    store.upsertMonthlyBudget(createBlankMonthlyBudget(year, month, categories, recurringItems, prev))
+  const prevMonthId = makeMonthId(month === 1 ? year - 1 : year, month === 1 ? 12 : month - 1)
+  const prevBudget = monthlyBudgets[prevMonthId]
+  const prevActuals = actuals[prevMonthId]
+  const has6AvgBudget = Array.from({ length: 6 }, (_, i) => {
+    const m = month - i - 1
+    const y = m <= 0 ? year - 1 : year
+    return monthlyBudgets[makeMonthId(y, m <= 0 ? m + 12 : m)]
+  }).some(Boolean)
+  const has6AvgActuals = Array.from({ length: 6 }, (_, i) => {
+    const m = month - i - 1
+    const y = m <= 0 ? year - 1 : year
+    return actuals[makeMonthId(y, m <= 0 ? m + 12 : m)]
+  }).some(Boolean)
+
+  const confirmInitBudget = () => {
+    let newBudget
+    if (initMode === 'prev-budget' && prevBudget) {
+      newBudget = createBlankMonthlyBudget(year, month, categories, recurringItems, prevBudget)
+    } else if (initMode === 'prev-actuals' && prevActuals) {
+      newBudget = createMonthlyBudgetFromActuals(year, month, categories, recurringItems, prevActuals)
+    } else if (initMode === 'avg6-budget') {
+      newBudget = createMonthlyBudgetFrom6AvgBudget(year, month, categories, recurringItems, monthlyBudgets)
+    } else if (initMode === 'avg6-actuals') {
+      newBudget = createMonthlyBudgetFrom6AvgActuals(year, month, categories, recurringItems, actuals)
+    } else {
+      newBudget = createBlankMonthlyBudget(year, month, categories, recurringItems)
+    }
+    store.upsertMonthlyBudget(newBudget)
+    setShowInitDialog(false)
   }
 
   const updateCatAmount = (catId: string, amount: number) => {
@@ -158,10 +191,67 @@ export function MonthlyBudgetView() {
           <p className="text-gray-400 mb-5 text-sm">
             Ingen budget planerad för {MONTH_NAMES_LONG[month - 1]} {year}.
           </p>
-          <Button onClick={initBudget}>
+          <Button onClick={() => {
+            if (prevBudget) setInitMode('prev-budget')
+            else if (prevActuals) setInitMode('prev-actuals')
+            else if (has6AvgBudget) setInitMode('avg6-budget')
+            else if (has6AvgActuals) setInitMode('avg6-actuals')
+            else setInitMode('blank')
+            setShowInitDialog(true)
+          }}>
             <Plus className="w-4 h-4" /> Skapa månadsbudget
           </Button>
         </Card>
+      )}
+
+      {/* Init dialog */}
+      {showInitDialog && (
+        <Dialog
+          title="Skapa månadsbudget"
+          description="Välj vad den nya budgeten ska baseras på."
+          onClose={() => setShowInitDialog(false)}
+        >
+          <div className="flex flex-col gap-2 mb-5">
+            <OptionRow
+              label="Föregående månads budget"
+              sublabel={prevBudget ? undefined : 'Ingen data tillgänglig'}
+              selected={initMode === 'prev-budget'}
+              disabled={!prevBudget}
+              onClick={() => setInitMode('prev-budget')}
+            />
+            <OptionRow
+              label="Föregående månads utfall"
+              sublabel={prevActuals ? undefined : 'Ingen data tillgänglig'}
+              selected={initMode === 'prev-actuals'}
+              disabled={!prevActuals}
+              onClick={() => setInitMode('prev-actuals')}
+            />
+            <OptionRow
+              label="Snitt senaste 6 månaders budget"
+              sublabel={has6AvgBudget ? undefined : 'Ingen data tillgänglig'}
+              selected={initMode === 'avg6-budget'}
+              disabled={!has6AvgBudget}
+              onClick={() => setInitMode('avg6-budget')}
+            />
+            <OptionRow
+              label="Snitt senaste 6 månaders utfall"
+              sublabel={has6AvgActuals ? undefined : 'Ingen data tillgänglig'}
+              selected={initMode === 'avg6-actuals'}
+              disabled={!has6AvgActuals}
+              onClick={() => setInitMode('avg6-actuals')}
+            />
+            <OptionRow
+              label="Tom budget"
+              sublabel="Alla kategorier börjar på 0 kr"
+              selected={initMode === 'blank'}
+              onClick={() => setInitMode('blank')}
+            />
+          </div>
+          <div className="flex gap-2 justify-end">
+            <Button variant="secondary" onClick={() => setShowInitDialog(false)}>Avbryt</Button>
+            <Button onClick={confirmInitBudget}>Skapa</Button>
+          </div>
+        </Dialog>
       )}
 
       {/* Budget table */}

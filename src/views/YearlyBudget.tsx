@@ -6,27 +6,48 @@ import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { AmountInput } from '@/components/ui/AmountInput'
 import { Badge } from '@/components/ui/Badge'
+import { Dialog, OptionRow } from '@/components/ui/Dialog'
 import {
   MONTH_NAMES_SHORT,
   makeMonthId,
   formatCurrencyCompact,
   formatCurrency,
   createBlankYearlyBudget,
+  createYearlyBudgetFromPrevYearBudget,
+  createYearlyBudgetFromActuals,
   calcYearlyActualTotal,
 } from '@/utils/budgetHelpers'
 import { exportToExcel } from '@/utils/excelExport'
 
+type YearInitMode = 'prev-budget' | 'prev-actuals' | 'blank'
+
 export function YearlyBudgetView() {
   const [year, setYear] = useState(new Date().getFullYear())
   const [exporting, setExporting] = useState(false)
+  const [showInitDialog, setShowInitDialog] = useState(false)
+  const [initMode, setInitMode] = useState<YearInitMode>('prev-budget')
   const store = useAppStore()
   const { settings, yearlyBudgets, monthlyBudgets, actuals } = store
   const { categories } = settings
 
   const yb = yearlyBudgets[String(year)]
 
-  const initYearly = () => {
-    store.upsertYearlyBudget(createBlankYearlyBudget(year, categories))
+  const prevYearlyBudget = yearlyBudgets[String(year - 1)]
+  const hasPrevYearActuals = Array.from({ length: 12 }, (_, i) =>
+    actuals[makeMonthId(year - 1, i + 1)]
+  ).some(Boolean)
+
+  const confirmInitYearly = () => {
+    let newBudget
+    if (initMode === 'prev-budget' && prevYearlyBudget) {
+      newBudget = createYearlyBudgetFromPrevYearBudget(year, categories, prevYearlyBudget)
+    } else if (initMode === 'prev-actuals' && hasPrevYearActuals) {
+      newBudget = createYearlyBudgetFromActuals(year, categories, actuals, year - 1)
+    } else {
+      newBudget = createBlankYearlyBudget(year, categories)
+    }
+    store.upsertYearlyBudget(newBudget)
+    setShowInitDialog(false)
   }
 
   const updateAnnualAmount = (catId: string, amount: number) => {
@@ -90,10 +111,50 @@ export function YearlyBudgetView() {
       {!yb && (
         <Card className="text-center py-12">
           <p className="text-gray-500 mb-4">Ingen årsbudget skapad för {year}.</p>
-          <Button onClick={initYearly}>
+          <Button onClick={() => {
+            if (prevYearlyBudget) setInitMode('prev-budget')
+            else if (hasPrevYearActuals) setInitMode('prev-actuals')
+            else setInitMode('blank')
+            setShowInitDialog(true)
+          }}>
             <Plus className="w-4 h-4" /> Skapa årsbudget
           </Button>
         </Card>
+      )}
+
+      {showInitDialog && (
+        <Dialog
+          title="Skapa årsbudget"
+          description={`Välj vad ${year} års budget ska baseras på.`}
+          onClose={() => setShowInitDialog(false)}
+        >
+          <div className="flex flex-col gap-2 mb-5">
+            <OptionRow
+              label={`Föregående årets budget (${year - 1})`}
+              sublabel={prevYearlyBudget ? undefined : 'Ingen årsbudget för föregående år'}
+              selected={initMode === 'prev-budget'}
+              disabled={!prevYearlyBudget}
+              onClick={() => setInitMode('prev-budget')}
+            />
+            <OptionRow
+              label={`Föregående årets utfall (${year - 1})`}
+              sublabel={hasPrevYearActuals ? undefined : 'Inga utfall registrerade för föregående år'}
+              selected={initMode === 'prev-actuals'}
+              disabled={!hasPrevYearActuals}
+              onClick={() => setInitMode('prev-actuals')}
+            />
+            <OptionRow
+              label="Tom budget"
+              sublabel="Alla kategorier börjar på 0 kr"
+              selected={initMode === 'blank'}
+              onClick={() => setInitMode('blank')}
+            />
+          </div>
+          <div className="flex gap-2 justify-end">
+            <Button variant="secondary" onClick={() => setShowInitDialog(false)}>Avbryt</Button>
+            <Button onClick={confirmInitYearly}>Skapa</Button>
+          </div>
+        </Dialog>
       )}
 
       {yb && (

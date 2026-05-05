@@ -178,6 +178,120 @@ export function createBlankMonthlyBudget(
   return { id, year, month, categories: cats, isDetailed: true }
 }
 
+// ─── Monthly budget — extra init modes ───────────────────────────────────────
+
+function prevMonthIds(year: number, month: number, count: number): string[] {
+  const ids: string[] = []
+  for (let i = 1; i <= count; i++) {
+    let m = month - i
+    let y = year
+    if (m <= 0) { m += 12; y-- }
+    ids.push(makeMonthId(y, m))
+  }
+  return ids
+}
+
+export function createMonthlyBudgetFromActuals(
+  year: number,
+  month: number,
+  categories: CategoryDef[],
+  recurringItems: AppState['settings']['recurringItems'],
+  sourceActuals: MonthlyActuals
+): MonthlyBudget {
+  const id = makeMonthId(year, month)
+  const cats: CategoryBudget[] = categories.map((cat) => {
+    const entries = sourceActuals.entries.filter((e) => e.categoryId === cat.id)
+    const amount = entries.reduce((s, e) => s + e.totalAmount, 0)
+    return {
+      categoryId: cat.id,
+      amount: Math.round(amount),
+      subcategories: cat.subcategories.map((sub) => {
+        const subEntry = entries.find((e) => e.subcategoryId === sub.id)
+        const recurring = recurringItems
+          .filter((r) => r.categoryId === cat.id && r.subcategoryId === sub.id)
+          .reduce((s, r) => s + r.amount, 0)
+        return {
+          subcategoryId: sub.id,
+          amount: subEntry !== undefined ? Math.round(subEntry.totalAmount) : recurring,
+        }
+      }),
+    }
+  })
+  return { id, year, month, categories: cats, isDetailed: true }
+}
+
+export function createMonthlyBudgetFrom6AvgBudget(
+  year: number,
+  month: number,
+  categories: CategoryDef[],
+  recurringItems: AppState['settings']['recurringItems'],
+  monthlyBudgets: Record<string, MonthlyBudget>
+): MonthlyBudget {
+  const ids = prevMonthIds(year, month, 6)
+  const budgets = ids.map((id) => monthlyBudgets[id]).filter((b): b is MonthlyBudget => !!b)
+  const n = budgets.length || 1
+  const id = makeMonthId(year, month)
+  const cats: CategoryBudget[] = categories.map((cat) => {
+    const totalAmt = budgets.reduce((s, b) => {
+      return s + (b.categories.find((c) => c.categoryId === cat.id)?.amount ?? 0)
+    }, 0)
+    return {
+      categoryId: cat.id,
+      amount: Math.round(totalAmt / n),
+      subcategories: cat.subcategories.map((sub) => {
+        const totalSubAmt = budgets.reduce((s, b) => {
+          const bc = b.categories.find((c) => c.categoryId === cat.id)
+          return s + (bc?.subcategories.find((sc) => sc.subcategoryId === sub.id)?.amount ?? 0)
+        }, 0)
+        const recurring = recurringItems
+          .filter((r) => r.categoryId === cat.id && r.subcategoryId === sub.id)
+          .reduce((s, r) => s + r.amount, 0)
+        return {
+          subcategoryId: sub.id,
+          amount: budgets.length > 0 ? Math.round(totalSubAmt / n) : recurring,
+        }
+      }),
+    }
+  })
+  return { id, year, month, categories: cats, isDetailed: true }
+}
+
+export function createMonthlyBudgetFrom6AvgActuals(
+  year: number,
+  month: number,
+  categories: CategoryDef[],
+  recurringItems: AppState['settings']['recurringItems'],
+  actuals: Record<string, MonthlyActuals>
+): MonthlyBudget {
+  const ids = prevMonthIds(year, month, 6)
+  const acts = ids.map((id) => actuals[id]).filter((a): a is MonthlyActuals => !!a)
+  const n = acts.length || 1
+  const id = makeMonthId(year, month)
+  const cats: CategoryBudget[] = categories.map((cat) => {
+    const totalAmt = acts.reduce((s, a) => {
+      return s + a.entries.filter((e) => e.categoryId === cat.id).reduce((ss, e) => ss + e.totalAmount, 0)
+    }, 0)
+    return {
+      categoryId: cat.id,
+      amount: Math.round(totalAmt / n),
+      subcategories: cat.subcategories.map((sub) => {
+        const totalSubAmt = acts.reduce((s, a) => {
+          const subEntry = a.entries.find((e) => e.categoryId === cat.id && e.subcategoryId === sub.id)
+          return s + (subEntry?.totalAmount ?? 0)
+        }, 0)
+        const recurring = recurringItems
+          .filter((r) => r.categoryId === cat.id && r.subcategoryId === sub.id)
+          .reduce((s, r) => s + r.amount, 0)
+        return {
+          subcategoryId: sub.id,
+          amount: acts.length > 0 ? Math.round(totalSubAmt / n) : recurring,
+        }
+      }),
+    }
+  })
+  return { id, year, month, categories: cats, isDetailed: true }
+}
+
 // ─── Yearly budget helpers ────────────────────────────────────────────────────
 
 export function createBlankYearlyBudget(
@@ -196,6 +310,58 @@ export function createBlankYearlyBudget(
         annualAmount: 0,
       })),
     })),
+  }
+}
+
+export function createYearlyBudgetFromPrevYearBudget(
+  year: number,
+  categories: CategoryDef[],
+  prevYearlyBudget: YearlyBudget
+): YearlyBudget {
+  return {
+    id: String(year),
+    year,
+    categories: categories.map((cat) => {
+      const prevCat = prevYearlyBudget.categories.find((c) => c.categoryId === cat.id)
+      return {
+        categoryId: cat.id,
+        annualAmount: prevCat?.annualAmount ?? 0,
+        monthlyAllocation: 'equal',
+        subcategories: cat.subcategories.map((sub) => {
+          const prevSub = prevCat?.subcategories.find((s) => s.subcategoryId === sub.id)
+          return { subcategoryId: sub.id, annualAmount: prevSub?.annualAmount ?? 0 }
+        }),
+      }
+    }),
+  }
+}
+
+export function createYearlyBudgetFromActuals(
+  year: number,
+  categories: CategoryDef[],
+  actuals: Record<string, MonthlyActuals>,
+  sourceYear: number
+): YearlyBudget {
+  return {
+    id: String(year),
+    year,
+    categories: categories.map((cat) => {
+      let annualAmount = 0
+      for (let m = 1; m <= 12; m++) {
+        const act = actuals[makeMonthId(sourceYear, m)]
+        if (act) {
+          annualAmount += act.entries
+            .filter((e) => e.categoryId === cat.id)
+            .reduce((s, e) => s + e.totalAmount, 0)
+        }
+      }
+      return {
+        categoryId: cat.id,
+        annualAmount: Math.round(annualAmount),
+        monthlyAllocation: 'equal',
+        subcategories: cat.subcategories.map((sub) => ({ subcategoryId: sub.id, annualAmount: 0 })),
+      }
+    }),
   }
 }
 
