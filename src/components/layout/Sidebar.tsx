@@ -6,6 +6,7 @@ import {
   Settings,
   Upload,
   TrendingUp,
+  HelpCircle,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -14,6 +15,7 @@ const NAV_ITEMS = [
   { to: '/likviditet',     icon: Waves,         label: 'Likviditet',    short: 'Likv.' },
   { to: '/importera',      icon: Upload,        label: 'Importera',     short: 'Import' },
   { to: '/installningar',  icon: Settings,      label: 'Inställningar', short: 'Inst.' },
+  { to: '/hjalp',          icon: HelpCircle,    label: 'Hjälp',         short: 'Hjälp' },
 ]
 
 export function Sidebar() {

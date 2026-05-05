@@ -4,6 +4,7 @@ import { YearlyBudgetView }  from './views/YearlyBudget'
 import { LiquidityView }     from './views/Liquidity'
 import { ImportView }        from './views/Import'
 import { SettingsView }      from './views/Settings'
+import { HelpView }          from './views/Help'
 import { PinGate }           from './components/PinGate'
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/likviditet"     element={<LiquidityView />} />
         <Route path="/importera"      element={<ImportView />} />
         <Route path="/installningar"  element={<SettingsView />} />
+        <Route path="/hjalp"          element={<HelpView />} />
       </Routes>
     </BrowserRouter>
     </PinGate>
