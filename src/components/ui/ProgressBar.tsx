@@ -1,6 +1,6 @@
 interface ProgressBarProps {
-  value: number       // actual
-  max: number         // budget
+  value: number
+  max: number
   className?: string
 }
 
@@ -10,10 +10,10 @@ export function ProgressBar({ value, max, className = '' }: ProgressBarProps) {
   const over = value > max
 
   return (
-    <div className={`h-1.5 rounded-full bg-gray-100 overflow-hidden ${className}`}>
+    <div className={`h-1 rounded-full bg-gray-100 overflow-hidden ${className}`}>
       <div
-        className={`h-full rounded-full transition-all duration-300 ${
-          over ? 'bg-red-500' : pct > 80 ? 'bg-amber-400' : 'bg-green-500'
+        className={`h-full rounded-full transition-all duration-500 ${
+          over ? 'bg-red-400' : pct > 80 ? 'bg-amber-400' : 'bg-emerald-400'
         }`}
         style={{ width: `${Math.min(pct, 100)}%` }}
       />
