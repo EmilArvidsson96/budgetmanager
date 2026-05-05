@@ -4,9 +4,11 @@ import { YearlyBudgetView }  from './views/YearlyBudget'
 import { LiquidityView }     from './views/Liquidity'
 import { ImportView }        from './views/Import'
 import { SettingsView }      from './views/Settings'
+import { PinGate }           from './components/PinGate'
 
 export default function App() {
   return (
+    <PinGate>
     <BrowserRouter basename="/budgetmanager">
       <Routes>
         <Route path="/"               element={<Navigate to="/manad" replace />} />
@@ -17,5 +19,6 @@ export default function App() {
         <Route path="/installningar"  element={<SettingsView />} />
       </Routes>
     </BrowserRouter>
+    </PinGate>
   )
 }
