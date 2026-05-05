@@ -46,8 +46,8 @@ export function ImportView() {
       const txJson = JSON.parse(txText)
 
       const imp = parseZlantarFiles(dataJson, txJson)
-      const actuals = buildMonthlyActuals(imp, store.settings.categories)
-      const unknown = findUnknownCategories(imp.transactions, store.settings.categories)
+      const actuals = buildMonthlyActuals(imp, store.settings.categories, store.settings.zlantarCategoryRules)
+      const unknown = findUnknownCategories(imp.transactions, store.settings.categories, store.settings.zlantarCategoryRules)
       const accounts = deriveAccounts(imp.data)
       const recurring = deriveRecurringItems(imp.data)
 

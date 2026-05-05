@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { Plus, Trash2, Edit2, X, Check } from 'lucide-react'
+import { Plus, Trash2, Edit2, X, Check, ArrowRight } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
-import type { Account, RecurringItem, AccountType } from '@/types'
+import type { Account, RecurringItem, AccountType, ZlantarCategoryRule } from '@/types'
 
 function newId() { return `id-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
 
@@ -24,7 +24,7 @@ const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = Object.fromEntries(
 ) as Record<AccountType, string>
 
 export function SettingsView() {
-  const [tab, setTab] = useState<'accounts' | 'recurring' | 'categories'>('accounts')
+  const [tab, setTab] = useState<'accounts' | 'recurring' | 'categories' | 'mapping'>('accounts')
 
   return (
     <Layout>
@@ -35,6 +35,7 @@ export function SettingsView() {
           { key: 'accounts',   label: 'Konton' },
           { key: 'recurring',  label: 'Återkommande poster' },
           { key: 'categories', label: 'Kategorier' },
+          { key: 'mapping',    label: 'Zlantar-mappning' },
         ] as const).map(({ key, label }) => (
           <button
             key={key}
@@ -50,6 +51,7 @@ export function SettingsView() {
       {tab === 'accounts'   && <AccountsTab />}
       {tab === 'recurring'  && <RecurringTab />}
       {tab === 'categories' && <CategoriesTab />}
+      {tab === 'mapping'    && <ZlantarMappingTab />}
     </Layout>
   )
 }
@@ -327,36 +329,369 @@ function RecurringTab() {
 
 // ─── Categories tab ───────────────────────────────────────────────────────────
 
+// Subcategory IDs that are tied to Zlantar's fixed category values — renaming
+// is fine, but these IDs must stay in sync with the Zlantar mapping rules.
+const ZLANTAR_CORE_SUBCAT_IDS = new Set(['salary', 'interest', 'refund', 'sale'])
+
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/å/g, 'a').replace(/ä/g, 'a').replace(/ö/g, 'o')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+}
+
 function CategoriesTab() {
-  const { settings } = useAppStore()
-  const { categories } = settings
+  const store = useAppStore()
+  const { categories } = store.settings
+
+  const incomeCat = categories.find((c) => c.id === 'income')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [addName, setAddName] = useState('')
+  const [showAdd, setShowAdd] = useState(false)
+
+  const updateIncomeSubcats = (fn: (subs: typeof incomeCat.subcategories) => typeof incomeCat.subcategories) => {
+    if (!incomeCat) return
+    store.setCategories(
+      categories.map((c) =>
+        c.id === 'income' ? { ...c, subcategories: fn(c.subcategories) } : c
+      )
+    )
+  }
+
+  const startEdit = (id: string, name: string) => { setEditingId(id); setEditName(name) }
+  const saveEdit = () => {
+    if (!editName.trim() || !editingId) return
+    updateIncomeSubcats((subs) =>
+      subs.map((s) => s.id === editingId ? { ...s, name: editName.trim() } : s)
+    )
+    setEditingId(null)
+  }
+
+  const deleteSub = (id: string) => {
+    updateIncomeSubcats((subs) => subs.filter((s) => s.id !== id))
+  }
+
+  const addSub = () => {
+    const name = addName.trim()
+    if (!name) return
+    const id = slugify(name) || `sub_${Date.now()}`
+    updateIncomeSubcats((subs) => [
+      ...subs,
+      { id: `savings_${id}`, name, parentId: 'income' },
+    ])
+    setAddName('')
+    setShowAdd(false)
+  }
 
   return (
-    <Card>
-      <CardHeader
-        title="Kategorier"
-        subtitle="Kategorier importeras automatiskt från Zlantar. Kontakta support för att anpassa dem."
-      />
-      <div className="space-y-1">
-        {categories.map((cat) => (
-          <div key={cat.id}>
-            <div className="flex items-center gap-2 py-2 px-2 rounded-lg">
-              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: cat.color ?? '#94a3b8' }} />
-              <span className="font-medium text-sm text-gray-800">{cat.name}</span>
-              <Badge variant={cat.type === 'income' ? 'green' : cat.type === 'savings' ? 'blue' : 'gray'} size="sm">
-                {cat.type === 'income' ? 'Inkomst' : cat.type === 'savings' ? 'Sparande' : 'Utgift'}
-              </Badge>
+    <div className="space-y-4">
+      {/* Income subcategory editor */}
+      <Card>
+        <CardHeader
+          title="Inkomstunderkategorier"
+          subtitle="Hantera underkategorier för inkomst. Underkategorier märkta Zlantar är kopplade till importmappningen och kan inte tas bort."
+          action={<Button size="sm" onClick={() => setShowAdd(true)}><Plus className="w-4 h-4" />Lägg till</Button>}
+        />
+
+        {showAdd && (
+          <div className="mb-4 p-3 bg-brand-50 rounded-xl border border-brand-100 flex gap-2 items-end">
+            <div className="flex-1">
+              <label className="text-xs font-medium text-gray-600 block mb-1">Namn</label>
+              <input
+                autoFocus
+                className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                value={addName}
+                onChange={(e) => setAddName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addSub(); if (e.key === 'Escape') setShowAdd(false) }}
+                placeholder="t.ex. Buffert-spar, Bil-spar..."
+              />
             </div>
-            <div className="ml-5 space-y-0.5 mb-1">
-              {cat.subcategories.map((sub) => (
-                <div key={sub.id} className="text-xs text-gray-500 py-0.5 pl-3 border-l border-gray-100">
-                  {sub.name}
-                </div>
-              ))}
-            </div>
+            <Button size="sm" onClick={addSub}><Check className="w-4 h-4" />Spara</Button>
+            <Button size="sm" variant="secondary" onClick={() => setShowAdd(false)}><X className="w-4 h-4" /></Button>
           </div>
-        ))}
+        )}
+
+        {incomeCat ? (
+          <div className="space-y-1">
+            {incomeCat.subcategories.map((sub) => {
+              const isCore = ZLANTAR_CORE_SUBCAT_IDS.has(sub.id)
+              return (
+                <div key={sub.id} className="flex items-center gap-2 py-1.5 px-2 rounded-lg group hover:bg-gray-50">
+                  {editingId === sub.id ? (
+                    <>
+                      <input
+                        autoFocus
+                        className="flex-1 border border-brand-300 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') setEditingId(null) }}
+                      />
+                      <button onClick={saveEdit} className="text-green-600 hover:text-green-700 p-1"><Check className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => setEditingId(null)} className="text-gray-400 hover:text-gray-600 p-1"><X className="w-3.5 h-3.5" /></button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="flex-1 text-sm text-gray-700">{sub.name}</span>
+                      {isCore && <Badge variant="blue" size="sm">Zlantar</Badge>}
+                      <button
+                        onClick={() => startEdit(sub.id, sub.name)}
+                        className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      {!isCore && (
+                        <button
+                          onClick={() => deleteSub(sub.id)}
+                          className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-400 text-center py-4">Ingen inkomstkategori hittades.</p>
+        )}
+      </Card>
+
+      {/* All categories overview (read-only) */}
+      <Card>
+        <CardHeader title="Alla kategorier" subtitle="Översikt. Redigera inkomstunderkategorier ovan." />
+        <div className="space-y-1">
+          {categories.map((cat) => (
+            <div key={cat.id}>
+              <div className="flex items-center gap-2 py-2 px-2 rounded-lg">
+                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color ?? '#94a3b8' }} />
+                <span className="font-medium text-sm text-gray-800">{cat.name}</span>
+                <Badge variant={cat.type === 'income' ? 'green' : cat.type === 'savings' ? 'blue' : 'gray'} size="sm">
+                  {cat.type === 'income' ? 'Inkomst' : cat.type === 'savings' ? 'Sparande' : 'Utgift'}
+                </Badge>
+              </div>
+              {cat.subcategories.length > 0 && (
+                <div className="ml-5 space-y-0.5 mb-1">
+                  {cat.subcategories.map((sub) => (
+                    <div key={sub.id} className="text-xs text-gray-500 py-0.5 pl-3 border-l border-gray-100 flex items-center gap-1.5">
+                      {sub.name}
+                      {ZLANTAR_CORE_SUBCAT_IDS.has(sub.id) && (
+                        <span className="text-[10px] text-blue-400 font-medium">Zlantar</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+// ─── Zlantar mapping tab ──────────────────────────────────────────────────────
+
+// Known Zlantar top-level category IDs (fixed by Zlantar's export format)
+const KNOWN_ZLANTAR_CATS = [
+  'salary', 'interest', 'refund', 'sale',
+  'food', 'household', 'transport', 'shopping', 'leisure', 'other', 'stocks',
+]
+
+function ZlantarMappingTab() {
+  const store = useAppStore()
+  const { zlantarCategoryRules, categories } = store.settings
+
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [showAdd, setShowAdd] = useState(false)
+  const emptyForm = (): Partial<ZlantarCategoryRule> => ({})
+  const [form, setForm] = useState<Partial<ZlantarCategoryRule>>(emptyForm())
+
+  const selectedCat = categories.find((c) => c.id === form.appCategoryId)
+
+  const saveRule = () => {
+    if (!form.zlantarCategory || !form.appCategoryId) return
+    const id = editingId ?? `rule_${Date.now()}`
+    store.upsertZlantarRule({ ...form, id } as ZlantarCategoryRule)
+    setEditingId(null)
+    setShowAdd(false)
+    setForm(emptyForm())
+  }
+
+  const startEdit = (rule: ZlantarCategoryRule) => {
+    setEditingId(rule.id)
+    setForm(rule)
+    setShowAdd(false)
+  }
+
+  const cancelForm = () => {
+    setEditingId(null)
+    setShowAdd(false)
+    setForm(emptyForm())
+  }
+
+  // Compute effective mapping for the known Zlantar category IDs
+  const effectiveMap = (zlantarCat: string): { catName: string; subName?: string } | null => {
+    const rule = zlantarCategoryRules.find((r) => r.zlantarCategory === zlantarCat && !r.zlantarSubcategory)
+    if (rule) {
+      const cat = categories.find((c) => c.id === rule.appCategoryId)
+      const sub = cat?.subcategories.find((s) => s.id === rule.appSubcategoryId)
+      return { catName: cat?.name ?? rule.appCategoryId, subName: sub?.name ?? rule.appSubcategoryId }
+    }
+    // No rule — falls back to direct ID match
+    const directCat = categories.find((c) => c.id === zlantarCat)
+    if (directCat) return { catName: directCat.name }
+    return null
+  }
+
+  const FormRow = ({ isNew }: { isNew: boolean }) => (
+    <div className="p-4 bg-brand-50 rounded-xl border border-brand-100 space-y-3">
+      <h4 className="text-sm font-medium text-gray-800">{isNew ? 'Ny regel' : 'Redigera regel'}</h4>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+        <div>
+          <label className="text-xs font-medium text-gray-600 block mb-1">Zlantar-kategori</label>
+          <input
+            list="zlantar-cats"
+            className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+            value={form.zlantarCategory ?? ''}
+            onChange={(e) => setForm((f) => ({ ...f, zlantarCategory: e.target.value, zlantarSubcategory: undefined }))}
+            placeholder="t.ex. salary, food..."
+          />
+          <datalist id="zlantar-cats">
+            {KNOWN_ZLANTAR_CATS.map((c) => <option key={c} value={c} />)}
+          </datalist>
+        </div>
+        <div>
+          <label className="text-xs font-medium text-gray-600 block mb-1">Zlantar-underkategori <span className="font-normal text-gray-400">(valfri)</span></label>
+          <input
+            className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+            value={form.zlantarSubcategory ?? ''}
+            onChange={(e) => setForm((f) => ({ ...f, zlantarSubcategory: e.target.value || undefined }))}
+            placeholder="t.ex. groceries..."
+          />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-gray-600 block mb-1">App-kategori</label>
+          <select
+            className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+            value={form.appCategoryId ?? ''}
+            onChange={(e) => setForm((f) => ({ ...f, appCategoryId: e.target.value, appSubcategoryId: undefined }))}
+          >
+            <option value="">Välj...</option>
+            {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs font-medium text-gray-600 block mb-1">App-underkategori <span className="font-normal text-gray-400">(valfri)</span></label>
+          <select
+            className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+            value={form.appSubcategoryId ?? ''}
+            onChange={(e) => setForm((f) => ({ ...f, appSubcategoryId: e.target.value || undefined }))}
+            disabled={!selectedCat || selectedCat.subcategories.length === 0}
+          >
+            <option value="">Bevara original</option>
+            {selectedCat?.subcategories.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
       </div>
-    </Card>
+      <div className="flex gap-2">
+        <Button size="sm" onClick={saveRule} disabled={!form.zlantarCategory || !form.appCategoryId}>
+          <Check className="w-4 h-4" />Spara
+        </Button>
+        <Button size="sm" variant="secondary" onClick={cancelForm}><X className="w-4 h-4" />Avbryt</Button>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="space-y-4">
+      {/* Configured rules */}
+      <Card>
+        <CardHeader
+          title="Kategori-regler"
+          subtitle="Regler avgör hur Zlantar-kategorier mappas till appens kategorier. Kategorier utan regel matchas automatiskt om ID:n stämmer."
+          action={!showAdd && editingId === null
+            ? <Button size="sm" onClick={() => { setShowAdd(true); setForm(emptyForm()) }}><Plus className="w-4 h-4" />Lägg till regel</Button>
+            : undefined
+          }
+        />
+
+        {showAdd && <div className="mb-4"><FormRow isNew /></div>}
+
+        {zlantarCategoryRules.length === 0 && !showAdd ? (
+          <p className="text-sm text-gray-400 text-center py-6">Inga regler konfigurerade. Allt matchas automatiskt.</p>
+        ) : (
+          <div className="space-y-1">
+            {zlantarCategoryRules.map((rule) => {
+              const appCat = categories.find((c) => c.id === rule.appCategoryId)
+              const appSub = appCat?.subcategories.find((s) => s.id === rule.appSubcategoryId)
+              return editingId === rule.id ? (
+                <div key={rule.id} className="mb-2"><FormRow isNew={false} /></div>
+              ) : (
+                <div key={rule.id} className="flex items-center gap-2 py-2 px-2 rounded-lg group hover:bg-gray-50">
+                  <div className="flex-1 flex items-center gap-1.5 flex-wrap min-w-0">
+                    <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-700">{rule.zlantarCategory}</code>
+                    {rule.zlantarSubcategory && (
+                      <>
+                        <span className="text-gray-400 text-xs">/</span>
+                        <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-700">{rule.zlantarSubcategory}</code>
+                      </>
+                    )}
+                    <ArrowRight className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                    <span className="text-sm text-gray-800">{appCat?.name ?? rule.appCategoryId}</span>
+                    {appSub && <span className="text-xs text-gray-500">/ {appSub.name}</span>}
+                    {!appSub && rule.appSubcategoryId === undefined && (
+                      <span className="text-xs text-gray-400 italic">bevara underkategori</span>
+                    )}
+                  </div>
+                  <button onClick={() => startEdit(rule)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity">
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => store.removeZlantarRule(rule.id)} className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* Effective mapping overview */}
+      <Card>
+        <CardHeader
+          title="Effektiv mappning"
+          subtitle="Kända Zlantar-kategorier och deras nuvarande mappning (regel eller automatisk)."
+        />
+        <div className="divide-y divide-gray-50">
+          {KNOWN_ZLANTAR_CATS.map((zCat) => {
+            const eff = effectiveMap(zCat)
+            const hasRule = zlantarCategoryRules.some((r) => r.zlantarCategory === zCat && !r.zlantarSubcategory)
+            return (
+              <div key={zCat} className="flex items-center gap-3 py-2 px-2">
+                <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-700 w-24 flex-shrink-0">{zCat}</code>
+                <ArrowRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
+                {eff ? (
+                  <span className="text-sm text-gray-700">
+                    {eff.catName}{eff.subName ? <span className="text-gray-400"> / {eff.subName}</span> : null}
+                  </span>
+                ) : (
+                  <span className="text-sm text-red-400 italic">omappad → Övrigt</span>
+                )}
+                <div className="ml-auto">
+                  {hasRule
+                    ? <Badge variant="blue" size="sm">Regel</Badge>
+                    : <Badge variant="gray" size="sm">Automatisk</Badge>
+                  }
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </Card>
+    </div>
   )
 }

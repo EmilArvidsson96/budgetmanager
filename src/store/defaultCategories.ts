@@ -1,41 +1,37 @@
-import type { CategoryDef } from '@/types'
+import type { CategoryDef, ZlantarCategoryRule } from '@/types'
 
 // Category IDs and subcategory IDs match Zlantar's exact category/subcategory values
 // so the parser can do a direct lookup without fuzzy matching.
 
 export const DEFAULT_CATEGORIES: CategoryDef[] = [
   // ─── Income ───────────────────────────────────────────────────────────────
+  // Subcategory IDs that match Zlantar's top-level category values (salary,
+  // interest, refund, sale) are kept identical so the parser can remap them
+  // directly without fuzzy matching.
   {
-    id: 'salary',
-    name: 'Lön',
+    id: 'income',
+    name: 'Inkomst',
     type: 'income',
     color: '#22c55e',
-    icon: 'Banknote',
-    subcategories: [],
-  },
-  {
-    id: 'interest',
-    name: 'Räntor & utdelning',
-    type: 'income',
-    color: '#4ade80',
-    icon: 'TrendingUp',
-    subcategories: [],
-  },
-  {
-    id: 'refund',
-    name: 'Återbetalningar',
-    type: 'income',
-    color: '#86efac',
-    icon: 'RotateCcw',
-    subcategories: [],
-  },
-  {
-    id: 'sale',
-    name: 'Försäljning',
-    type: 'income',
-    color: '#bbf7d0',
-    icon: 'Tag',
-    subcategories: [],
+    icon: 'Wallet',
+    subcategories: [
+      // ── Lön ──────────────────────────────────────────────────────────────
+      { id: 'salary',           name: 'Lön',                parentId: 'income' },
+      // ── Bidrag ───────────────────────────────────────────────────────────
+      { id: 'sjukpenning',      name: 'Sjukpenning',         parentId: 'income' },
+      { id: 'foraldrapenning',  name: 'Föräldrapenning',     parentId: 'income' },
+      { id: 'studiemedel',      name: 'Studiemedel / CSN',   parentId: 'income' },
+      { id: 'aktivitetsstod',   name: 'Aktivitetsstöd',      parentId: 'income' },
+      { id: 'other_bidrag',     name: 'Övriga bidrag',       parentId: 'income' },
+      // ── Kapital ──────────────────────────────────────────────────────────
+      { id: 'interest',         name: 'Räntor & utdelning',  parentId: 'income' },
+      { id: 'refund',           name: 'Återbetalningar',     parentId: 'income' },
+      { id: 'sale',             name: 'Försäljning',         parentId: 'income' },
+      // ── Sparuttag ────────────────────────────────────────────────────────
+      { id: 'savings_vacation', name: 'Semester-spar',       parentId: 'income' },
+      { id: 'savings_capex',    name: 'Kapitalutgifter',     parentId: 'income' },
+      { id: 'savings_other',    name: 'Övriga sparuttag',    parentId: 'income' },
+    ],
   },
 
   // ─── Expense ──────────────────────────────────────────────────────────────
@@ -141,6 +137,18 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'TrendingUp',
     subcategories: [],
   },
+]
+
+// Default rules for mapping Zlantar's category values to app categories.
+// Zlantar exports 'salary', 'interest', 'refund', 'sale' as top-level category values;
+// after income consolidation these are subcategories under 'income'.
+// Categories whose Zlantar ID already matches an app category ID (food, household, etc.)
+// do NOT need explicit rules — the parser falls through to direct ID matching.
+export const DEFAULT_ZLANTAR_RULES: ZlantarCategoryRule[] = [
+  { id: 'z_salary',   zlantarCategory: 'salary',   appCategoryId: 'income', appSubcategoryId: 'salary' },
+  { id: 'z_interest', zlantarCategory: 'interest', appCategoryId: 'income', appSubcategoryId: 'interest' },
+  { id: 'z_refund',   zlantarCategory: 'refund',   appCategoryId: 'income', appSubcategoryId: 'refund' },
+  { id: 'z_sale',     zlantarCategory: 'sale',     appCategoryId: 'income', appSubcategoryId: 'sale' },
 ]
 
 // Agreement type → category/subcategory mapping for auto-converting Zlantar agreements to recurring items

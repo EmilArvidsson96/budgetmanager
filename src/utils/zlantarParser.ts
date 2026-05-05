@@ -9,8 +9,9 @@ import type {
   Account,
   RecurringItem,
   CategoryDef,
+  ZlantarCategoryRule,
 } from '@/types'
-import { AGREEMENT_CATEGORY_MAP } from '@/store/defaultCategories'
+import { AGREEMENT_CATEGORY_MAP, DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 
 // ─── Parse raw JSON files ─────────────────────────────────────────────────────
 
@@ -115,16 +116,66 @@ export function deriveRecurringItems(data: ZlantarData): RecurringItem[] {
   return items
 }
 
+// ─── Rule lookup helpers ──────────────────────────────────────────────────────
+
+type RuleTarget = { appCategoryId: string; appSubcategoryId?: string }
+
+function buildRuleLookup(rules: ZlantarCategoryRule[]): Map<string, RuleTarget> {
+  const map = new Map<string, RuleTarget>()
+  for (const r of rules) {
+    // More-specific rules (with zlantarSubcategory) stored under a compound key;
+    // category-only rules stored under just the category.
+    const key = r.zlantarSubcategory
+      ? `${r.zlantarCategory}|||${r.zlantarSubcategory}`
+      : r.zlantarCategory
+    map.set(key, { appCategoryId: r.appCategoryId, appSubcategoryId: r.appSubcategoryId })
+  }
+  return map
+}
+
+function resolveCategory(
+  rawCat: string,
+  rawSub: string,
+  catIds: Set<string>,
+  ruleMap: Map<string, RuleTarget>
+): { catId: string; subId: string } {
+  if (!rawCat) return { catId: 'other', subId: '' }
+
+  // Exact match: category + subcategory
+  const exactMatch = rawSub ? ruleMap.get(`${rawCat}|||${rawSub}`) : undefined
+  if (exactMatch) {
+    return {
+      catId: exactMatch.appCategoryId,
+      subId: exactMatch.appSubcategoryId ?? rawSub,
+    }
+  }
+
+  // Category-only rule match
+  const catMatch = ruleMap.get(rawCat)
+  if (catMatch) {
+    return {
+      catId: catMatch.appCategoryId,
+      // If rule specifies a subcategory, use it; otherwise preserve the original
+      subId: catMatch.appSubcategoryId !== undefined ? catMatch.appSubcategoryId : rawSub,
+    }
+  }
+
+  // No rule — use as-is if catId is a known app category, else fall back
+  if (catIds.has(rawCat)) return { catId: rawCat, subId: rawSub }
+  return { catId: 'other', subId: rawSub }
+}
+
 // ─── Build monthly actuals grouped by YYYY-MM ────────────────────────────────
 
 export function buildMonthlyActuals(
   imp: ZlantarImport,
-  categories: CategoryDef[]
+  categories: CategoryDef[],
+  rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES
 ): Record<string, MonthlyActuals> {
   const { transactions, data } = imp
 
-  // Pre-build category lookup: catId → Set<subId>
   const catIds = new Set(categories.map((c) => c.id))
+  const ruleMap = buildRuleLookup(rules)
 
   // Group by YYYY-MM, skipping transfers (no category)
   const byMonth: Record<string, ZlantarTransaction[]> = {}
@@ -146,8 +197,12 @@ export function buildMonthlyActuals(
     const aggMap: Record<string, ActualEntry> = {}
 
     for (const tx of txs) {
-      const catId = tx.category && catIds.has(tx.category) ? tx.category : 'other'
-      const subId = tx.subcategory ?? ''
+      const { catId, subId } = resolveCategory(
+        tx.category ?? '',
+        tx.subcategory ?? '',
+        catIds,
+        ruleMap
+      )
       const key = `${catId}|||${subId}`
 
       if (!aggMap[key]) {
@@ -208,17 +263,23 @@ export interface UnknownCategory {
 
 export function findUnknownCategories(
   transactions: ZlantarTransaction[],
-  categories: CategoryDef[]
+  categories: CategoryDef[],
+  rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES
 ): UnknownCategory[] {
   const catIds = new Set(categories.map((c) => c.id))
+  const ruleMap = buildRuleLookup(rules)
   const result: Record<string, UnknownCategory> = {}
 
   for (const tx of transactions) {
     if (!tx.category || tx.transaction_type === 'transfer') continue
-    if (!catIds.has(tx.category)) {
-      const key = `${tx.category}|||${tx.subcategory ?? ''}`
+    const rawCat = tx.category
+    const rawSub = tx.subcategory ?? ''
+    // A category is "unknown" only if neither a rule nor a direct ID match handles it
+    const coveredByRule = ruleMap.has(`${rawCat}|||${rawSub}`) || ruleMap.has(rawCat)
+    if (!catIds.has(rawCat) && !coveredByRule) {
+      const key = `${rawCat}|||${rawSub}`
       if (!result[key]) {
-        result[key] = { rawCategory: tx.category, rawSubcategory: tx.subcategory, count: 0, totalAmount: 0 }
+        result[key] = { rawCategory: rawCat, rawSubcategory: tx.subcategory, count: 0, totalAmount: 0 }
       }
       result[key].count++
       result[key].totalAmount += tx.amount

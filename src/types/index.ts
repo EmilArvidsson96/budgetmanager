@@ -202,6 +202,16 @@ export interface LiquidityPlan {
   notes?: string
 }
 
+// ─── Zlantar category mapping ─────────────────────────────────────────────────
+
+export interface ZlantarCategoryRule {
+  id: string
+  zlantarCategory: string      // Zlantar category value, e.g. 'salary', 'food'
+  zlantarSubcategory?: string  // optional: only match this specific subcategory
+  appCategoryId: string        // target app category
+  appSubcategoryId?: string    // target app subcategory (if omitted, keeps Zlantar's)
+}
+
 // ─── App settings ─────────────────────────────────────────────────────────────
 
 export interface AppSettings {
@@ -211,6 +221,7 @@ export interface AppSettings {
   categories: CategoryDef[]
   accounts: Account[]
   recurringItems: RecurringItem[]
+  zlantarCategoryRules: ZlantarCategoryRule[]
 }
 
 // ─── Complete app state ───────────────────────────────────────────────────────

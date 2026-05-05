@@ -13,8 +13,9 @@ import type {
   RecurringItem,
   CategoryBudget,
   LiquidityEntry,
+  ZlantarCategoryRule,
 } from '@/types'
-import { DEFAULT_CATEGORIES } from './defaultCategories'
+import { DEFAULT_CATEGORIES, DEFAULT_ZLANTAR_RULES } from './defaultCategories'
 
 const DEFAULT_SETTINGS: AppSettings = {
   currency: 'SEK',
@@ -23,6 +24,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   categories: DEFAULT_CATEGORIES,
   accounts: [],
   recurringItems: [],
+  zlantarCategoryRules: DEFAULT_ZLANTAR_RULES,
 }
 
 interface AppStore extends AppState {
@@ -51,6 +53,10 @@ interface AppStore extends AppState {
   upsertLiquidityPlan: (plan: LiquidityPlan) => void
   upsertLiquidityEntry: (planId: string, entry: LiquidityEntry) => void
   removeLiquidityEntry: (planId: string, entryId: string) => void
+
+  // Zlantar category rules
+  upsertZlantarRule: (rule: ZlantarCategoryRule) => void
+  removeZlantarRule: (id: string) => void
 
   // Zlantar import
   setZlantarImport: (imp: ZlantarImport) => void
@@ -173,6 +179,20 @@ export const useAppStore = create<AppStore>()(
             },
           }
         }),
+
+      upsertZlantarRule: (rule) =>
+        set((state) => {
+          const rules = state.settings.zlantarCategoryRules.filter((r) => r.id !== rule.id)
+          return { settings: { ...state.settings, zlantarCategoryRules: [...rules, rule] } }
+        }),
+
+      removeZlantarRule: (id) =>
+        set((state) => ({
+          settings: {
+            ...state.settings,
+            zlantarCategoryRules: state.settings.zlantarCategoryRules.filter((r) => r.id !== id),
+          },
+        })),
 
       setZlantarImport: (imp) => set({ lastZlantarImport: imp }),
     }),
