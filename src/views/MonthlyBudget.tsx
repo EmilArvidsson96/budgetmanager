@@ -168,7 +168,7 @@ export function MonthlyBudgetView() {
       {budget && (
         <Card padding={false} className="overflow-hidden">
           <div className="overflow-x-auto">
-            <div className="min-w-[600px]">
+            <div className="min-w-[760px]">
               {/* Table header */}
               <div className="grid grid-cols-[1fr_150px_150px_130px_120px] bg-gray-50 border-b border-gray-100 px-5 py-2.5 text-[11px] font-semibold text-gray-400 uppercase tracking-widest">
                 <div>Kategori</div>
