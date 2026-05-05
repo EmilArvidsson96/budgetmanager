@@ -351,7 +351,7 @@ function CategoriesTab() {
   const [addName, setAddName] = useState('')
   const [showAdd, setShowAdd] = useState(false)
 
-  const updateIncomeSubcats = (fn: (subs: typeof incomeCat.subcategories) => typeof incomeCat.subcategories) => {
+  const updateIncomeSubcats = (fn: (subs: NonNullable<typeof incomeCat>['subcategories']) => NonNullable<typeof incomeCat>['subcategories']) => {
     if (!incomeCat) return
     store.setCategories(
       categories.map((c) =>
