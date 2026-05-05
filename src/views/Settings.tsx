@@ -5,7 +5,7 @@ import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
-import type { Account, RecurringItem, AccountType, ZlantarCategoryRule } from '@/types'
+import type { Account, RecurringItem, AccountType, ZlantarCategoryRule, CategoryDef } from '@/types'
 
 function newId() { return `id-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
 
@@ -351,7 +351,7 @@ function CategoriesTab() {
   const [addName, setAddName] = useState('')
   const [showAdd, setShowAdd] = useState(false)
 
-  const updateIncomeSubcats = (fn: (subs: NonNullable<typeof incomeCat>['subcategories']) => NonNullable<typeof incomeCat>['subcategories']) => {
+  const updateIncomeSubcats = (fn: (subs: CategoryDef['subcategories']) => CategoryDef['subcategories']) => {
     if (!incomeCat) return
     store.setCategories(
       categories.map((c) =>
