@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ChevronLeft, ChevronRight, Plus, Download, Trash2 } from 'lucide-react'
+import { useState, useMemo } from 'react'
+import { ChevronLeft, ChevronRight, Plus, Download, Trash2, TrendingUp } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card } from '@/components/ui/Card'
@@ -21,12 +21,26 @@ import { exportToExcel } from '@/utils/excelExport'
 
 type YearInitMode = 'prev-budget' | 'prev-actuals' | 'blank'
 
+function linReg(points: [number, number][]): (x: number) => number {
+  const n = points.length
+  if (n === 0) return () => 0
+  if (n === 1) return () => points[0][1]
+  const meanX = points.reduce((s, [x]) => s + x, 0) / n
+  const meanY = points.reduce((s, [, y]) => s + y, 0) / n
+  const num = points.reduce((s, [x, y]) => s + (x - meanX) * (y - meanY), 0)
+  const den = points.reduce((s, [x]) => s + (x - meanX) ** 2, 0)
+  const slope = den === 0 ? 0 : num / den
+  const intercept = meanY - slope * meanX
+  return (x: number) => slope * x + intercept
+}
+
 export function YearlyBudgetView() {
   const [year, setYear] = useState(new Date().getFullYear())
   const [exporting, setExporting] = useState(false)
   const [showInitDialog, setShowInitDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [initMode, setInitMode] = useState<YearInitMode>('prev-budget')
+  const [showForecast, setShowForecast] = useState(false)
   const store = useAppStore()
   const { settings, yearlyBudgets, monthlyBudgets, actuals } = store
   const { categories } = settings
@@ -68,6 +82,52 @@ export function YearlyBudgetView() {
     }
   }
 
+  // Linear regression forecast — one predictor per category based on months with actuals
+  const forecastData = useMemo(() => {
+    if (!showForecast) return null
+    return new Map(
+      categories.map((cat) => {
+        const points: [number, number][] = []
+        for (let m = 1; m <= 12; m++) {
+          const act = actuals[makeMonthId(year, m)]
+          if (act) {
+            const amt = act.entries
+              .filter((e) => e.categoryId === cat.id)
+              .reduce((s, e) => s + e.totalAmount, 0)
+            points.push([m, amt])
+          }
+        }
+        return [cat.id, { predict: linReg(points), hasData: points.length >= 1 }] as const
+      })
+    )
+  }, [showForecast, categories, actuals, year])
+
+  const getForecast = (catId: string, month: number): number | null => {
+    if (!forecastData) return null
+    if (actuals[makeMonthId(year, month)]) return null  // already has actual
+    const fd = forecastData.get(catId)
+    if (!fd?.hasData) return null
+    return fd.predict(month)
+  }
+
+  const getFullYearForecast = (catId: string): number | null => {
+    if (!forecastData) return null
+    const fd = forecastData.get(catId)
+    if (!fd?.hasData) return null
+    let total = 0
+    for (let m = 1; m <= 12; m++) {
+      const act = actuals[makeMonthId(year, m)]
+      if (act) {
+        total += act.entries
+          .filter((e) => e.categoryId === catId)
+          .reduce((s, e) => s + e.totalAmount, 0)
+      } else {
+        total += fd.predict(m)
+      }
+    }
+    return Math.round(total)
+  }
+
   const months = Array.from({ length: 12 }, (_, i) => i + 1)
 
   return (
@@ -100,20 +160,38 @@ export function YearlyBudgetView() {
         </button>
       </div>
 
-      {/* Legend */}
-      <div className="flex items-center gap-4 mb-4 text-xs text-gray-500">
-        <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded bg-brand-100 border border-brand-300 inline-block" />
-          Detaljerad månadsbudget
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded bg-gray-100 border border-gray-300 inline-block" />
-          Årsallokering (÷12)
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded bg-green-100 border border-green-300 inline-block" />
-          Verkligt utfall
-        </span>
+      {/* Legend + forecast toggle */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="flex flex-wrap items-center gap-4 text-xs text-gray-500">
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded bg-brand-100 border border-brand-300 inline-block" />
+            Detaljerad månadsbudget
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded bg-gray-100 border border-gray-300 inline-block" />
+            Årsallokering (÷12)
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded bg-green-100 border border-green-300 inline-block" />
+            Verkligt utfall
+          </span>
+          {showForecast && (
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded bg-amber-100 border border-amber-300 inline-block" />
+              Prognos (linjär regression)
+            </span>
+          )}
+        </div>
+        {yb && (
+          <Button
+            variant={showForecast ? 'primary' : 'secondary'}
+            size="sm"
+            onClick={() => setShowForecast((v) => !v)}
+          >
+            <TrendingUp className="w-4 h-4" />
+            {showForecast ? 'Dölj prognos' : 'Visa prognos'}
+          </Button>
+        )}
       </div>
 
       {!yb && (
@@ -179,109 +257,133 @@ export function YearlyBudgetView() {
       )}
 
       {yb && (
-        <Card padding={false} className="overflow-auto">
-          {/* Sticky header */}
-          <div className="sticky top-0 z-10 bg-gray-900 text-white">
-            <div
-              className="grid text-xs font-semibold uppercase tracking-wide px-4 py-2.5"
-              style={{ gridTemplateColumns: `220px 110px repeat(12, 80px) 110px 110px` }}
-            >
-              <div>Kategori</div>
-              <div className="text-right">Årsbudget</div>
-              {MONTH_NAMES_SHORT.map((m) => (
-                <div key={m} className="text-center">{m}</div>
-              ))}
-              <div className="text-right">YTD Utfall</div>
-              <div className="text-right">Avvikelse</div>
-            </div>
-          </div>
+        <Card padding={false} className="overflow-auto max-h-[calc(100vh-20rem)]">
+          <table className="border-collapse" style={{ minWidth: 1510 }}>
+            <thead>
+              <tr className="bg-gray-900 text-white text-xs font-semibold uppercase tracking-wide">
+                <th scope="col" className="sticky top-0 left-0 z-30 bg-gray-900 text-left px-4 py-2.5 w-[220px]">
+                  Kategori
+                </th>
+                <th scope="col" className="sticky top-0 z-20 bg-gray-900 text-right px-2 py-2.5 w-[110px]">
+                  Årsbudget
+                </th>
+                {MONTH_NAMES_SHORT.map((m) => (
+                  <th key={m} scope="col" className="sticky top-0 z-20 bg-gray-900 text-center px-1 py-2.5 w-[80px]">
+                    {m}
+                  </th>
+                ))}
+                <th scope="col" className="sticky top-0 z-20 bg-gray-900 text-right px-2 py-2.5 w-[110px]">
+                  {showForecast ? 'Prognos helår' : 'YTD Utfall'}
+                </th>
+                <th scope="col" className="sticky top-0 z-20 bg-gray-900 text-right px-4 py-2.5 w-[110px]">
+                  Avvikelse
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {categories.map((cat) => {
+                const yc = yb.categories.find((c) => c.categoryId === cat.id)
+                const annualBudget = yc?.annualAmount ?? 0
+                const ytdActual = calcYearlyActualTotal(store, year, cat.id)
+                const fullYearForecast = getFullYearForecast(cat.id)
+                const comparisonAmount =
+                  showForecast && fullYearForecast !== null ? fullYearForecast : ytdActual
+                const variance = comparisonAmount - annualBudget
 
-          {/* Rows */}
-          {categories.map((cat) => {
-            const yc = yb.categories.find((c) => c.categoryId === cat.id)
-            const annualBudget = yc?.annualAmount ?? 0
-            const ytdActual = calcYearlyActualTotal(store, year, cat.id)
-            const variance = ytdActual - annualBudget
-
-            return (
-              <div key={cat.id} className="border-b border-gray-100 last:border-0">
-                <div
-                  className="grid items-center px-4 py-2.5 hover:bg-gray-50"
-                  style={{ gridTemplateColumns: `220px 110px repeat(12, 80px) 110px 110px` }}
-                >
-                  {/* Category name */}
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: cat.color ?? '#94a3b8' }}
-                    />
-                    <span className="text-sm font-medium text-gray-800 truncate">{cat.name}</span>
-                    <Badge
-                      variant={cat.type === 'income' ? 'green' : cat.type === 'savings' ? 'blue' : 'gray'}
-                      size="sm"
-                    >
-                      {cat.type === 'income' ? 'In' : cat.type === 'savings' ? 'Spar' : 'Ut'}
-                    </Badge>
-                  </div>
-
-                  {/* Annual budget input */}
-                  <div>
-                    <AmountInput
-                      value={annualBudget}
-                      onChange={(a) => updateAnnualAmount(cat.id, a)}
-                      className="w-full"
-                      defaultNegative={cat.type !== 'income'}
-                    />
-                  </div>
-
-                  {/* Month columns */}
-                  {months.map((m) => {
-                    const mid = makeMonthId(year, m)
-                    const mb = monthlyBudgets[mid]
-                    const act = actuals[mid]
-                    const isDetailed = !!mb
-                    const monthBudget = mb
-                      ? (mb.categories.find((c) => c.categoryId === cat.id)?.amount ?? 0)
-                      : annualBudget > 0 ? Math.round(annualBudget / 12) : null
-                    const monthActual = act
-                      ? act.entries.filter((e) => e.categoryId === cat.id).reduce((s, e) => s + e.totalAmount, 0)
-                      : null
-
-                    return (
-                      <div key={m} className="text-center">
+                return (
+                  <tr key={cat.id} className="border-b border-gray-100 last:border-0 hover:bg-gray-50 group">
+                    {/* Sticky category column */}
+                    <td className="sticky left-0 z-10 bg-white group-hover:bg-gray-50 px-4 py-2.5 transition-colors">
+                      <div className="flex items-center gap-2 min-w-0">
                         <div
-                          className={`text-xs font-medium rounded px-1 py-0.5 mx-0.5
-                            ${isDetailed ? 'bg-brand-100 text-brand-800' : 'text-gray-500'}`}
-                          title={isDetailed ? 'Detaljerad månadsbudget' : 'Årsallokering'}
+                          className="w-2.5 h-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: cat.color ?? '#94a3b8' }}
+                        />
+                        <span className="text-sm font-medium text-gray-800 truncate">{cat.name}</span>
+                        <Badge
+                          variant={cat.type === 'income' ? 'green' : cat.type === 'savings' ? 'blue' : 'gray'}
+                          size="sm"
                         >
-                          {monthBudget !== null ? formatCurrencyCompact(monthBudget) : '–'}
-                        </div>
-                        {monthActual !== null && (
-                          <div className="text-xs text-green-700 bg-green-50 rounded px-1 py-0.5 mx-0.5 mt-0.5">
-                            {formatCurrencyCompact(monthActual)}
-                          </div>
-                        )}
+                          {cat.type === 'income' ? 'In' : cat.type === 'savings' ? 'Spar' : 'Ut'}
+                        </Badge>
                       </div>
-                    )
-                  })}
+                    </td>
 
-                  {/* YTD actual */}
-                  <div className="text-right text-sm font-medium text-gray-700">
-                    {formatCurrency(ytdActual)}
-                  </div>
+                    {/* Annual budget input */}
+                    <td className="px-2 py-2.5">
+                      <AmountInput
+                        value={annualBudget}
+                        onChange={(a) => updateAnnualAmount(cat.id, a)}
+                        className="w-full"
+                        defaultNegative={cat.type !== 'income'}
+                      />
+                    </td>
 
-                  {/* Variance */}
-                  <div className="text-right text-sm font-medium">
-                    {annualBudget !== 0 ? (
-                      <span className={variance < 0 ? 'text-red-600' : 'text-green-600'}>
-                        {formatCurrency(variance, true)}
-                      </span>
-                    ) : '–'}
-                  </div>
-                </div>
-              </div>
-            )
-          })}
+                    {/* Month columns */}
+                    {months.map((m) => {
+                      const mid = makeMonthId(year, m)
+                      const mb = monthlyBudgets[mid]
+                      const act = actuals[mid]
+                      const isDetailed = !!mb
+                      const monthBudget = mb
+                        ? (mb.categories.find((c) => c.categoryId === cat.id)?.amount ?? 0)
+                        : annualBudget > 0 ? Math.round(annualBudget / 12) : null
+                      const monthActual = act
+                        ? act.entries
+                            .filter((e) => e.categoryId === cat.id)
+                            .reduce((s, e) => s + e.totalAmount, 0)
+                        : null
+                      const forecast = getForecast(cat.id, m)
+
+                      return (
+                        <td key={m} className="px-1 py-2.5 text-center">
+                          <div
+                            className={`text-xs font-medium rounded px-1 py-0.5 mx-0.5 ${
+                              isDetailed ? 'bg-brand-100 text-brand-800' : 'text-gray-500'
+                            }`}
+                            title={isDetailed ? 'Detaljerad månadsbudget' : 'Årsallokering'}
+                          >
+                            {monthBudget !== null ? formatCurrencyCompact(monthBudget) : '–'}
+                          </div>
+                          {monthActual !== null && (
+                            <div className="text-xs text-green-700 bg-green-50 rounded px-1 py-0.5 mx-0.5 mt-0.5">
+                              {formatCurrencyCompact(monthActual)}
+                            </div>
+                          )}
+                          {forecast !== null && (
+                            <div
+                              className="text-xs text-amber-700 bg-amber-50 rounded px-1 py-0.5 mx-0.5 mt-0.5 italic"
+                              title="Extrapolerat via linjär regression"
+                            >
+                              ~{formatCurrencyCompact(Math.round(forecast))}
+                            </div>
+                          )}
+                        </td>
+                      )
+                    })}
+
+                    {/* Full-year forecast or YTD actual */}
+                    <td className="px-2 py-2.5 text-right text-sm font-medium">
+                      {showForecast && fullYearForecast !== null ? (
+                        <span className="text-amber-700">{formatCurrency(fullYearForecast)}</span>
+                      ) : (
+                        <span className="text-gray-700">{formatCurrency(ytdActual)}</span>
+                      )}
+                    </td>
+
+                    {/* Variance */}
+                    <td className="px-4 py-2.5 text-right text-sm font-medium">
+                      {annualBudget !== 0 ? (
+                        <span className={variance < 0 ? 'text-red-600' : 'text-green-600'}>
+                          {formatCurrency(variance, true)}
+                        </span>
+                      ) : '–'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </Card>
       )}
     </Layout>
