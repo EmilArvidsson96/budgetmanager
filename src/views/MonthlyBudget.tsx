@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronLeft, ChevronRight, Plus, Download, Trash2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Download, Trash2, X } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card } from '@/components/ui/Card'
@@ -20,9 +20,11 @@ import {
   createMonthlyBudgetFrom6AvgActuals,
 } from '@/utils/budgetHelpers'
 import { exportToExcel } from '@/utils/excelExport'
-import type { CategoryDef, SubcategoryBudget } from '@/types'
+import { getTransactionsForCategory } from '@/utils/zlantarParser'
+import type { CategoryDef, SubcategoryBudget, ZlantarTransaction } from '@/types'
 
 type MonthInitMode = 'prev-budget' | 'prev-actuals' | 'avg6-budget' | 'avg6-actuals' | 'blank'
+type TxPanel = { catId: string; subId?: string; label: string } | null
 
 export function MonthlyBudgetView() {
   const today = new Date()
@@ -33,9 +35,10 @@ export function MonthlyBudgetView() {
   const [showInitDialog, setShowInitDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [initMode, setInitMode] = useState<MonthInitMode>('prev-budget')
+  const [txPanel, setTxPanel] = useState<TxPanel>(null)
 
   const store = useAppStore()
-  const { settings, monthlyBudgets, actuals } = store
+  const { settings, monthlyBudgets, actuals, allTransactions } = store
   const { categories, recurringItems } = settings
 
   const monthId = makeMonthId(year, month)
@@ -300,11 +303,28 @@ export function MonthlyBudgetView() {
                   onToggle={() => toggleCat(cat.id)}
                   onCatAmountChange={(a) => updateCatAmount(cat.id, a)}
                   onSubAmountChange={(subId, a) => updateSubAmount(cat.id, subId, a)}
+                  onActualClick={(catId, subId, label) => setTxPanel({ catId, subId, label })}
                 />
               ))}
             </div>
           </div>
         </Card>
+      )}
+
+      {/* Transaction panel */}
+      {txPanel && actual && (
+        <TransactionPanel
+          label={txPanel.label}
+          transactions={getTransactionsForCategory(
+            allTransactions,
+            monthId,
+            txPanel.catId,
+            txPanel.subId,
+            settings.categories,
+            settings.zlantarCategoryRules
+          )}
+          onClose={() => setTxPanel(null)}
+        />
       )}
     </Layout>
   )
@@ -320,11 +340,12 @@ interface CategorySectionProps {
   onToggle: () => void
   onCatAmountChange: (a: number) => void
   onSubAmountChange: (subId: string, a: number) => void
+  onActualClick: (catId: string, subId: string | undefined, label: string) => void
 }
 
 function CategorySection({
   cat, budget, actual, expanded, onToggle,
-  onCatAmountChange, onSubAmountChange,
+  onCatAmountChange, onSubAmountChange, onActualClick,
 }: CategorySectionProps) {
   const budgetAmt = budget?.amount ?? 0
   const actualAmt = actual
@@ -364,9 +385,14 @@ function CategorySection({
           <AmountInput value={budgetAmt} onChange={onCatAmountChange} className="w-full" defaultNegative={cat.type !== 'income'} />
         </div>
 
-        <div className="text-right text-sm tabular-nums">
+        <div className="text-right text-sm tabular-nums" onClick={(e) => e.stopPropagation()}>
           {actualAmt !== null ? (
-            <span className="text-gray-700 font-medium">{formatCurrency(actualAmt)}</span>
+            <button
+              className="text-gray-700 font-medium hover:underline hover:text-gray-900 transition-colors"
+              onClick={() => onActualClick(cat.id, undefined, cat.name)}
+            >
+              {formatCurrency(actualAmt)}
+            </button>
           ) : (
             <span className="text-gray-200">–</span>
           )}
@@ -416,7 +442,14 @@ function CategorySection({
                   />
                 </div>
                 <div className="text-right text-sm text-gray-500 tabular-nums">
-                  {subActual !== null ? formatCurrency(subActual) : '–'}
+                  {subActual !== null ? (
+                    <button
+                      className="hover:underline hover:text-gray-700 transition-colors"
+                      onClick={() => onActualClick(cat.id, sub.id, `${cat.name} / ${sub.name}`)}
+                    >
+                      {formatCurrency(subActual)}
+                    </button>
+                  ) : '–'}
                 </div>
                 <div className="text-right text-sm tabular-nums">
                   {subVariance !== null ? (
@@ -435,6 +468,71 @@ function CategorySection({
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Transaction panel ────────────────────────────────────────────────────────
+
+function TransactionPanel({
+  label,
+  transactions,
+  onClose,
+}: {
+  label: string
+  transactions: ZlantarTransaction[]
+  onClose: () => void
+}) {
+  const sorted = [...transactions].sort((a, b) => b.date.localeCompare(a.date))
+  const total = sorted.reduce((s, t) => s + t.amount, 0)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/30" />
+      <div
+        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-warm-200 shrink-0">
+          <h2 className="text-base font-semibold text-gray-800">{label}</h2>
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-lg transition-colors">
+            <X className="w-4 h-4 text-gray-500" />
+          </button>
+        </div>
+
+        {sorted.length === 0 ? (
+          <div className="flex-1 flex items-center justify-center text-sm text-gray-400 py-12">
+            Inga transaktioner
+          </div>
+        ) : (
+          <div className="overflow-y-auto flex-1">
+            <div className="divide-y divide-warm-100">
+              {sorted.map((tx, i) => (
+                <div
+                  key={i}
+                  className="grid grid-cols-[110px_1fr_120px_100px] px-6 py-3 text-sm items-center gap-2"
+                >
+                  <div className="text-gray-400 tabular-nums text-xs">{tx.date}</div>
+                  <div className="text-gray-700 truncate">{tx.description ?? '—'}</div>
+                  <div className="text-gray-400 text-xs truncate">{tx.account_name}</div>
+                  <div
+                    className={`text-right tabular-nums font-medium ${
+                      tx.amount < 0 ? 'text-red-500' : 'text-emerald-600'
+                    }`}
+                  >
+                    {formatCurrency(tx.amount)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="px-6 py-3 border-t border-warm-200 shrink-0 flex justify-between text-xs text-gray-400">
+          <span>{sorted.length} transaktioner</span>
+          <span className="tabular-nums font-medium text-gray-600">{formatCurrency(total)} totalt</span>
+        </div>
+      </div>
     </div>
   )
 }

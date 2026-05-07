@@ -289,6 +289,34 @@ export function findUnknownCategories(
   return Object.values(result).sort((a, b) => b.count - a.count)
 }
 
+// ─── Get individual transactions for a category/month ────────────────────────
+
+export function getTransactionsForCategory(
+  transactions: ZlantarTransaction[],
+  monthId: string,
+  catId: string,
+  subId: string | undefined,
+  categories: CategoryDef[],
+  rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES
+): ZlantarTransaction[] {
+  const catIds = new Set(categories.map((c) => c.id))
+  const ruleMap = buildRuleLookup(rules)
+
+  return transactions.filter((tx) => {
+    if (!tx.date || tx.date.slice(0, 7) !== monthId) return false
+    if (tx.transaction_type === 'transfer') return false
+    const { catId: resolvedCat, subId: resolvedSub } = resolveCategory(
+      tx.category ?? '',
+      tx.subcategory ?? '',
+      catIds,
+      ruleMap
+    )
+    if (resolvedCat !== catId) return false
+    if (subId !== undefined && resolvedSub !== subId) return false
+    return true
+  })
+}
+
 // ─── Compute starting balance from most recent import ────────────────────────
 
 export interface ComputedStartingBalance {
