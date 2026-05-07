@@ -199,6 +199,8 @@ export interface LiquidityPlan {
   year: number
   entries: LiquidityEntry[]
   startingBalances: AccountBalance[]
+  startingBalanceMode: 'computed' | 'manual'
+  manualStartingBalance?: number
   notes?: string
 }
 

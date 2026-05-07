@@ -7,6 +7,7 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { formatCurrency, MONTH_NAMES_SHORT } from '@/utils/budgetHelpers'
 import { exportToExcel } from '@/utils/excelExport'
+import { computeStartingBalance } from '@/utils/zlantarParser'
 import type { LiquidityEntry } from '@/types'
 
 function newId() {
@@ -31,10 +32,20 @@ export function LiquidityView() {
   })
 
   const store = useAppStore()
-  const { liquidityPlans, settings } = store
+  const { liquidityPlans, settings, actuals } = store
 
   const planId = String(year)
   const plan = liquidityPlans[planId]
+
+  // Computed starting balance from most recent Zlantar import
+  const computed = computeStartingBalance(actuals, settings.accounts)
+
+  // Effective starting balance: manual override or computed or 0
+  const mode = plan?.startingBalanceMode ?? 'computed'
+  const effectiveStartBalance =
+    mode === 'manual'
+      ? (plan?.manualStartingBalance ?? 0)
+      : (computed?.balance ?? 0)
 
   const initPlan = () => {
     const startingBalances = settings.accounts
@@ -51,7 +62,20 @@ export function LiquidityView() {
       year,
       entries: [],
       startingBalances,
+      startingBalanceMode: 'computed',
     })
+  }
+
+  const setBalanceMode = (newMode: 'computed' | 'manual') => {
+    store.upsertLiquidityPlan({
+      ...plan,
+      startingBalanceMode: newMode,
+      manualStartingBalance: newMode === 'manual' ? (plan.manualStartingBalance ?? effectiveStartBalance) : undefined,
+    })
+  }
+
+  const setManualBalance = (value: number) => {
+    store.upsertLiquidityPlan({ ...plan, manualStartingBalance: value })
   }
 
   const addEntry = () => {
@@ -75,12 +99,11 @@ export function LiquidityView() {
   const chartData = MONTH_NAMES_SHORT.map((name, i) => {
     const m = i + 1
     const monthStr = `${year}-${String(m).padStart(2, '0')}`
-    const startBalance = plan?.startingBalances.reduce((s, b) => s + b.balance, 0) ?? 0
     const monthEntries = (plan?.entries ?? []).filter((e) => e.date.startsWith(monthStr))
     const inflow = monthEntries.filter((e) => e.amount > 0).reduce((s, e) => s + e.amount, 0)
     const outflow = monthEntries.filter((e) => e.amount < 0).reduce((s, e) => s + Math.abs(e.amount), 0)
     const entriesBefore = (plan?.entries ?? []).filter((e) => e.date < monthStr)
-    const balance = startBalance + entriesBefore.reduce((s, e) => s + e.amount, 0) + monthEntries.reduce((s, e) => s + e.amount, 0)
+    const balance = effectiveStartBalance + entriesBefore.reduce((s, e) => s + e.amount, 0) + monthEntries.reduce((s, e) => s + e.amount, 0)
     return { name, inflow, outflow, balance }
   })
 
@@ -124,6 +147,64 @@ export function LiquidityView() {
 
       {plan && (
         <div className="space-y-5">
+          {/* Starting balance */}
+          <Card>
+            <CardHeader title="Startsaldo" subtitle="Saldot vid planeringens startpunkt" />
+            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+              {/* Mode toggle */}
+              <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm shrink-0">
+                <button
+                  onClick={() => setBalanceMode('computed')}
+                  className={`px-3 py-1.5 font-medium transition-colors ${mode === 'computed' ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                >
+                  Från import
+                </button>
+                <button
+                  onClick={() => setBalanceMode('manual')}
+                  className={`px-3 py-1.5 font-medium transition-colors border-l border-gray-200 ${mode === 'manual' ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                >
+                  Manuell
+                </button>
+              </div>
+
+              {mode === 'computed' && (
+                <div className="flex items-baseline gap-3">
+                  <span className="text-2xl font-semibold text-gray-900">
+                    {formatCurrency(effectiveStartBalance)}
+                  </span>
+                  {computed ? (
+                    <span className="text-xs text-gray-400">
+                      Importerat {new Date(computed.importedAt).toLocaleDateString('sv-SE')}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-amber-600">Inget importerat ännu — importera Zlantar-data för automatiskt saldo</span>
+                  )}
+                </div>
+              )}
+
+              {mode === 'manual' && (
+                <div className="flex items-center gap-3">
+                  <input
+                    type="number"
+                    value={plan.manualStartingBalance ?? ''}
+                    onChange={(e) => setManualBalance(parseFloat(e.target.value) || 0)}
+                    placeholder="0"
+                    className="border border-gray-200 rounded-md px-3 py-1.5 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  />
+                  <span className="text-sm text-gray-500">kr</span>
+                  {computed && (
+                    <button
+                      onClick={() => setManualBalance(computed.balance)}
+                      className="text-xs text-brand-600 hover:underline"
+                    >
+                      Fyll från import ({formatCurrency(computed.balance)})
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </Card>
+
           {/* Chart */}
           <Card>
             <CardHeader title="Saldoprojektion" subtitle="Beräknat kassaflöde per månad" />
@@ -253,7 +334,7 @@ export function LiquidityView() {
                     </tr>
                   )}
                   {(() => {
-                    let cumulative = plan.startingBalances.reduce((s, b) => s + b.balance, 0)
+                    let cumulative = effectiveStartBalance
                     return sorted.map((entry) => {
                       cumulative += entry.amount
                       return (

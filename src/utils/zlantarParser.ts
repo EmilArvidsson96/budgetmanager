@@ -288,3 +288,28 @@ export function findUnknownCategories(
 
   return Object.values(result).sort((a, b) => b.count - a.count)
 }
+
+// ─── Compute starting balance from most recent import ────────────────────────
+
+export interface ComputedStartingBalance {
+  balance: number
+  importedAt: string   // ISO timestamp of the import snapshot
+}
+
+export function computeStartingBalance(
+  actuals: Record<string, MonthlyActuals>,
+  liquidityAccounts: Account[]
+): ComputedStartingBalance | null {
+  const entries = Object.values(actuals)
+  if (entries.length === 0) return null
+
+  // Find the most recently imported actuals record
+  const latest = entries.reduce((a, b) => (a.importedAt > b.importedAt ? a : b))
+
+  const liquidityIds = new Set(liquidityAccounts.filter((a) => a.includeInLiquidity).map((a) => a.id))
+  const balance = latest.accountBalances
+    .filter((ab) => liquidityIds.has(ab.accountId))
+    .reduce((sum, ab) => sum + ab.balance, 0)
+
+  return { balance, importedAt: latest.importedAt }
+}
