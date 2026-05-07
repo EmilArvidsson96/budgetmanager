@@ -214,6 +214,60 @@ export interface ZlantarCategoryRule {
   appSubcategoryId?: string    // target app subcategory (if omitted, keeps Zlantar's)
 }
 
+// ─── Grocery receipt parsing ──────────────────────────────────────────────────
+
+export type GroceryCategory =
+  | 'frukt_gront'
+  | 'mejeri_agg'
+  | 'kott_chark'
+  | 'fisk'
+  | 'brod_bageri'
+  | 'torrvaror'
+  | 'frys'
+  | 'dryck'
+  | 'godis_snacks'
+  | 'hushall'
+  | 'hygien'
+  | 'ovrigt'
+
+export const GROCERY_CATEGORY_LABELS: Record<GroceryCategory, string> = {
+  frukt_gront:  'Frukt & grönt',
+  mejeri_agg:   'Mejeri & ägg',
+  kott_chark:   'Kött & chark',
+  fisk:         'Fisk & skaldjur',
+  brod_bageri:  'Bröd & bageri',
+  torrvaror:    'Torrvaror & skafferi',
+  frys:         'Frysvaror',
+  dryck:        'Dryck',
+  godis_snacks: 'Godis & snacks',
+  hushall:      'Hushåll & städ',
+  hygien:       'Hygien & skönhet',
+  ovrigt:       'Övrigt',
+}
+
+export interface GroceryReceiptItem {
+  name: string
+  amount: number        // negative (cost in SEK)
+  category: GroceryCategory
+}
+
+export interface MatchedTransaction {
+  date: string
+  description: string
+  amount: number
+}
+
+export interface GroceryReceipt {
+  id: string
+  fileName: string
+  date: string          // 'YYYY-MM-DD'
+  merchant: string
+  total: number         // negative
+  items: GroceryReceiptItem[]
+  parsedAt: string
+  matchedTransaction?: MatchedTransaction
+}
+
 // ─── App settings ─────────────────────────────────────────────────────────────
 
 export interface AppSettings {
@@ -224,6 +278,7 @@ export interface AppSettings {
   accounts: Account[]
   recurringItems: RecurringItem[]
   zlantarCategoryRules: ZlantarCategoryRule[]
+  anthropicApiKey?: string
 }
 
 // ─── Complete app state ───────────────────────────────────────────────────────
@@ -234,5 +289,7 @@ export interface AppState {
   yearlyBudgets: Record<string, YearlyBudget>       // key: 'YYYY'
   actuals: Record<string, MonthlyActuals>           // key: 'YYYY-MM'
   liquidityPlans: Record<string, LiquidityPlan>    // key: 'YYYY'
+  groceryReceipts: GroceryReceipt[]
+  allTransactions: ZlantarTransaction[]
   lastZlantarImport?: ZlantarImport
 }

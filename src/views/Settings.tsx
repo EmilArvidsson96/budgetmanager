@@ -24,18 +24,19 @@ const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = Object.fromEntries(
 ) as Record<AccountType, string>
 
 export function SettingsView() {
-  const [tab, setTab] = useState<'accounts' | 'recurring' | 'categories' | 'mapping'>('accounts')
+  const [tab, setTab] = useState<'accounts' | 'recurring' | 'categories' | 'mapping' | 'api'>('accounts')
 
   return (
     <Layout>
       <PageHeader title="Inställningar" />
 
-      <div className="flex gap-1 mb-6 border-b border-gray-200">
+      <div className="flex flex-wrap gap-1 mb-6 border-b border-gray-200">
         {([
           { key: 'accounts',   label: 'Konton' },
           { key: 'recurring',  label: 'Återkommande poster' },
           { key: 'categories', label: 'Kategorier' },
           { key: 'mapping',    label: 'Zlantar-mappning' },
+          { key: 'api',        label: 'API-nycklar' },
         ] as const).map(({ key, label }) => (
           <button
             key={key}
@@ -52,6 +53,7 @@ export function SettingsView() {
       {tab === 'recurring'  && <RecurringTab />}
       {tab === 'categories' && <CategoriesTab />}
       {tab === 'mapping'    && <ZlantarMappingTab />}
+      {tab === 'api'        && <ApiKeysTab />}
     </Layout>
   )
 }
@@ -811,6 +813,75 @@ function ZlantarMappingTab() {
               </div>
             )
           })}
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+// ─── API keys tab ─────────────────────────────────────────────────────────────
+
+function ApiKeysTab() {
+  const store = useAppStore()
+  const [key, setKey] = useState(store.settings.anthropicApiKey ?? '')
+  const [saved, setSaved] = useState(false)
+  const [show, setShow] = useState(false)
+
+  function save() {
+    store.updateSettings({ anthropicApiKey: key.trim() || undefined })
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  return (
+    <div className="max-w-lg space-y-6">
+      <Card>
+        <CardHeader
+          title="Anthropic API-nyckel"
+          subtitle="Används för att tolka matkvitton med Claude AI"
+        />
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">
+            Nyckeln sparas lokalt i webbläsaren och används enbart för att skicka kvitton till
+            Anthropic för analys. Hämta din nyckel på{' '}
+            <a
+              href="https://console.anthropic.com/settings/keys"
+              target="_blank"
+              rel="noreferrer"
+              className="text-brand-600 hover:underline"
+            >
+              console.anthropic.com
+            </a>.
+          </p>
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <input
+                type={show ? 'text' : 'password'}
+                value={key}
+                onChange={(e) => { setKey(e.target.value); setSaved(false) }}
+                placeholder="sk-ant-…"
+                className="w-full border border-warm-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-400 pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShow((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs"
+              >
+                {show ? 'Dölj' : 'Visa'}
+              </button>
+            </div>
+            <Button onClick={save} variant={saved ? 'secondary' : 'primary'} size="md">
+              {saved ? '✓ Sparat' : 'Spara'}
+            </Button>
+          </div>
+          {key && (
+            <button
+              className="text-xs text-red-500 hover:underline"
+              onClick={() => { setKey(''); store.updateSettings({ anthropicApiKey: undefined }) }}
+            >
+              Ta bort nyckel
+            </button>
+          )}
         </div>
       </Card>
     </div>

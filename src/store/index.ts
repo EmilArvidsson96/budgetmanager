@@ -8,6 +8,7 @@ import type {
   MonthlyActuals,
   LiquidityPlan,
   ZlantarImport,
+  ZlantarTransaction,
   CategoryDef,
   Account,
   RecurringItem,
@@ -15,6 +16,9 @@ import type {
   YearlyCategoryBudget,
   LiquidityEntry,
   ZlantarCategoryRule,
+  GroceryReceipt,
+  GroceryCategory,
+  MatchedTransaction,
 } from '@/types'
 import { DEFAULT_CATEGORIES, DEFAULT_ZLANTAR_RULES } from './defaultCategories'
 
@@ -181,6 +185,12 @@ interface AppStore extends AppState {
 
   // Zlantar import
   setZlantarImport: (imp: ZlantarImport) => void
+
+  // Grocery receipts
+  addGroceryReceipt: (receipt: GroceryReceipt) => void
+  removeGroceryReceipt: (id: string) => void
+  updateGroceryReceiptItemCategory: (receiptId: string, itemIndex: number, category: GroceryCategory) => void
+  setReceiptMatchedTransaction: (receiptId: string, tx: MatchedTransaction | undefined) => void
 }
 
 export const useAppStore = create<AppStore>()(
@@ -191,6 +201,8 @@ export const useAppStore = create<AppStore>()(
       yearlyBudgets: {},
       actuals: {},
       liquidityPlans: {},
+      groceryReceipts: [],
+      allTransactions: [],
       lastZlantarImport: undefined,
 
       updateSettings: (s) =>
@@ -315,7 +327,45 @@ export const useAppStore = create<AppStore>()(
           },
         })),
 
-      setZlantarImport: (imp) => set({ lastZlantarImport: imp }),
+      setZlantarImport: (imp) =>
+        set((state) => {
+          const existingKeys = new Set(
+            state.allTransactions.map((tx: ZlantarTransaction) =>
+              `${tx.date}|${tx.amount}|${tx.description ?? ''}`
+            )
+          )
+          const newTxs = imp.transactions.filter(
+            (tx) => !existingKeys.has(`${tx.date}|${tx.amount}|${tx.description ?? ''}`)
+          )
+          return {
+            lastZlantarImport: imp,
+            allTransactions: [...state.allTransactions, ...newTxs],
+          }
+        }),
+
+      addGroceryReceipt: (receipt) =>
+        set((state) => ({ groceryReceipts: [...state.groceryReceipts, receipt] })),
+
+      removeGroceryReceipt: (id) =>
+        set((state) => ({ groceryReceipts: state.groceryReceipts.filter((r) => r.id !== id) })),
+
+      updateGroceryReceiptItemCategory: (receiptId, itemIndex, category) =>
+        set((state) => ({
+          groceryReceipts: state.groceryReceipts.map((r) => {
+            if (r.id !== receiptId) return r
+            const items = r.items.map((item, i) =>
+              i === itemIndex ? { ...item, category } : item
+            )
+            return { ...r, items }
+          }),
+        })),
+
+      setReceiptMatchedTransaction: (receiptId, tx) =>
+        set((state) => ({
+          groceryReceipts: state.groceryReceipts.map((r) =>
+            r.id === receiptId ? { ...r, matchedTransaction: tx } : r
+          ),
+        })),
     }),
     {
       name: 'budgethanteraren-v1',

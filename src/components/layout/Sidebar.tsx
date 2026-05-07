@@ -7,6 +7,7 @@ import {
   Upload,
   TrendingUp,
   HelpCircle,
+  Receipt,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -14,6 +15,7 @@ const NAV_ITEMS = [
   { to: '/ar',             icon: CalendarRange, label: 'Årsbudget',     short: 'År' },
   { to: '/likviditet',     icon: Waves,         label: 'Likviditet',    short: 'Likv.' },
   { to: '/importera',      icon: Upload,        label: 'Importera',     short: 'Import' },
+  { to: '/kvitton',        icon: Receipt,       label: 'Matkvitton',    short: 'Kvitto' },
   { to: '/installningar',  icon: Settings,      label: 'Inställningar', short: 'Inst.' },
   { to: '/hjalp',          icon: HelpCircle,    label: 'Hjälp',         short: 'Hjälp' },
 ]
