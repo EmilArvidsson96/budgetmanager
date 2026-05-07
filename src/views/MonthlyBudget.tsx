@@ -310,7 +310,7 @@ function CategorySection({
     : null
 
   const variance = actualAmt !== null ? actualAmt - budgetAmt : null
-  const isOverBudget = variance !== null && cat.type !== 'income' && variance > 0
+  const isOverBudget = variance !== null && variance < 0
   const hasSubcategories = cat.subcategories.length > 0
 
   return (
@@ -339,7 +339,7 @@ function CategorySection({
         </div>
 
         <div className="text-right" onClick={(e) => e.stopPropagation()}>
-          <AmountInput value={budgetAmt} onChange={onCatAmountChange} className="w-full" />
+          <AmountInput value={budgetAmt} onChange={onCatAmountChange} className="w-full" defaultNegative={cat.type !== 'income'} />
         </div>
 
         <div className="text-right text-sm tabular-nums">
@@ -361,8 +361,8 @@ function CategorySection({
         </div>
 
         <div className="pl-3 pr-1">
-          {actualAmt !== null && budgetAmt > 0 && (
-            <ProgressBar value={actualAmt} max={budgetAmt} />
+          {actualAmt !== null && budgetAmt !== 0 && (
+            <ProgressBar value={Math.abs(actualAmt)} max={Math.abs(budgetAmt)} />
           )}
         </div>
       </div>
@@ -390,6 +390,7 @@ function CategorySection({
                     value={subBudget}
                     onChange={(a) => onSubAmountChange(sub.id, a)}
                     className="w-full"
+                    defaultNegative={cat.type !== 'income'}
                   />
                 </div>
                 <div className="text-right text-sm text-gray-500 tabular-nums">
@@ -397,14 +398,14 @@ function CategorySection({
                 </div>
                 <div className="text-right text-sm tabular-nums">
                   {subVariance !== null ? (
-                    <span className={subVariance > 0 && cat.type !== 'income' ? 'text-red-500' : 'text-emerald-600'}>
+                    <span className={subVariance < 0 ? 'text-red-500' : 'text-emerald-600'}>
                       {formatCurrency(subVariance, true)}
                     </span>
                   ) : '–'}
                 </div>
                 <div className="pl-3 pr-1">
-                  {subActual !== null && subBudget > 0 && (
-                    <ProgressBar value={subActual} max={subBudget} />
+                  {subActual !== null && subBudget !== 0 && (
+                    <ProgressBar value={Math.abs(subActual)} max={Math.abs(subBudget)} />
                   )}
                 </div>
               </div>

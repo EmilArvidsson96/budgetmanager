@@ -86,6 +86,58 @@ function migrateV0(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, settings, monthlyBudgets, yearlyBudgets }
 }
 
+// v1 → v2: budget amounts for expense/savings/transfer are now stored as negative
+function migrateV1(raw: Record<string, unknown>): Record<string, unknown> {
+  const settings = raw.settings as AppSettings
+  const catTypeMap = new Map((settings?.categories ?? []).map((c) => [c.id, c.type]))
+
+  const monthlyBudgets = { ...(raw.monthlyBudgets as Record<string, MonthlyBudget>) }
+  for (const ym of Object.keys(monthlyBudgets)) {
+    const budget = monthlyBudgets[ym]
+    monthlyBudgets[ym] = {
+      ...budget,
+      categories: budget.categories.map((c) => {
+        const type = catTypeMap.get(c.categoryId)
+        if (type === 'expense' || type === 'savings' || type === 'transfer') {
+          return {
+            ...c,
+            amount: c.amount > 0 ? -c.amount : c.amount,
+            subcategories: c.subcategories.map((s) => ({
+              ...s,
+              amount: s.amount > 0 ? -s.amount : s.amount,
+            })),
+          }
+        }
+        return c
+      }),
+    }
+  }
+
+  const yearlyBudgets = { ...(raw.yearlyBudgets as Record<string, YearlyBudget>) }
+  for (const yr of Object.keys(yearlyBudgets)) {
+    const budget = yearlyBudgets[yr]
+    yearlyBudgets[yr] = {
+      ...budget,
+      categories: budget.categories.map((c) => {
+        const type = catTypeMap.get(c.categoryId)
+        if (type === 'expense' || type === 'savings' || type === 'transfer') {
+          return {
+            ...c,
+            annualAmount: c.annualAmount > 0 ? -c.annualAmount : c.annualAmount,
+            subcategories: c.subcategories.map((s) => ({
+              ...s,
+              annualAmount: s.annualAmount > 0 ? -s.annualAmount : s.annualAmount,
+            })),
+          }
+        }
+        return c
+      }),
+    }
+  }
+
+  return { ...raw, monthlyBudgets, yearlyBudgets }
+}
+
 const DEFAULT_SETTINGS: AppSettings = {
   currency: 'SEK',
   defaultView: 'monthly',
@@ -267,10 +319,11 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 1,
+      version: 2,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
+        if (version < 2) state = migrateV1(state)
         return state
       },
     }

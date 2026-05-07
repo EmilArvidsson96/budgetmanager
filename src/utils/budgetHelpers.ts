@@ -59,8 +59,8 @@ export function calcBudgetTotals(
     const cat = categories.find((c) => c.id === cb.categoryId)
     if (!cat) continue
     if (cat.type === 'income') totalIncome += cb.amount
-    else if (cat.type === 'savings') totalSavings += cb.amount
-    else totalExpense += cb.amount
+    else if (cat.type === 'savings') totalSavings += Math.abs(cb.amount)
+    else totalExpense += Math.abs(cb.amount)
   }
 
   return {
@@ -84,8 +84,8 @@ export function calcActualTotals(
   for (const entry of actuals.entries) {
     const type = catTypeMap.get(entry.categoryId)
     if (type === 'income') totalIncome += entry.totalAmount
-    else if (type === 'savings') totalSavings += entry.totalAmount
-    else totalExpense += entry.totalAmount
+    else if (type === 'savings') totalSavings += Math.abs(entry.totalAmount)
+    else totalExpense += Math.abs(entry.totalAmount)
   }
 
   return {

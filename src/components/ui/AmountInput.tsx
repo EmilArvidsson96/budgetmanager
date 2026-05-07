@@ -5,10 +5,10 @@ interface AmountInputProps {
   onChange: (value: number) => void
   placeholder?: string
   className?: string
-  allowNegative?: boolean
+  defaultNegative?: boolean
 }
 
-export function AmountInput({ value, onChange, placeholder = '0', className = '', allowNegative }: AmountInputProps) {
+export function AmountInput({ value, onChange, placeholder = '0', className = '', defaultNegative }: AmountInputProps) {
   const [raw, setRaw] = useState('')
   const [focused, setFocused] = useState(false)
 
@@ -18,23 +18,23 @@ export function AmountInput({ value, onChange, placeholder = '0', className = ''
     <div className={`relative ${className}`}>
       <input
         type="text"
-        inputMode="decimal"
+        inputMode="text"
         value={displayValue}
         placeholder={placeholder}
         onFocus={() => {
           setFocused(true)
-          setRaw(value === 0 ? '' : String(value))
+          if (value === 0) {
+            setRaw(defaultNegative ? '-' : '')
+          } else {
+            setRaw(String(value))
+          }
         }}
         onChange={(e) => setRaw(e.target.value)}
         onBlur={() => {
           setFocused(false)
           const cleaned = raw.replace(',', '.').replace(/[^\d.-]/g, '')
           const parsed = parseFloat(cleaned)
-          if (!isNaN(parsed)) {
-            onChange(allowNegative ? parsed : Math.abs(parsed))
-          } else {
-            onChange(0)
-          }
+          onChange(isNaN(parsed) ? 0 : parsed)
           setRaw('')
         }}
         className="w-full text-right rounded-md border border-warm-300 bg-warm-50 pl-3 pr-8 py-1.5

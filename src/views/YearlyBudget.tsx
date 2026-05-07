@@ -209,6 +209,7 @@ export function YearlyBudgetView() {
                       value={annualBudget}
                       onChange={(a) => updateAnnualAmount(cat.id, a)}
                       className="w-full"
+                      defaultNegative={cat.type !== 'income'}
                     />
                   </div>
 
@@ -250,8 +251,8 @@ export function YearlyBudgetView() {
 
                   {/* Variance */}
                   <div className="text-right text-sm font-medium">
-                    {annualBudget > 0 ? (
-                      <span className={variance > 0 && cat.type !== 'income' ? 'text-red-600' : 'text-green-600'}>
+                    {annualBudget !== 0 ? (
+                      <span className={variance < 0 ? 'text-red-600' : 'text-green-600'}>
                         {formatCurrency(variance, true)}
                       </span>
                     ) : '–'}
