@@ -651,7 +651,7 @@ function SpendAnalytics({ receipts }: { receipts: GroceryReceipt[] }) {
               content={(props) => (
                 <AreaTooltipContent
                   active={props.active}
-                  payload={props.payload as Array<{ dataKey: string; fill: string }>}
+                  payload={props.payload as unknown as Array<{ dataKey: string; fill: string }>}
                   label={props.label as string}
                   points={points}
                 />
@@ -775,7 +775,7 @@ function SpendAnalytics({ receipts }: { receipts: GroceryReceipt[] }) {
                 content={(props) => (
                   <PieTooltipContent
                     active={props.active}
-                    payload={props.payload as Array<{ name: string; value: number; payload: { cat: ChartCat } }>}
+                    payload={props.payload as unknown as Array<{ name: string; value: number; payload: { cat: ChartCat } }>}
                     total={pieTotal}
                   />
                 )}
