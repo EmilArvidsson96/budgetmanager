@@ -13,6 +13,7 @@ import {
   parseReceiptText,
   findMatchingTransaction,
 } from '@/utils/receiptParser'
+import { DEFAULT_RECEIPT_MODEL } from '@/utils/receiptModels'
 import { formatCurrency } from '@/utils/budgetHelpers'
 import {
   GROCERY_CATEGORY_LABELS,
@@ -315,6 +316,7 @@ function MonthlyBreakdown({ receipts }: { receipts: GroceryReceipt[] }) {
 export function GroceryReceiptsView() {
   const store = useAppStore()
   const apiKey = store.settings.anthropicApiKey ?? ''
+  const model = store.settings.anthropicModel ?? DEFAULT_RECEIPT_MODEL
   const allReceipts = store.groceryReceipts
 
   const [mode, setMode] = useState<InputMode>('file')
@@ -363,8 +365,8 @@ export function GroceryReceiptsView() {
       setParsing((p) => [...p, file.name])
       try {
         const parsed = isPdf
-          ? await parseReceiptPDF(file, apiKey)
-          : await parseReceiptImage(file, apiKey)
+          ? await parseReceiptPDF(file, apiKey, model)
+          : await parseReceiptImage(file, apiKey, model)
         addParsedReceipt(parsed)
       } catch (err) {
         setErrors((prev) => [...prev, { file: file.name, message: String(err) }])
@@ -380,7 +382,7 @@ export function GroceryReceiptsView() {
     const label = 'Inklistrat kvitto'
     setParsing((p) => [...p, label])
     try {
-      const parsed = await parseReceiptText(pasteText, apiKey)
+      const parsed = await parseReceiptText(pasteText, apiKey, model)
       addParsedReceipt(parsed)
       setPasteText('')
     } catch (err) {

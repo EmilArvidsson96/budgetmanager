@@ -1,5 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { GroceryReceipt, GroceryReceiptItem, GroceryCategory } from '@/types'
+export { RECEIPT_MODELS, DEFAULT_RECEIPT_MODEL } from './receiptModels'
+import { DEFAULT_RECEIPT_MODEL } from './receiptModels'
 
 const GROCERY_CATEGORIES = [
   'frukt_gront',
@@ -105,13 +107,14 @@ function makeClient(apiKey: string) {
 
 export async function parseReceiptPDF(
   file: File,
-  apiKey: string
+  apiKey: string,
+  model = DEFAULT_RECEIPT_MODEL
 ): Promise<Omit<GroceryReceipt, 'id' | 'parsedAt'>> {
   const client = makeClient(apiKey)
   const base64 = await fileToBase64(file)
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model,
     max_tokens: 2048,
     system: SYSTEM_PROMPT,
     messages: [
@@ -134,14 +137,15 @@ export async function parseReceiptPDF(
 
 export async function parseReceiptImage(
   file: File,
-  apiKey: string
+  apiKey: string,
+  model = DEFAULT_RECEIPT_MODEL
 ): Promise<Omit<GroceryReceipt, 'id' | 'parsedAt'>> {
   const client = makeClient(apiKey)
   const base64 = await fileToBase64(file)
   const mediaType = file.type as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model,
     max_tokens: 2048,
     system: SYSTEM_PROMPT,
     messages: [
@@ -164,12 +168,13 @@ export async function parseReceiptImage(
 
 export async function parseReceiptText(
   receiptText: string,
-  apiKey: string
+  apiKey: string,
+  model = DEFAULT_RECEIPT_MODEL
 ): Promise<Omit<GroceryReceipt, 'id' | 'parsedAt'>> {
   const client = makeClient(apiKey)
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model,
     max_tokens: 2048,
     system: SYSTEM_PROMPT,
     messages: [

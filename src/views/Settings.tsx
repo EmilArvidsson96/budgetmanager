@@ -5,6 +5,7 @@ import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
+import { RECEIPT_MODELS, DEFAULT_RECEIPT_MODEL } from '@/utils/receiptModels'
 import type { Account, RecurringItem, AccountType, ZlantarCategoryRule, CategoryDef } from '@/types'
 
 function newId() { return `id-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
@@ -826,6 +827,7 @@ function ApiKeysTab() {
   const [key, setKey] = useState(store.settings.anthropicApiKey ?? '')
   const [saved, setSaved] = useState(false)
   const [show, setShow] = useState(false)
+  const model = store.settings.anthropicModel ?? DEFAULT_RECEIPT_MODEL
 
   function save() {
     store.updateSettings({ anthropicApiKey: key.trim() || undefined })
@@ -882,6 +884,28 @@ function ApiKeysTab() {
               Ta bort nyckel
             </button>
           )}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Modell för kvittotolkning"
+          subtitle="Billigare modeller är snabbare men kan missa kantfall"
+        />
+        <div className="space-y-2">
+          {RECEIPT_MODELS.map((m) => (
+            <label key={m.id} className="flex items-center gap-3 cursor-pointer group">
+              <input
+                type="radio"
+                name="receipt-model"
+                value={m.id}
+                checked={model === m.id}
+                onChange={() => store.updateSettings({ anthropicModel: m.id })}
+                className="accent-brand-600"
+              />
+              <span className="text-sm text-gray-700 group-hover:text-gray-900">{m.label}</span>
+            </label>
+          ))}
         </div>
       </Card>
     </div>

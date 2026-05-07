@@ -279,6 +279,7 @@ export interface AppSettings {
   recurringItems: RecurringItem[]
   zlantarCategoryRules: ZlantarCategoryRule[]
   anthropicApiKey?: string
+  anthropicModel?: string
 }
 
 // ─── Complete app state ───────────────────────────────────────────────────────
