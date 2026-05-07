@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronLeft, ChevronRight, Plus, Download } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Download, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card } from '@/components/ui/Card'
@@ -31,6 +31,7 @@ export function MonthlyBudgetView() {
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set())
   const [exporting, setExporting] = useState(false)
   const [showInitDialog, setShowInitDialog] = useState(false)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [initMode, setInitMode] = useState<MonthInitMode>('prev-budget')
 
   const store = useAppStore()
@@ -128,9 +129,16 @@ export function MonthlyBudgetView() {
       <PageHeader
         title="Månadsbudget"
         actions={
-          <Button variant="secondary" size="sm" onClick={handleExport} loading={exporting}>
-            <Download className="w-4 h-4" /> Exportera
-          </Button>
+          <div className="flex gap-2">
+            {budget && (
+              <Button variant="secondary" size="sm" onClick={() => setShowDeleteDialog(true)}>
+                <Trash2 className="w-4 h-4" /> Ta bort budget
+              </Button>
+            )}
+            <Button variant="secondary" size="sm" onClick={handleExport} loading={exporting}>
+              <Download className="w-4 h-4" /> Exportera
+            </Button>
+          </div>
         }
       />
 
@@ -250,6 +258,20 @@ export function MonthlyBudgetView() {
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" onClick={() => setShowInitDialog(false)}>Avbryt</Button>
             <Button onClick={confirmInitBudget}>Skapa</Button>
+          </div>
+        </Dialog>
+      )}
+
+      {/* Delete confirmation dialog */}
+      {showDeleteDialog && (
+        <Dialog
+          title="Ta bort månadsbudget"
+          description={`Är du säker på att du vill ta bort budgeten för ${MONTH_NAMES_LONG[month - 1]} ${year}? Detta går inte att ångra.`}
+          onClose={() => setShowDeleteDialog(false)}
+        >
+          <div className="flex gap-2 justify-end">
+            <Button variant="secondary" onClick={() => setShowDeleteDialog(false)}>Avbryt</Button>
+            <Button variant="danger" onClick={() => { store.removeMonthlyBudget(monthId); setShowDeleteDialog(false) }}>Ta bort</Button>
           </div>
         </Dialog>
       )}

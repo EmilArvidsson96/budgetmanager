@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronLeft, ChevronRight, Plus, Download } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, Download, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card } from '@/components/ui/Card'
@@ -25,6 +25,7 @@ export function YearlyBudgetView() {
   const [year, setYear] = useState(new Date().getFullYear())
   const [exporting, setExporting] = useState(false)
   const [showInitDialog, setShowInitDialog] = useState(false)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [initMode, setInitMode] = useState<YearInitMode>('prev-budget')
   const store = useAppStore()
   const { settings, yearlyBudgets, monthlyBudgets, actuals } = store
@@ -75,9 +76,16 @@ export function YearlyBudgetView() {
         title="Årsbudget"
         subtitle={`Översikt för ${year}`}
         actions={
-          <Button variant="secondary" size="sm" onClick={handleExport} loading={exporting}>
-            <Download className="w-4 h-4" /> Exportera Excel
-          </Button>
+          <div className="flex gap-2">
+            {yb && (
+              <Button variant="secondary" size="sm" onClick={() => setShowDeleteDialog(true)}>
+                <Trash2 className="w-4 h-4" /> Ta bort budget
+              </Button>
+            )}
+            <Button variant="secondary" size="sm" onClick={handleExport} loading={exporting}>
+              <Download className="w-4 h-4" /> Exportera Excel
+            </Button>
+          </div>
         }
       />
 
@@ -153,6 +161,19 @@ export function YearlyBudgetView() {
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" onClick={() => setShowInitDialog(false)}>Avbryt</Button>
             <Button onClick={confirmInitYearly}>Skapa</Button>
+          </div>
+        </Dialog>
+      )}
+
+      {showDeleteDialog && (
+        <Dialog
+          title="Ta bort årsbudget"
+          description={`Är du säker på att du vill ta bort årsbudgeten för ${year}? Detta går inte att ångra.`}
+          onClose={() => setShowDeleteDialog(false)}
+        >
+          <div className="flex gap-2 justify-end">
+            <Button variant="secondary" onClick={() => setShowDeleteDialog(false)}>Avbryt</Button>
+            <Button variant="danger" onClick={() => { store.removeYearlyBudget(String(year)); setShowDeleteDialog(false) }}>Ta bort</Button>
           </div>
         </Dialog>
       )}
