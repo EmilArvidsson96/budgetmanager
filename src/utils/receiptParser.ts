@@ -115,7 +115,7 @@ export async function parseReceiptPDF(
 
   const response = await client.messages.create({
     model,
-    max_tokens: 2048,
+    max_tokens: 8192,
     system: SYSTEM_PROMPT,
     messages: [
       {
@@ -146,7 +146,7 @@ export async function parseReceiptImage(
 
   const response = await client.messages.create({
     model,
-    max_tokens: 2048,
+    max_tokens: 8192,
     system: SYSTEM_PROMPT,
     messages: [
       {
@@ -175,7 +175,7 @@ export async function parseReceiptText(
 
   const response = await client.messages.create({
     model,
-    max_tokens: 2048,
+    max_tokens: 8192,
     system: SYSTEM_PROMPT,
     messages: [
       {
