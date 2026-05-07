@@ -1,7 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk'
+import * as pdfjsLib from 'pdfjs-dist'
 import type { GroceryReceipt, GroceryReceiptItem, GroceryCategory } from '@/types'
 export { RECEIPT_MODELS, DEFAULT_RECEIPT_MODEL } from './receiptModels'
 import { DEFAULT_RECEIPT_MODEL } from './receiptModels'
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.mjs',
+  import.meta.url
+).toString()
 
 const GROCERY_CATEGORIES = [
   'frukt_gront',
@@ -74,6 +80,24 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
+async function extractPdfText(file: File): Promise<string | null> {
+  try {
+    const arrayBuffer = await file.arrayBuffer()
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+    const pages: string[] = []
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i)
+      const content = await page.getTextContent()
+      pages.push(content.items.map((item) => ('str' in item ? item.str : '')).join(' '))
+    }
+    const text = pages.join('\n').trim()
+    // If less than 50 non-whitespace chars, extraction likely failed
+    return text.replace(/\s/g, '').length >= 50 ? text : null
+  } catch {
+    return null
+  }
+}
+
 function parseResponse(text: string): ParsedReceipt {
   try {
     const json = text.replace(/```json\n?|\n?```/g, '').trim()
@@ -110,6 +134,12 @@ export async function parseReceiptPDF(
   apiKey: string,
   model = DEFAULT_RECEIPT_MODEL
 ): Promise<Omit<GroceryReceipt, 'id' | 'parsedAt'>> {
+  const extractedText = await extractPdfText(file)
+  if (extractedText) {
+    return parseReceiptText(extractedText, apiKey, model, file.name)
+  }
+
+  // Fallback: send the PDF as a document (scanned/image-based PDFs)
   const client = makeClient(apiKey)
   const base64 = await fileToBase64(file)
 
@@ -169,7 +199,8 @@ export async function parseReceiptImage(
 export async function parseReceiptText(
   receiptText: string,
   apiKey: string,
-  model = DEFAULT_RECEIPT_MODEL
+  model = DEFAULT_RECEIPT_MODEL,
+  fileName = 'Inklistrat kvitto'
 ): Promise<Omit<GroceryReceipt, 'id' | 'parsedAt'>> {
   const client = makeClient(apiKey)
 
@@ -186,7 +217,7 @@ export async function parseReceiptText(
   })
 
   const text = response.content.find((b) => b.type === 'text')?.text ?? ''
-  return normalizeReceipt(parseResponse(text), 'Inklistrat kvitto')
+  return normalizeReceipt(parseResponse(text), fileName)
 }
 
 export function findMatchingTransaction(

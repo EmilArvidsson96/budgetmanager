@@ -15,6 +15,7 @@
     "@types/recharts": "^1.8.29",
     "exceljs": "^4.4.0",
     "lucide-react": "^1.14.0",
+    "pdfjs-dist": "^5.7.284",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-router-dom": "^7.14.2",
