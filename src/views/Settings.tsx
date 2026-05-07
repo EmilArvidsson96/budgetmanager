@@ -333,6 +333,15 @@ function RecurringTab() {
 // is fine, but these IDs must stay in sync with the Zlantar mapping rules.
 const ZLANTAR_CORE_SUBCAT_IDS = new Set(['salary', 'interest', 'refund', 'sale'])
 
+// Expense/savings category IDs whose top-level ID matches Zlantar directly;
+// all their subcategories are therefore Zlantar-sourced.
+const ZLANTAR_DIRECT_CAT_IDS = new Set(['food', 'household', 'transport', 'shopping', 'leisure', 'other', 'stocks'])
+
+function isZlantarLinked(catId: string, subId: string): boolean {
+  if (catId === 'income') return ZLANTAR_CORE_SUBCAT_IDS.has(subId)
+  return ZLANTAR_DIRECT_CAT_IDS.has(catId)
+}
+
 function slugify(name: string): string {
   return name
     .toLowerCase()
@@ -478,8 +487,8 @@ function CategoriesTab() {
                   {cat.subcategories.map((sub) => (
                     <div key={sub.id} className="text-xs text-gray-500 py-0.5 pl-3 border-l border-gray-100 flex items-center gap-1.5">
                       {sub.name}
-                      {ZLANTAR_CORE_SUBCAT_IDS.has(sub.id) && (
-                        <span className="text-[10px] text-blue-400 font-medium">Zlantar</span>
+                      {isZlantarLinked(cat.id, sub.id) && (
+                        <Badge variant="blue" size="sm">Zlantar</Badge>
                       )}
                     </div>
                   ))}
