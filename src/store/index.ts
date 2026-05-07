@@ -12,10 +12,79 @@ import type {
   Account,
   RecurringItem,
   CategoryBudget,
+  YearlyCategoryBudget,
   LiquidityEntry,
   ZlantarCategoryRule,
 } from '@/types'
 import { DEFAULT_CATEGORIES, DEFAULT_ZLANTAR_RULES } from './defaultCategories'
+
+// ─── Store migration ──────────────────────────────────────────────────────────
+
+const OLD_INCOME_IDS = new Set(['salary', 'interest', 'refund', 'sale'])
+
+// v0 → v1: consolidate flat income categories into a single 'income' category
+function migrateV0(raw: Record<string, unknown>): Record<string, unknown> {
+  // ── Settings ──────────────────────────────────────────────────────────────
+  const settings = { ...(raw.settings as AppSettings) }
+  const cats: CategoryDef[] = settings.categories ?? DEFAULT_CATEGORIES
+
+  const hasOldIncome = cats.some((c) => c.id === 'salary' && c.type === 'income')
+  if (hasOldIncome) {
+    const incomeCat = DEFAULT_CATEGORIES.find((c) => c.id === 'income')!
+    settings.categories = [incomeCat, ...cats.filter((c) => !OLD_INCOME_IDS.has(c.id))]
+  }
+  if (!settings.zlantarCategoryRules) {
+    settings.zlantarCategoryRules = DEFAULT_ZLANTAR_RULES
+  }
+
+  // ── Monthly budgets ────────────────────────────────────────────────────────
+  const incomeDef = DEFAULT_CATEGORIES.find((c) => c.id === 'income')!
+  const monthlyBudgets = { ...(raw.monthlyBudgets as Record<string, MonthlyBudget>) }
+
+  for (const ym of Object.keys(monthlyBudgets)) {
+    const budget = monthlyBudgets[ym]
+    const oldEntries = budget.categories.filter((c) => OLD_INCOME_IDS.has(c.categoryId))
+    if (oldEntries.length === 0) continue
+
+    const incomeEntry: CategoryBudget = {
+      categoryId: 'income',
+      amount: oldEntries.reduce((s, c) => s + c.amount, 0),
+      subcategories: incomeDef.subcategories.map((sub) => ({
+        subcategoryId: sub.id,
+        amount: oldEntries.find((e) => e.categoryId === sub.id)?.amount ?? 0,
+      })),
+    }
+    monthlyBudgets[ym] = {
+      ...budget,
+      categories: [incomeEntry, ...budget.categories.filter((c) => !OLD_INCOME_IDS.has(c.categoryId))],
+    }
+  }
+
+  // ── Yearly budgets ─────────────────────────────────────────────────────────
+  const yearlyBudgets = { ...(raw.yearlyBudgets as Record<string, YearlyBudget>) }
+
+  for (const yr of Object.keys(yearlyBudgets)) {
+    const budget = yearlyBudgets[yr]
+    const oldEntries = budget.categories.filter((c) => OLD_INCOME_IDS.has(c.categoryId))
+    if (oldEntries.length === 0) continue
+
+    const incomeEntry: YearlyCategoryBudget = {
+      categoryId: 'income',
+      annualAmount: oldEntries.reduce((s, c) => s + c.annualAmount, 0),
+      monthlyAllocation: 'equal',
+      subcategories: incomeDef.subcategories.map((sub) => ({
+        subcategoryId: sub.id,
+        annualAmount: oldEntries.find((e) => e.categoryId === sub.id)?.annualAmount ?? 0,
+      })),
+    }
+    yearlyBudgets[yr] = {
+      ...budget,
+      categories: [incomeEntry, ...budget.categories.filter((c) => !OLD_INCOME_IDS.has(c.categoryId))],
+    }
+  }
+
+  return { ...raw, settings, monthlyBudgets, yearlyBudgets }
+}
 
 const DEFAULT_SETTINGS: AppSettings = {
   currency: 'SEK',
@@ -196,6 +265,14 @@ export const useAppStore = create<AppStore>()(
 
       setZlantarImport: (imp) => set({ lastZlantarImport: imp }),
     }),
-    { name: 'budgethanteraren-v1' }
+    {
+      name: 'budgethanteraren-v1',
+      version: 1,
+      migrate: (persistedState: unknown, version: number) => {
+        let state = (persistedState ?? {}) as Record<string, unknown>
+        if (version < 1) state = migrateV0(state)
+        return state
+      },
+    }
   )
 )
