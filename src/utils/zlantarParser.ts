@@ -12,6 +12,7 @@ import type {
   ZlantarCategoryRule,
 } from '@/types'
 import { AGREEMENT_CATEGORY_MAP, DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
+import { getMonthIdForDate } from '@/utils/periodUtils'
 
 // ─── Parse raw JSON files ─────────────────────────────────────────────────────
 
@@ -170,19 +171,21 @@ function resolveCategory(
 export function buildMonthlyActuals(
   imp: ZlantarImport,
   categories: CategoryDef[],
-  rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES
+  rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES,
+  monthStartDay = 1,
+  monthStartBusinessDay = false
 ): Record<string, MonthlyActuals> {
   const { transactions, data } = imp
 
   const catIds = new Set(categories.map((c) => c.id))
   const ruleMap = buildRuleLookup(rules)
 
-  // Group by YYYY-MM, skipping transfers (no category)
+  // Group by period key (YYYY-MM), skipping transfers (no category)
   const byMonth: Record<string, ZlantarTransaction[]> = {}
   for (const tx of transactions) {
     if (!tx.date) continue
     if (tx.transaction_type === 'transfer') continue  // internal account transfers, skip
-    const key = tx.date.slice(0, 7)
+    const key = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay)
     if (!byMonth[key]) byMonth[key] = []
     byMonth[key].push(tx)
   }
@@ -297,13 +300,15 @@ export function getTransactionsForCategory(
   catId: string,
   subId: string | undefined,
   categories: CategoryDef[],
-  rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES
+  rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES,
+  monthStartDay = 1,
+  monthStartBusinessDay = false
 ): ZlantarTransaction[] {
   const catIds = new Set(categories.map((c) => c.id))
   const ruleMap = buildRuleLookup(rules)
 
   return transactions.filter((tx) => {
-    if (!tx.date || tx.date.slice(0, 7) !== monthId) return false
+    if (!tx.date || getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) return false
     if (tx.transaction_type === 'transfer') return false
     const { catId: resolvedCat, subId: resolvedSub } = resolveCategory(
       tx.category ?? '',

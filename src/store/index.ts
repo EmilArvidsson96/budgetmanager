@@ -146,6 +146,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   currency: 'SEK',
   defaultView: 'monthly',
   fiscalYearStart: 1,
+  monthStartDay: 1,
+  monthStartBusinessDay: false,
   categories: DEFAULT_CATEGORIES,
   accounts: [],
   recurringItems: [],

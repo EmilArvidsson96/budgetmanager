@@ -321,7 +321,9 @@ export function MonthlyBudgetView() {
             txPanel.catId,
             txPanel.subId,
             settings.categories,
-            settings.zlantarCategoryRules
+            settings.zlantarCategoryRules,
+            settings.monthStartDay,
+            settings.monthStartBusinessDay
           )}
           onClose={() => setTxPanel(null)}
         />

@@ -25,7 +25,7 @@ const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = Object.fromEntries(
 ) as Record<AccountType, string>
 
 export function SettingsView() {
-  const [tab, setTab] = useState<'accounts' | 'recurring' | 'categories' | 'mapping' | 'api'>('accounts')
+  const [tab, setTab] = useState<'general' | 'accounts' | 'recurring' | 'categories' | 'mapping' | 'api'>('general')
 
   return (
     <Layout>
@@ -33,6 +33,7 @@ export function SettingsView() {
 
       <div className="flex flex-wrap gap-1 mb-6 border-b border-gray-200">
         {([
+          { key: 'general',    label: 'Allmänt' },
           { key: 'accounts',   label: 'Konton' },
           { key: 'recurring',  label: 'Återkommande poster' },
           { key: 'categories', label: 'Kategorier' },
@@ -50,12 +51,93 @@ export function SettingsView() {
         ))}
       </div>
 
+      {tab === 'general'    && <GeneralTab />}
       {tab === 'accounts'   && <AccountsTab />}
       {tab === 'recurring'  && <RecurringTab />}
       {tab === 'categories' && <CategoriesTab />}
       {tab === 'mapping'    && <ZlantarMappingTab />}
       {tab === 'api'        && <ApiKeysTab />}
     </Layout>
+  )
+}
+
+// ─── General tab ──────────────────────────────────────────────────────────────
+
+function GeneralTab() {
+  const store = useAppStore()
+  const { monthStartDay, monthStartBusinessDay } = store.settings
+  const [day, setDay] = useState(String(monthStartDay))
+  const [saved, setSaved] = useState(false)
+
+  const save = () => {
+    const parsed = parseInt(day)
+    if (!parsed || parsed < 1 || parsed > 28) return
+    store.updateSettings({ monthStartDay: parsed, monthStartBusinessDay })
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  const toggleBusinessDay = (checked: boolean) => {
+    store.updateSettings({ monthStartBusinessDay: checked })
+  }
+
+  return (
+    <div className="max-w-lg space-y-6">
+      <Card>
+        <CardHeader
+          title="Månadsperiod"
+          subtitle="Styr vilken kalenderdag som inleder varje period. Standardvärde är dag 1 (vanlig kalendermånad)."
+        />
+        <div className="space-y-5">
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">
+              Periodens startdag <span className="font-normal text-gray-400">(1–28)</span>
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min={1}
+                max={28}
+                value={day}
+                onChange={(e) => { setDay(e.target.value); setSaved(false) }}
+                className="w-24 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+              />
+              <Button onClick={save} variant={saved ? 'secondary' : 'primary'} size="md">
+                {saved ? '✓ Sparat' : 'Spara'}
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-gray-400">
+              Dag {monthStartDay === 1 ? '1 – standard kalendermånad' : `${monthStartDay} – perioden löper ${monthStartDay}/${String(monthStartDay === 1 ? 1 : (new Date().getMonth() + 1)).padStart(2, '0')} t.o.m. dag ${monthStartDay - 1} nästa månad`}
+            </p>
+          </div>
+
+          <div>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={monthStartBusinessDay}
+                onChange={(e) => toggleBusinessDay(e.target.checked)}
+                className="mt-0.5 rounded accent-brand-600"
+              />
+              <div>
+                <span className="text-sm font-medium text-gray-700">Använd närmaste vardag</span>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Om startdagen infaller på en lördag eller söndag används fredagen innan.
+                  Speglar hur lön och betalningar normalt betalas ut.
+                </p>
+              </div>
+            </label>
+          </div>
+
+          {monthStartDay !== 1 && (
+            <div className="p-3 bg-amber-50 border border-amber-100 rounded-lg text-xs text-amber-700">
+              Inställningen påverkar hur transaktioner från Zlantar grupperas i perioder.
+              Importera om dina Zlantar-filer för att tillämpa den nya perioden på historisk data.
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
   )
 }
 

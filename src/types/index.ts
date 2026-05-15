@@ -274,6 +274,8 @@ export interface AppSettings {
   currency: string
   defaultView: 'monthly' | 'yearly' | 'liquidity'
   fiscalYearStart: number   // month 1-12
+  monthStartDay: number           // 1-28, day the period month begins
+  monthStartBusinessDay: boolean  // if true, use the weekday on or before monthStartDay
   categories: CategoryDef[]
   accounts: Account[]
   recurringItems: RecurringItem[]
