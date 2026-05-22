@@ -180,6 +180,12 @@ export interface AccountBalance {
   currency: string
 }
 
+export interface ImportSnapshot {
+  id: string             // = importedAt ISO string
+  importedAt: string     // ISO timestamp
+  accountBalances: AccountBalance[]
+}
+
 // ─── Liquidity ────────────────────────────────────────────────────────────────
 
 export interface LiquidityEntry {
@@ -295,4 +301,5 @@ export interface AppState {
   groceryReceipts: GroceryReceipt[]
   allTransactions: ZlantarTransaction[]
   lastZlantarImport?: ZlantarImport
+  importSnapshots: ImportSnapshot[]
 }

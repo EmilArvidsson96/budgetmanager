@@ -19,6 +19,9 @@ import type {
   GroceryReceipt,
   GroceryCategory,
   MatchedTransaction,
+  ImportSnapshot,
+  AccountBalance,
+  AccountType,
 } from '@/types'
 import { DEFAULT_CATEGORIES, DEFAULT_ZLANTAR_RULES } from './defaultCategories'
 
@@ -88,6 +91,11 @@ function migrateV0(raw: Record<string, unknown>): Record<string, unknown> {
   }
 
   return { ...raw, settings, monthlyBudgets, yearlyBudgets }
+}
+
+// v2 → v3: add importSnapshots array
+function migrateV2(raw: Record<string, unknown>): Record<string, unknown> {
+  return { ...raw, importSnapshots: [] }
 }
 
 // v1 → v2: budget amounts for expense/savings/transfer are now stored as negative
@@ -206,6 +214,7 @@ export const useAppStore = create<AppStore>()(
       groceryReceipts: [],
       allTransactions: [],
       lastZlantarImport: undefined,
+      importSnapshots: [],
 
       updateSettings: (s) =>
         set((state) => ({ settings: { ...state.settings, ...s } })),
@@ -339,9 +348,45 @@ export const useAppStore = create<AppStore>()(
           const newTxs = imp.transactions.filter(
             (tx) => !existingKeys.has(`${tx.date}|${tx.amount}|${tx.description ?? ''}`)
           )
+
+          // Build account balance snapshot from this import
+          const accountBalances: AccountBalance[] = []
+          for (const bank of imp.data.banks ?? []) {
+            for (const acc of bank.accounts ?? []) {
+              const type = ((): AccountType => {
+                switch (acc.type) {
+                  case 'Loan':          return 'loan'
+                  case 'Credit':        return 'credit'
+                  case 'Savings':       return 'savings'
+                  case 'Transactional': return 'checking'
+                  default:              return 'other'
+                }
+              })()
+              accountBalances.push({
+                accountId: `${bank.name}_${acc.account_index}`,
+                accountName: acc.name,
+                accountType: type,
+                balance: acc.balance,
+                currency: 'SEK',
+              })
+            }
+          }
+
+          const snapshot: ImportSnapshot = {
+            id: imp.importedAt,
+            importedAt: imp.importedAt,
+            accountBalances,
+          }
+
+          // Avoid duplicate snapshots (same importedAt)
+          const snapshots = state.importSnapshots.some((s) => s.id === snapshot.id)
+            ? state.importSnapshots
+            : [...state.importSnapshots, snapshot]
+
           return {
             lastZlantarImport: imp,
             allTransactions: [...state.allTransactions, ...newTxs],
+            importSnapshots: snapshots,
           }
         }),
 
@@ -371,11 +416,12 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 2,
+      version: 3,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
         if (version < 2) state = migrateV1(state)
+        if (version < 3) state = migrateV2(state)
         return state
       },
     }

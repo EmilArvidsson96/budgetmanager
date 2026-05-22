@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { ChevronLeft, ChevronRight, Plus, Download, Trash2 } from 'lucide-react'
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
@@ -21,10 +21,13 @@ const TYPE_LABELS: Record<LiquidityEntry['type'], string> = {
   loan_payment: 'Lånebetal.',
 }
 
+const DEFAULT_LARGE_TX_THRESHOLD = 5000
+
 export function LiquidityView() {
   const [year, setYear] = useState(new Date().getFullYear())
   const [exporting, setExporting] = useState(false)
   const [showForm, setShowForm] = useState(false)
+  const [largeTxThreshold, setLargeTxThreshold] = useState(DEFAULT_LARGE_TX_THRESHOLD)
   const [form, setForm] = useState<Partial<LiquidityEntry>>({
     type: 'expense',
     isConfirmed: false,
@@ -32,7 +35,7 @@ export function LiquidityView() {
   })
 
   const store = useAppStore()
-  const { liquidityPlans, settings, actuals } = store
+  const { liquidityPlans, settings, actuals, allTransactions, importSnapshots } = store
 
   const planId = String(year)
   const plan = liquidityPlans[planId]
@@ -114,6 +117,39 @@ export function LiquidityView() {
   }
 
   const sorted = [...(plan?.entries ?? [])].sort((a, b) => a.date.localeCompare(b.date))
+
+  // Large transactions from imports for the selected year
+  const largeTxs = useMemo(() => {
+    const yearStr = String(year)
+    return allTransactions
+      .filter(
+        (tx) =>
+          tx.date?.startsWith(yearStr) &&
+          tx.transaction_type !== 'transfer' &&
+          Math.abs(tx.amount) >= largeTxThreshold
+      )
+      .sort((a, b) => a.date.localeCompare(b.date))
+  }, [allTransactions, year, largeTxThreshold])
+
+  // Balance history from import snapshots
+  const liquidityAccountIds = useMemo(
+    () => new Set(settings.accounts.filter((a) => a.includeInLiquidity).map((a) => a.id)),
+    [settings.accounts]
+  )
+  const balanceHistory = useMemo(() => {
+    return [...importSnapshots]
+      .sort((a, b) => a.importedAt.localeCompare(b.importedAt))
+      .map((snap) => {
+        const balance = snap.accountBalances
+          .filter((ab) => liquidityAccountIds.has(ab.accountId))
+          .reduce((sum, ab) => sum + ab.balance, 0)
+        return {
+          date: snap.importedAt.slice(0, 10),
+          balance,
+          label: new Date(snap.importedAt).toLocaleDateString('sv-SE'),
+        }
+      })
+  }, [importSnapshots, liquidityAccountIds])
 
   return (
     <Layout>
@@ -204,6 +240,32 @@ export function LiquidityView() {
               )}
             </div>
           </Card>
+
+          {/* Import balance history */}
+          {balanceHistory.length > 0 && (
+            <Card>
+              <CardHeader
+                title="Faktisk saldoutveckling"
+                subtitle={`${balanceHistory.length} importerade avstämningar`}
+              />
+              <ResponsiveContainer width="100%" height={180}>
+                <LineChart data={balanceHistory}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+                  <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v) => formatCurrency(Number(v ?? 0))} labelStyle={{ fontWeight: 600 }} />
+                  <Line
+                    type="monotone"
+                    dataKey="balance"
+                    stroke="#059669"
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: '#059669' }}
+                    name="Likviditetssaldo"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </Card>
+          )}
 
           {/* Chart */}
           <Card>
@@ -371,6 +433,58 @@ export function LiquidityView() {
                       )
                     })
                   })()}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+          {/* Large transactions from imports */}
+          <Card padding={false}>
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <div>
+                <h3 className="font-semibold text-gray-900">Stora transaktioner från import</h3>
+                <p className="text-sm text-gray-500">{largeTxs.length} transaktioner för {year}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-500">Gräns</label>
+                <input
+                  type="number"
+                  value={largeTxThreshold}
+                  onChange={(e) => setLargeTxThreshold(Math.max(0, parseInt(e.target.value) || 0))}
+                  className="border border-gray-200 rounded-md px-2 py-1 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                />
+                <span className="text-xs text-gray-500">kr</span>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    <th className="text-left px-4 py-2">Datum</th>
+                    <th className="text-left px-4 py-2">Beskrivning</th>
+                    <th className="text-left px-4 py-2">Konto</th>
+                    <th className="text-right px-4 py-2">Belopp</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {largeTxs.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="text-center text-gray-400 py-8">
+                        {allTransactions.length === 0
+                          ? 'Importera Zlantar-data för att se stora transaktioner'
+                          : `Inga transaktioner ≥ ${formatCurrency(largeTxThreshold)} för ${year}`}
+                      </td>
+                    </tr>
+                  )}
+                  {largeTxs.map((tx, i) => (
+                    <tr key={i} className="border-t border-gray-100 hover:bg-gray-50">
+                      <td className="px-4 py-2.5 text-gray-600">{tx.date}</td>
+                      <td className="px-4 py-2.5 font-medium text-gray-800">{tx.description ?? '–'}</td>
+                      <td className="px-4 py-2.5 text-gray-500 text-xs">{tx.account_name}</td>
+                      <td className={`px-4 py-2.5 text-right font-medium ${tx.amount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                        {formatCurrency(tx.amount, true)}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
