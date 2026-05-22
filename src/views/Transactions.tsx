@@ -328,7 +328,7 @@ export function TransactionsView() {
       {(donutData.length > 0 || trendHasData) && (
         <div className="grid md:grid-cols-2 gap-4 mb-6">
           {donutData.length > 0 && (
-            <Card>
+            <Card padding={false} className="p-3 md:p-5">
               <CardHeader
                 title="Utgifter per kategori"
                 subtitle={`${MONTH_NAMES_LONG[month - 1]} ${year}`}
@@ -337,7 +337,7 @@ export function TransactionsView() {
             </Card>
           )}
           {trendHasData && (
-            <Card>
+            <Card padding={false} className="p-3 md:p-5">
               <CardHeader title="Utgifter senaste 6 månaderna" subtitle="Stapel per månad, färg per kategori" />
               <CategoryTrendBar data={trendData} categories={expenseCategories} />
             </Card>
@@ -400,25 +400,25 @@ function CategoryBranch({
   return (
     <div className="border-b border-warm-100 last:border-0">
       <div
-        className="grid grid-cols-[1fr_80px_160px] px-5 py-3.5 items-center hover:bg-warm-50 transition-colors cursor-pointer select-none"
+        className="flex items-center gap-2 px-3 md:px-5 py-3 md:py-3.5 hover:bg-warm-50 transition-colors cursor-pointer select-none"
         onClick={onToggle}
       >
-        <div className="flex items-center gap-2.5 min-w-0">
-          <ChevronRight
-            className={`w-3.5 h-3.5 text-gray-300 transition-transform duration-200 shrink-0 ${expanded ? 'rotate-90' : ''}`}
-          />
-          <div
-            className="w-2 h-2 rounded-full shrink-0"
-            style={{ backgroundColor: cat.color ?? '#94a3b8' }}
-          />
-          <span className="font-medium text-sm text-gray-800 truncate">{cat.name}</span>
-          <Badge variant={cat.type === 'income' ? 'green' : cat.type === 'savings' ? 'blue' : 'gray'} size="sm">
-            {cat.type === 'income' ? 'Inkomst' : cat.type === 'savings' ? 'Spar' : 'Utgift'}
-          </Badge>
-        </div>
-        <div className="text-right text-xs text-gray-400 tabular-nums">{count} st</div>
-        <div className="text-right text-sm font-medium tabular-nums text-gray-800">
-          {formatCurrency(total)}
+        <ChevronRight
+          className={`w-3.5 h-3.5 text-gray-300 transition-transform duration-200 shrink-0 ${expanded ? 'rotate-90' : ''}`}
+        />
+        <div
+          className="w-2 h-2 rounded-full shrink-0"
+          style={{ backgroundColor: cat.color ?? '#94a3b8' }}
+        />
+        <span className="font-medium text-sm text-gray-800 truncate min-w-0 flex-1">{cat.name}</span>
+        <Badge variant={cat.type === 'income' ? 'green' : cat.type === 'savings' ? 'blue' : 'gray'} size="sm">
+          {cat.type === 'income' ? 'Inkomst' : cat.type === 'savings' ? 'Spar' : 'Utgift'}
+        </Badge>
+        <div className="text-right shrink-0 ml-1 md:ml-3 min-w-[88px]">
+          <div className="text-sm font-medium tabular-nums text-gray-800">
+            {formatCurrency(total)}
+          </div>
+          <div className="text-[10px] text-gray-400 tabular-nums">{count} st</div>
         </div>
       </div>
 
@@ -474,22 +474,24 @@ function SubcategoryBranch({
   return (
     <div className="border-t border-warm-200/60">
       <div
-        className="grid grid-cols-[1fr_80px_160px] px-5 py-2.5 items-center hover:bg-warm-100/60 transition-colors cursor-pointer select-none"
+        className="flex items-center gap-2 pl-7 md:pl-10 pr-3 md:pr-5 py-2.5 hover:bg-warm-100/60 transition-colors cursor-pointer select-none"
         onClick={onToggle}
       >
-        <div className="flex items-center gap-2 min-w-0 pl-6">
-          <ChevronRight
-            className={`w-3 h-3 text-gray-300 transition-transform duration-200 shrink-0 ${expanded ? 'rotate-90' : ''}`}
-          />
-          <span className={`text-sm text-gray-600 truncate ${italic ? 'italic text-gray-400' : ''}`}>
-            {subName}
-          </span>
-        </div>
-        <div className="text-right text-xs text-gray-400 tabular-nums">
-          {transactions.length} st
-        </div>
-        <div className="text-right text-sm tabular-nums text-gray-600">
-          {formatCurrency(total)}
+        <ChevronRight
+          className={`w-3 h-3 text-gray-300 transition-transform duration-200 shrink-0 ${expanded ? 'rotate-90' : ''}`}
+        />
+        <span
+          className={`text-sm truncate min-w-0 flex-1 ${italic ? 'italic text-gray-400' : 'text-gray-600'}`}
+        >
+          {subName}
+        </span>
+        <div className="text-right shrink-0 ml-1 md:ml-3 min-w-[88px]">
+          <div className="text-sm tabular-nums text-gray-600">
+            {formatCurrency(total)}
+          </div>
+          <div className="text-[10px] text-gray-400 tabular-nums">
+            {transactions.length} st
+          </div>
         </div>
       </div>
 
@@ -500,17 +502,26 @@ function SubcategoryBranch({
             .map((t, i) => (
               <div
                 key={i}
-                className="grid grid-cols-[100px_1fr_140px_110px] px-5 py-2 text-sm items-center gap-2 border-b border-warm-100 last:border-0"
+                className="flex items-start gap-2 pl-10 md:pl-16 pr-3 md:pr-5 py-2 border-b border-warm-100 last:border-0"
               >
-                <div className="pl-12 text-gray-400 tabular-nums text-xs">{t.tx.date}</div>
-                <div className="text-gray-700 truncate" title={t.tx.description ?? ''}>
-                  {t.tx.description ?? '—'}
-                </div>
-                <div className="text-gray-400 text-xs truncate" title={t.tx.account_name}>
-                  {t.tx.account_name}
+                <div className="flex-1 min-w-0">
+                  <div
+                    className="text-sm text-gray-700 truncate"
+                    title={t.tx.description ?? ''}
+                  >
+                    {t.tx.description ?? '—'}
+                  </div>
+                  <div
+                    className="text-[11px] text-gray-400 truncate"
+                    title={t.tx.account_name}
+                  >
+                    <span className="tabular-nums">{t.tx.date}</span>
+                    <span className="px-1 text-gray-300">·</span>
+                    <span>{t.tx.account_name}</span>
+                  </div>
                 </div>
                 <div
-                  className={`text-right tabular-nums font-medium ${
+                  className={`text-right tabular-nums font-medium text-sm shrink-0 ml-2 ${
                     t.tx.amount < 0 ? 'text-red-500' : 'text-emerald-600'
                   }`}
                 >
@@ -528,7 +539,7 @@ function SubcategoryBranch({
 
 function CategoryDonut({ data, total }: { data: DonutSlice[]; total: number }) {
   return (
-    <div className="grid grid-cols-[1fr_1fr] gap-3 items-center">
+    <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr] gap-3 items-center">
       <ResponsiveContainer width="100%" height={200}>
         <PieChart>
           <Pie
@@ -537,8 +548,8 @@ function CategoryDonut({ data, total }: { data: DonutSlice[]; total: number }) {
             nameKey="name"
             cx="50%"
             cy="50%"
-            innerRadius={44}
-            outerRadius={86}
+            innerRadius="44%"
+            outerRadius="86%"
             stroke="none"
           >
             {data.map((entry) => (
@@ -598,10 +609,10 @@ function CategoryTrendBar({
       <ResponsiveContainer width="100%" height={220}>
         <BarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe0" vertical={false} />
-          <XAxis dataKey="label" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+          <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
           <YAxis
-            width={44}
-            tick={{ fontSize: 11 }}
+            width={36}
+            tick={{ fontSize: 10 }}
             axisLine={false}
             tickLine={false}
             tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`)}
