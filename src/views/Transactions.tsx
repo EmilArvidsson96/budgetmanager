@@ -1,11 +1,16 @@
 import { useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, Search, X } from 'lucide-react'
+import {
+  PieChart, Pie, Cell,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from 'recharts'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
-import { Card } from '@/components/ui/Card'
+import { Card, CardHeader } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import {
   MONTH_NAMES_LONG,
+  MONTH_NAMES_SHORT,
   makeMonthId,
   formatCurrency,
 } from '@/utils/budgetHelpers'
@@ -77,6 +82,19 @@ interface CatGroup {
   count: number
   subgroups: SubGroup[]
   uncategorized: ResolvedTx[]
+}
+
+interface DonutSlice {
+  catId: string
+  name: string
+  value: number
+  color: string
+}
+
+interface TrendDatum {
+  monthId: string
+  label: string
+  [categoryId: string]: string | number
 }
 
 export function TransactionsView() {
@@ -164,6 +182,82 @@ export function TransactionsView() {
   const grandTotal = groups.reduce((s, g) => s + g.total, 0)
   const grandCount = groups.reduce((s, g) => s + g.count, 0)
 
+  // Donut: spending share by expense category for the selected month.
+  const donutData = useMemo<DonutSlice[]>(() => {
+    return groups
+      .filter((g) => g.cat.type === 'expense')
+      .map((g) => ({
+        catId: g.cat.id,
+        name: g.cat.name,
+        value: Math.abs(g.total),
+        color: g.cat.color ?? '#94a3b8',
+      }))
+      .filter((d) => d.value > 0)
+      .sort((a, b) => b.value - a.value)
+  }, [groups])
+  const donutTotal = donutData.reduce((s, d) => s + d.value, 0)
+
+  // Stacked bar: last 6 months of expense by category (respects search/month-start config).
+  const trendData = useMemo<TrendDatum[]>(() => {
+    const catIds = new Set(categories.map((c) => c.id))
+    const ruleMap = buildRuleLookup(zlantarCategoryRules ?? DEFAULT_ZLANTAR_RULES)
+    const searchLower = search.trim().toLowerCase()
+
+    const monthIds: string[] = []
+    for (let i = 5; i >= 0; i--) {
+      let m = month - i
+      let y = year
+      while (m <= 0) { m += 12; y-- }
+      monthIds.push(makeMonthId(y, m))
+    }
+    const monthSet = new Set(monthIds)
+    const expenseCats = categories.filter((c) => c.type === 'expense')
+    const expenseIds = new Set(expenseCats.map((c) => c.id))
+
+    const buckets: Record<string, Record<string, number>> = {}
+    for (const id of monthIds) buckets[id] = {}
+
+    for (const tx of allTransactions) {
+      if (!tx.date || tx.transaction_type === 'transfer') continue
+      const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay)
+      if (!monthSet.has(mid)) continue
+      if (searchLower) {
+        const hay = `${tx.description ?? ''} ${tx.account_name ?? ''}`.toLowerCase()
+        if (!hay.includes(searchLower)) continue
+      }
+      const { catId } = resolveCategory(
+        tx.category ?? '',
+        tx.subcategory ?? '',
+        catIds,
+        ruleMap
+      )
+      if (!expenseIds.has(catId)) continue
+      buckets[mid][catId] = (buckets[mid][catId] ?? 0) + Math.abs(tx.amount)
+    }
+
+    return monthIds.map((id) => {
+      const [yStr, mStr] = id.split('-')
+      const mNum = parseInt(mStr)
+      const yNum = parseInt(yStr)
+      const row: TrendDatum = {
+        monthId: id,
+        label: `${MONTH_NAMES_SHORT[mNum - 1]} ${String(yNum).slice(2)}`,
+      }
+      for (const cat of expenseCats) {
+        row[cat.id] = buckets[id][cat.id] ?? 0
+      }
+      return row
+    })
+  }, [allTransactions, categories, zlantarCategoryRules, year, month, monthStartDay, monthStartBusinessDay, search])
+
+  const expenseCategories = useMemo(
+    () => categories.filter((c) => c.type === 'expense'),
+    [categories]
+  )
+  const trendHasData = trendData.some((d) =>
+    expenseCategories.some((c) => (d[c.id] as number) > 0)
+  )
+
   const toggleCat = (id: string) => {
     setExpandedCats((prev) => {
       const next = new Set(prev)
@@ -229,6 +323,27 @@ export function TransactionsView() {
           </button>
         )}
       </div>
+
+      {/* Charts */}
+      {(donutData.length > 0 || trendHasData) && (
+        <div className="grid md:grid-cols-2 gap-4 mb-6">
+          {donutData.length > 0 && (
+            <Card>
+              <CardHeader
+                title="Utgifter per kategori"
+                subtitle={`${MONTH_NAMES_LONG[month - 1]} ${year}`}
+              />
+              <CategoryDonut data={donutData} total={donutTotal} />
+            </Card>
+          )}
+          {trendHasData && (
+            <Card>
+              <CardHeader title="Utgifter senaste 6 månaderna" subtitle="Stapel per månad, färg per kategori" />
+              <CategoryTrendBar data={trendData} categories={expenseCategories} />
+            </Card>
+          )}
+        </div>
+      )}
 
       {/* Summary */}
       {grandCount > 0 && (
@@ -405,6 +520,120 @@ function SubcategoryBranch({
             ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Category donut ───────────────────────────────────────────────────────────
+
+function CategoryDonut({ data, total }: { data: DonutSlice[]; total: number }) {
+  return (
+    <div className="grid grid-cols-[1fr_1fr] gap-3 items-center">
+      <ResponsiveContainer width="100%" height={200}>
+        <PieChart>
+          <Pie
+            data={data}
+            dataKey="value"
+            nameKey="name"
+            cx="50%"
+            cy="50%"
+            innerRadius={44}
+            outerRadius={86}
+            stroke="none"
+          >
+            {data.map((entry) => (
+              <Cell key={entry.catId} fill={entry.color} />
+            ))}
+          </Pie>
+          <Tooltip
+            formatter={(v, _name, item) => {
+              const num = Number(v ?? 0)
+              const pct = total > 0 ? ((num / total) * 100).toFixed(0) : 0
+              const name = (item as { payload?: { name?: string } } | undefined)?.payload?.name ?? ''
+              return [`${formatCurrency(num)} (${pct}%)`, name]
+            }}
+            labelStyle={{ display: 'none' }}
+            contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e7e2d3' }}
+          />
+        </PieChart>
+      </ResponsiveContainer>
+      <div className="space-y-1 max-h-52 overflow-y-auto pr-1">
+        {data.map((entry) => (
+          <div key={entry.catId} className="flex items-center gap-2">
+            <div
+              className="w-2.5 h-2.5 rounded-full shrink-0"
+              style={{ backgroundColor: entry.color }}
+            />
+            <span className="text-xs text-gray-700 flex-1 truncate">{entry.name}</span>
+            <span className="text-xs text-gray-400 shrink-0 w-9 text-right tabular-nums">
+              {total > 0 ? ((entry.value / total) * 100).toFixed(0) : 0}%
+            </span>
+          </div>
+        ))}
+        <div className="pt-1.5 mt-1 border-t border-warm-100 flex justify-between text-xs font-semibold text-gray-900">
+          <span>Totalt</span>
+          <span className="tabular-nums">{formatCurrency(total)}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Category trend bar ───────────────────────────────────────────────────────
+
+function CategoryTrendBar({
+  data,
+  categories,
+}: {
+  data: TrendDatum[]
+  categories: CategoryDef[]
+}) {
+  // Only stack categories that have at least one non-zero value to keep the legend tidy.
+  const activeCats = categories.filter((c) =>
+    data.some((d) => (d[c.id] as number) > 0)
+  )
+
+  return (
+    <div>
+      <ResponsiveContainer width="100%" height={220}>
+        <BarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe0" vertical={false} />
+          <XAxis dataKey="label" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+          <YAxis
+            width={44}
+            tick={{ fontSize: 11 }}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`)}
+          />
+          <Tooltip
+            cursor={{ fill: '#f5f1e6' }}
+            contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e7e2d3' }}
+            formatter={(v, name) => [formatCurrency(Number(v ?? 0)), String(name)]}
+          />
+          {activeCats.map((cat, i) => (
+            <Bar
+              key={cat.id}
+              dataKey={cat.id}
+              stackId="exp"
+              name={cat.name}
+              fill={cat.color ?? '#94a3b8'}
+              radius={i === activeCats.length - 1 ? [4, 4, 0, 0] : 0}
+            />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+        {activeCats.map((cat) => (
+          <div key={cat.id} className="flex items-center gap-1.5">
+            <div
+              className="w-2 h-2 rounded-sm shrink-0"
+              style={{ backgroundColor: cat.color ?? '#94a3b8' }}
+            />
+            <span className="text-[11px] text-gray-500">{cat.name}</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
