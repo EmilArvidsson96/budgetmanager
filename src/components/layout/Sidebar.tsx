@@ -8,12 +8,14 @@ import {
   TrendingUp,
   HelpCircle,
   Receipt,
+  ListTree,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
   { to: '/manad',          icon: CalendarDays,  label: 'Månadsbudget',  short: 'Månad' },
   { to: '/ar',             icon: CalendarRange, label: 'Årsbudget',     short: 'År' },
   { to: '/likviditet',     icon: Waves,         label: 'Likviditet',    short: 'Likv.' },
+  { to: '/transaktioner',  icon: ListTree,      label: 'Transaktioner', short: 'Trans.' },
   { to: '/importera',      icon: Upload,        label: 'Importera',     short: 'Import' },
   { to: '/kvitton',        icon: Receipt,       label: 'Matkvitton',    short: 'Kvitto' },
   { to: '/installningar',  icon: Settings,      label: 'Inställningar', short: 'Inst.' },
