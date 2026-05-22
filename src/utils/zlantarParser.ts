@@ -255,6 +255,22 @@ function buildAccountBalances(data: ZlantarData): AccountBalance[] {
   return result
 }
 
+// ─── Compare two MonthlyActuals records for equivalent transaction data ─────
+// Ignores accountBalances (snapshot metadata) and importedAt (timestamp).
+
+export function actualsEquivalent(a: MonthlyActuals, b: MonthlyActuals): boolean {
+  if (a.entries.length !== b.entries.length) return false
+  const key = (e: ActualEntry) => `${e.categoryId}|${e.subcategoryId ?? ''}`
+  const map = new Map(a.entries.map((e) => [key(e), e]))
+  for (const e of b.entries) {
+    const m = map.get(key(e))
+    if (!m) return false
+    if (Math.abs(m.totalAmount - e.totalAmount) > 0.005) return false
+    if (m.transactionCount !== e.transactionCount) return false
+  }
+  return true
+}
+
 // ─── Report categories that came in but aren't mapped ────────────────────────
 
 export interface UnknownCategory {

@@ -5,9 +5,9 @@ import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
-import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories } from '@/utils/zlantarParser'
+import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories, actualsEquivalent } from '@/utils/zlantarParser'
 import { formatCurrency } from '@/utils/budgetHelpers'
-import type { RecurringItem } from '@/types'
+import type { MonthlyActuals, RecurringItem, ZlantarImport, ZlantarTransaction } from '@/types'
 
 type Step = 'upload' | 'preview' | 'done'
 
@@ -15,10 +15,12 @@ export function ImportView() {
   const [step, setStep] = useState<Step>('upload')
   const [dataFile, setDataFile] = useState<File | null>(null)
   const [txFile, setTxFile] = useState<File | null>(null)
+  const [parsedImport, setParsedImport] = useState<ZlantarImport | null>(null)
   const [preview, setPreview] = useState<ReturnType<typeof buildMonthlyActuals> | null>(null)
   const [unknownCats, setUnknownCats] = useState<ReturnType<typeof findUnknownCategories>>([])
   const [newAccounts, setNewAccounts] = useState<ReturnType<typeof deriveAccounts>>([])
   const [newRecurring, setNewRecurring] = useState<RecurringItem[]>([])
+  const [unchangedMonthCount, setUnchangedMonthCount] = useState(0)
   const [importing, setImporting] = useState(false)
 
   // Selection state for preview step
@@ -46,8 +48,26 @@ export function ImportView() {
       const txJson = JSON.parse(txText)
 
       const imp = parseZlantarFiles(dataJson, txJson)
-      const actuals = buildMonthlyActuals(imp, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay)
-      const unknown = findUnknownCategories(imp.transactions, store.settings.categories, store.settings.zlantarCategoryRules)
+      const fullActuals = buildMonthlyActuals(imp, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay)
+
+      // Only keep months that are new or whose aggregation differs from the stored month
+      const newActuals: Record<string, MonthlyActuals> = {}
+      let unchangedMonths = 0
+      for (const [ym, candidate] of Object.entries(fullActuals)) {
+        const existing = store.actuals[ym]
+        if (existing && actualsEquivalent(existing, candidate)) {
+          unchangedMonths++
+          continue
+        }
+        newActuals[ym] = candidate
+      }
+
+      // Identify transactions not yet in the store, so warnings only reflect what's new
+      const txKey = (tx: ZlantarTransaction) => `${tx.date}|${tx.amount}|${tx.description ?? ''}`
+      const existingTxKeys = new Set(store.allTransactions.map(txKey))
+      const newTxs = imp.transactions.filter((tx) => !existingTxKeys.has(txKey(tx)))
+
+      const unknown = findUnknownCategories(newTxs, store.settings.categories, store.settings.zlantarCategoryRules)
       const accounts = deriveAccounts(imp.data)
       const recurring = deriveRecurringItems(imp.data)
 
@@ -56,12 +76,13 @@ export function ImportView() {
       const newAccs = accounts.filter((a) => !existingAccountIds.has(a.id))
       const newRec = recurring.filter((r) => !existingRecurringIds.has(r.id))
 
-      store.setZlantarImport(imp)
-      setPreview(actuals)
+      setParsedImport(imp)
+      setPreview(newActuals)
       setUnknownCats(unknown)
       setNewAccounts(newAccs)
       setNewRecurring(newRec)
-      setSelectedMonths(new Set(Object.keys(actuals)))
+      setUnchangedMonthCount(unchangedMonths)
+      setSelectedMonths(new Set(Object.keys(newActuals)))
       setSelectedAccountIds(new Set(newAccs.map((a) => a.id)))
       setSelectedRecurringIds(new Set(newRec.map((r) => r.id)))
       setDeselectedCatKeys(new Set())
@@ -75,7 +96,8 @@ export function ImportView() {
   }
 
   const confirmImport = () => {
-    if (!preview) return
+    if (!preview || !parsedImport) return
+    store.setZlantarImport(parsedImport)
     for (const [ym, act] of Object.entries(preview)) {
       if (!selectedMonths.has(ym)) continue
       const filteredEntries = act.entries.filter(
@@ -97,10 +119,12 @@ export function ImportView() {
     setStep('upload')
     setDataFile(null)
     setTxFile(null)
+    setParsedImport(null)
     setPreview(null)
     setUnknownCats([])
     setNewAccounts([])
     setNewRecurring([])
+    setUnchangedMonthCount(0)
     setSelectedMonths(new Set())
     setDeselectedCatKeys(new Set())
     setExpandedMonths(new Set())
@@ -248,6 +272,35 @@ export function ImportView() {
       {/* Step 2: Preview */}
       {step === 'preview' && preview && (
         <div className="space-y-4">
+          {/* Nothing new */}
+          {months.length === 0 && newAccounts.length === 0 && newRecurring.length === 0 && (
+            <Card>
+              <div className="flex items-start gap-3">
+                <Info className="w-5 h-5 text-brand-600 mt-0.5 shrink-0" />
+                <div>
+                  <h3 className="font-semibold text-gray-800 mb-1">Inget nytt att importera</h3>
+                  <p className="text-sm text-gray-500">
+                    {unchangedMonthCount > 0
+                      ? `${unchangedMonthCount} ${unchangedMonthCount === 1 ? 'månad är' : 'månader är'} redan importerade och oförändrade.`
+                      : 'Filen innehåller ingen ny information.'}
+                  </p>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {/* Unchanged months banner */}
+          {unchangedMonthCount > 0 && (months.length > 0 || newAccounts.length > 0 || newRecurring.length > 0) && (
+            <Card>
+              <div className="flex items-start gap-3">
+                <Info className="w-5 h-5 text-brand-600 mt-0.5 shrink-0" />
+                <p className="text-sm text-gray-700">
+                  <strong>{unchangedMonthCount}</strong> {unchangedMonthCount === 1 ? 'månad är' : 'månader är'} redan importerade och oförändrade — visas inte.
+                </p>
+              </div>
+            </Card>
+          )}
+
           {/* Unknown categories warning */}
           {unknownCats.length > 0 && (
             <Card>
@@ -341,6 +394,7 @@ export function ImportView() {
           )}
 
           {/* Month summaries with per-category selection */}
+          {months.length > 0 && (
           <Card padding={false}>
             <div className="p-4 border-b border-gray-100 flex items-center justify-between">
               <div>
@@ -440,10 +494,14 @@ export function ImportView() {
               )
             })}
           </Card>
+          )}
 
           <div className="flex justify-between">
             <Button variant="secondary" onClick={reset}>Börja om</Button>
-            <Button onClick={confirmImport} disabled={importedMonths.length === 0}>
+            <Button
+              onClick={confirmImport}
+              disabled={importedMonths.length === 0 && selectedAccountIds.size === 0 && selectedRecurringIds.size === 0}
+            >
               <CheckCircle className="w-4 h-4" />
               Bekräfta import ({importedMonths.length} {importedMonths.length === 1 ? 'månad' : 'månader'})
             </Button>
