@@ -22,6 +22,7 @@ import type {
   ImportSnapshot,
   AccountBalance,
   AccountType,
+  ReconciliationRecord,
 } from '@/types'
 import { DEFAULT_CATEGORIES, DEFAULT_ZLANTAR_RULES } from './defaultCategories'
 
@@ -96,6 +97,11 @@ function migrateV0(raw: Record<string, unknown>): Record<string, unknown> {
 // v2 → v3: add importSnapshots array
 function migrateV2(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, importSnapshots: [] }
+}
+
+// v3 → v4: add reconciliations array for transfer reconciliation between owners
+function migrateV3(raw: Record<string, unknown>): Record<string, unknown> {
+  return { ...raw, reconciliations: [] }
 }
 
 // v1 → v2: budget amounts for expense/savings/transfer are now stored as negative
@@ -196,6 +202,10 @@ interface AppStore extends AppState {
   // Zlantar import
   setZlantarImport: (imp: ZlantarImport) => void
 
+  // Transfer reconciliation (between owners)
+  addReconciliationRecord: (record: ReconciliationRecord) => void
+  removeReconciliationRecord: (id: string) => void
+
   // Grocery receipts
   addGroceryReceipt: (receipt: GroceryReceipt) => void
   removeGroceryReceipt: (id: string) => void
@@ -215,6 +225,7 @@ export const useAppStore = create<AppStore>()(
       allTransactions: [],
       lastZlantarImport: undefined,
       importSnapshots: [],
+      reconciliations: [],
 
       updateSettings: (s) =>
         set((state) => ({ settings: { ...state.settings, ...s } })),
@@ -390,6 +401,17 @@ export const useAppStore = create<AppStore>()(
           }
         }),
 
+      addReconciliationRecord: (record) =>
+        set((state) => {
+          const filtered = state.reconciliations.filter((r) => r.id !== record.id)
+          return { reconciliations: [...filtered, record] }
+        }),
+
+      removeReconciliationRecord: (id) =>
+        set((state) => ({
+          reconciliations: state.reconciliations.filter((r) => r.id !== id),
+        })),
+
       addGroceryReceipt: (receipt) =>
         set((state) => ({ groceryReceipts: [...state.groceryReceipts, receipt] })),
 
@@ -416,12 +438,13 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 3,
+      version: 4,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
         if (version < 2) state = migrateV1(state)
         if (version < 3) state = migrateV2(state)
+        if (version < 4) state = migrateV3(state)
         return state
       },
     }

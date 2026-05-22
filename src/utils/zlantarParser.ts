@@ -13,6 +13,7 @@ import type {
 } from '@/types'
 import { AGREEMENT_CATEGORY_MAP, DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import { getMonthIdForDate } from '@/utils/periodUtils'
+import { txKey as makeTxKey } from '@/utils/transferReconciliation'
 
 // ─── Parse raw JSON files ─────────────────────────────────────────────────────
 
@@ -173,18 +174,21 @@ export function buildMonthlyActuals(
   categories: CategoryDef[],
   rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES,
   monthStartDay = 1,
-  monthStartBusinessDay = false
+  monthStartBusinessDay = false,
+  excludeKeys?: Set<string>
 ): Record<string, MonthlyActuals> {
   const { transactions, data } = imp
 
   const catIds = new Set(categories.map((c) => c.id))
   const ruleMap = buildRuleLookup(rules)
 
-  // Group by period key (YYYY-MM), skipping transfers (no category)
+  // Group by period key (YYYY-MM), skipping transfers (no category) and any
+  // transactions reconciled out (e.g. swish/bank transfers between owners).
   const byMonth: Record<string, ZlantarTransaction[]> = {}
   for (const tx of transactions) {
     if (!tx.date) continue
     if (tx.transaction_type === 'transfer') continue  // internal account transfers, skip
+    if (excludeKeys && excludeKeys.has(makeTxKey(tx))) continue
     const key = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay)
     if (!byMonth[key]) byMonth[key] = []
     byMonth[key].push(tx)
@@ -302,7 +306,8 @@ export function getTransactionsForCategory(
   categories: CategoryDef[],
   rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES,
   monthStartDay = 1,
-  monthStartBusinessDay = false
+  monthStartBusinessDay = false,
+  excludeKeys?: Set<string>
 ): ZlantarTransaction[] {
   const catIds = new Set(categories.map((c) => c.id))
   const ruleMap = buildRuleLookup(rules)
@@ -310,6 +315,7 @@ export function getTransactionsForCategory(
   return transactions.filter((tx) => {
     if (!tx.date || getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) return false
     if (tx.transaction_type === 'transfer') return false
+    if (excludeKeys && excludeKeys.has(makeTxKey(tx))) return false
     const { catId: resolvedCat, subId: resolvedSub } = resolveCategory(
       tx.category ?? '',
       tx.subcategory ?? '',

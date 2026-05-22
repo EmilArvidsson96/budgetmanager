@@ -1,13 +1,14 @@
-import { useState, useRef } from 'react'
-import { Upload, CheckCircle, AlertTriangle, Info, ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
+import { useMemo, useState, useRef } from 'react'
+import { Upload, CheckCircle, AlertTriangle, Info, ChevronDown, ChevronRight, Trash2, ArrowLeftRight } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories } from '@/utils/zlantarParser'
+import { reconcileTransfers, reconciledKeysFromRecords } from '@/utils/transferReconciliation'
 import { formatCurrency } from '@/utils/budgetHelpers'
-import type { RecurringItem } from '@/types'
+import type { RecurringItem, TransferMatch, ReconciliationRecord, ZlantarTransaction } from '@/types'
 
 type Step = 'upload' | 'preview' | 'done'
 
@@ -15,7 +16,7 @@ export function ImportView() {
   const [step, setStep] = useState<Step>('upload')
   const [dataFile, setDataFile] = useState<File | null>(null)
   const [txFile, setTxFile] = useState<File | null>(null)
-  const [preview, setPreview] = useState<ReturnType<typeof buildMonthlyActuals> | null>(null)
+  const [currentImp, setCurrentImp] = useState<ReturnType<typeof parseZlantarFiles> | null>(null)
   const [unknownCats, setUnknownCats] = useState<ReturnType<typeof findUnknownCategories>>([])
   const [newAccounts, setNewAccounts] = useState<ReturnType<typeof deriveAccounts>>([])
   const [newRecurring, setNewRecurring] = useState<RecurringItem[]>([])
@@ -27,6 +28,8 @@ export function ImportView() {
   const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set())
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set())
   const [selectedRecurringIds, setSelectedRecurringIds] = useState<Set<string>>(new Set())
+  const [transferMatches, setTransferMatches] = useState<TransferMatch[]>([])
+  const [acceptedMatchIds, setAcceptedMatchIds] = useState<Set<string>>(new Set())
 
   const dataRef = useRef<HTMLInputElement>(null)
   const txRef = useRef<HTMLInputElement>(null)
@@ -46,7 +49,43 @@ export function ImportView() {
       const txJson = JSON.parse(txText)
 
       const imp = parseZlantarFiles(dataJson, txJson)
-      const actuals = buildMonthlyActuals(imp, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay)
+
+      // Reconcile transfers between owners. Combine new transactions with the
+      // existing pool (deduped by key) so cross-import pairs can match.
+      const previouslyReconciled = reconciledKeysFromRecords(store.reconciliations)
+      const dedupKey = (tx: ZlantarTransaction) => `${tx.date}|${tx.amount}|${tx.description ?? ''}`
+      const combinedTxs: ZlantarTransaction[] = [...store.allTransactions]
+      const seen = new Set(combinedTxs.map(dedupKey))
+      for (const tx of imp.transactions) {
+        if (!seen.has(dedupKey(tx))) {
+          combinedTxs.push(tx)
+          seen.add(dedupKey(tx))
+        }
+      }
+      const matches = reconcileTransfers({
+        transactions: combinedTxs,
+        accounts: store.settings.accounts,
+        partnerName: store.settings.partnerName,
+        alreadyReconciledKeys: previouslyReconciled,
+      })
+
+      // Build all reconciled keys (existing + newly proposed, all accepted by default)
+      const proposedKeys = new Set<string>(previouslyReconciled)
+      for (const m of matches) {
+        proposedKeys.add(m.txAKey)
+        proposedKeys.add(m.txBKey)
+      }
+
+      // Use proposed keys here just to seed the initial month set; the live
+      // preview is recomputed via useMemo as the user toggles match acceptance.
+      const initialActuals = buildMonthlyActuals(
+        imp,
+        store.settings.categories,
+        store.settings.zlantarCategoryRules,
+        store.settings.monthStartDay,
+        store.settings.monthStartBusinessDay,
+        proposedKeys
+      )
       const unknown = findUnknownCategories(imp.transactions, store.settings.categories, store.settings.zlantarCategoryRules)
       const accounts = deriveAccounts(imp.data)
       const recurring = deriveRecurringItems(imp.data)
@@ -57,15 +96,17 @@ export function ImportView() {
       const newRec = recurring.filter((r) => !existingRecurringIds.has(r.id))
 
       store.setZlantarImport(imp)
-      setPreview(actuals)
+      setCurrentImp(imp)
       setUnknownCats(unknown)
       setNewAccounts(newAccs)
       setNewRecurring(newRec)
-      setSelectedMonths(new Set(Object.keys(actuals)))
+      setSelectedMonths(new Set(Object.keys(initialActuals)))
       setSelectedAccountIds(new Set(newAccs.map((a) => a.id)))
       setSelectedRecurringIds(new Set(newRec.map((r) => r.id)))
       setDeselectedCatKeys(new Set())
       setExpandedMonths(new Set())
+      setTransferMatches(matches)
+      setAcceptedMatchIds(new Set(matches.map((m) => m.id)))
       setStep('preview')
     } catch (err) {
       alert(`Fel vid inläsning: ${(err as Error).message}`)
@@ -73,6 +114,31 @@ export function ImportView() {
       setImporting(false)
     }
   }
+
+  // Live-updating actuals: depends on which transfer matches the user has
+  // accepted. Reconciled tx keys are excluded from category aggregates.
+  const acceptedKeys = useMemo(() => {
+    const keys = reconciledKeysFromRecords(store.reconciliations)
+    for (const m of transferMatches) {
+      if (acceptedMatchIds.has(m.id)) {
+        keys.add(m.txAKey)
+        keys.add(m.txBKey)
+      }
+    }
+    return keys
+  }, [store.reconciliations, transferMatches, acceptedMatchIds])
+
+  const preview = useMemo(() => {
+    if (!currentImp) return null
+    return buildMonthlyActuals(
+      currentImp,
+      store.settings.categories,
+      store.settings.zlantarCategoryRules,
+      store.settings.monthStartDay,
+      store.settings.monthStartBusinessDay,
+      acceptedKeys
+    )
+  }, [currentImp, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay, acceptedKeys])
 
   const confirmImport = () => {
     if (!preview) return
@@ -90,6 +156,18 @@ export function ImportView() {
     for (const rec of newRecurring) {
       if (selectedRecurringIds.has(rec.id)) store.upsertRecurring(rec)
     }
+
+    // Persist accepted transfer matches as a reconciliation record
+    const accepted = transferMatches.filter((m) => acceptedMatchIds.has(m.id))
+    if (accepted.length > 0 && currentImp) {
+      const record: ReconciliationRecord = {
+        id: currentImp.importedAt,
+        importedAt: currentImp.importedAt,
+        matches: accepted,
+      }
+      store.addReconciliationRecord(record)
+    }
+
     setStep('done')
   }
 
@@ -97,7 +175,7 @@ export function ImportView() {
     setStep('upload')
     setDataFile(null)
     setTxFile(null)
-    setPreview(null)
+    setCurrentImp(null)
     setUnknownCats([])
     setNewAccounts([])
     setNewRecurring([])
@@ -106,7 +184,16 @@ export function ImportView() {
     setExpandedMonths(new Set())
     setSelectedAccountIds(new Set())
     setSelectedRecurringIds(new Set())
+    setTransferMatches([])
+    setAcceptedMatchIds(new Set())
   }
+
+  const toggleMatch = (id: string) =>
+    setAcceptedMatchIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
 
   const toggleMonth = (ym: string) =>
     setSelectedMonths((prev) => {
@@ -242,12 +329,34 @@ export function ImportView() {
               })}
             </Card>
           )}
+
+          {/* Historical reconciliations */}
+          {store.reconciliations.length > 0 && (
+            <ReconciliationHistory
+              records={store.reconciliations}
+              onRemove={(id) => store.removeReconciliationRecord(id)}
+            />
+          )}
         </div>
       )}
 
       {/* Step 2: Preview */}
       {step === 'preview' && preview && (
         <div className="space-y-4">
+          {/* Transfer reconciliation between owners */}
+          <ReconciliationCard
+            matches={transferMatches}
+            acceptedIds={acceptedMatchIds}
+            onToggle={toggleMatch}
+            ownersConfigured={
+              new Set(
+                store.settings.accounts
+                  .map((a) => a.owner?.trim().toLowerCase())
+                  .filter((o): o is string => Boolean(o))
+              ).size >= 2
+            }
+          />
+
           {/* Unknown categories warning */}
           {unknownCats.length > 0 && (
             <Card>
@@ -522,5 +631,221 @@ function FileDropZone({
         </>
       )}
     </div>
+  )
+}
+
+// ─── Reconciliation review (in-import preview) ────────────────────────────────
+
+function ReconciliationCard({
+  matches,
+  acceptedIds,
+  onToggle,
+  ownersConfigured,
+}: {
+  matches: TransferMatch[]
+  acceptedIds: Set<string>
+  onToggle: (id: string) => void
+  ownersConfigured: boolean
+}) {
+  if (!ownersConfigured) {
+    return (
+      <Card>
+        <div className="flex items-start gap-3">
+          <Info className="w-5 h-5 text-brand-600 mt-0.5 shrink-0" />
+          <div>
+            <h3 className="font-semibold text-gray-800 mb-1">Avstämning av överföringar</h3>
+            <p className="text-sm text-gray-500">
+              För att automatiskt nolla ut swish och bankgireringar mellan dig och din partner,
+              sätt en <strong>ägare</strong> på dina konton i <em>Inställningar → Konton</em>.
+              Minst två olika ägare krävs för att avstämning ska aktiveras.
+            </p>
+          </div>
+        </div>
+      </Card>
+    )
+  }
+
+  if (matches.length === 0) {
+    return (
+      <Card>
+        <div className="flex items-start gap-3">
+          <ArrowLeftRight className="w-5 h-5 text-gray-300 mt-0.5 shrink-0" />
+          <div>
+            <h3 className="font-semibold text-gray-800 mb-1">Inga överföringar att stämma av</h3>
+            <p className="text-sm text-gray-500">
+              Inga matchande transaktioner mellan olika ägare hittades i den här importen.
+            </p>
+          </div>
+        </div>
+      </Card>
+    )
+  }
+
+  const acceptedCount = matches.filter((m) => acceptedIds.has(m.id)).length
+  const totalAmount = matches
+    .filter((m) => acceptedIds.has(m.id))
+    .reduce((s, m) => s + m.amount, 0)
+
+  return (
+    <Card padding={false}>
+      <div className="p-4 border-b border-gray-100 flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <ArrowLeftRight className="w-5 h-5 text-brand-600 mt-0.5 shrink-0" />
+          <div>
+            <h3 className="font-semibold text-gray-900">
+              {matches.length} överföringar mellan ägare
+            </h3>
+            <p className="text-sm text-gray-500">
+              {acceptedCount} valda · totalt {formatCurrency(totalAmount)} nollas ut från kategorisummorna
+            </p>
+          </div>
+        </div>
+      </div>
+      <div className="divide-y divide-gray-50">
+        {matches.map((m) => {
+          const checked = acceptedIds.has(m.id)
+          return (
+            <label
+              key={m.id}
+              className={`flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 ${
+                !checked ? 'opacity-50' : ''
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => onToggle(m.id)}
+                className="mt-1 rounded shrink-0"
+              />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <span className="text-sm font-medium text-gray-800">{formatCurrency(m.amount)}</span>
+                  <span className="text-xs text-gray-400">
+                    {m.dateA === m.dateB ? m.dateA : `${m.dateA} → ${m.dateB}`}
+                  </span>
+                  {m.keywordHit && (
+                    <Badge variant="blue" size="sm">Swish/namnträff</Badge>
+                  )}
+                  {m.daysDiff > 0 && !m.keywordHit && (
+                    <Badge variant="amber" size="sm">
+                      {Math.round(m.daysDiff)} dag{Math.round(m.daysDiff) === 1 ? '' : 'ar'} mellan
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-xs text-gray-500 space-y-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-red-500">−</span>
+                    <span className="font-medium text-gray-700">{m.ownerA}</span>
+                    <span className="text-gray-400">·</span>
+                    <span>{m.accountAName}</span>
+                    {m.descriptionA && <span className="text-gray-400 truncate">— {m.descriptionA}</span>}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-emerald-600">+</span>
+                    <span className="font-medium text-gray-700">{m.ownerB}</span>
+                    <span className="text-gray-400">·</span>
+                    <span>{m.accountBName}</span>
+                    {m.descriptionB && <span className="text-gray-400 truncate">— {m.descriptionB}</span>}
+                  </div>
+                </div>
+              </div>
+            </label>
+          )
+        })}
+      </div>
+    </Card>
+  )
+}
+
+// ─── Reconciliation history (upload step) ─────────────────────────────────────
+
+function ReconciliationHistory({
+  records,
+  onRemove,
+}: {
+  records: ReconciliationRecord[]
+  onRemove: (id: string) => void
+}) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggle = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+
+  const sorted = [...records].sort((a, b) => (a.importedAt < b.importedAt ? 1 : -1))
+  const totalMatches = records.reduce((s, r) => s + r.matches.length, 0)
+
+  return (
+    <Card padding={false}>
+      <div className="p-4 border-b border-gray-100">
+        <h3 className="font-semibold text-gray-900">Tidigare avstämningar</h3>
+        <p className="text-sm text-gray-500">
+          {records.length} importtillfällen · totalt {totalMatches} matchade överföringar
+        </p>
+      </div>
+      {sorted.map((rec) => {
+        const isOpen = expanded.has(rec.id)
+        const totalAmount = rec.matches.reduce((s, m) => s + m.amount, 0)
+        const date = new Date(rec.importedAt)
+        const dateLabel = isNaN(date.getTime())
+          ? rec.importedAt
+          : date.toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' })
+        return (
+          <div key={rec.id} className="border-t border-gray-100">
+            <div className="flex items-center gap-3 px-4 py-2.5">
+              <button
+                className="flex-1 flex items-center justify-between text-left"
+                onClick={() => toggle(rec.id)}
+              >
+                <div className="flex items-center gap-2">
+                  {isOpen ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                  <span className="text-sm font-medium text-gray-800">{dateLabel}</span>
+                  <span className="text-xs text-gray-400">
+                    {rec.matches.length} {rec.matches.length === 1 ? 'överföring' : 'överföringar'}
+                  </span>
+                </div>
+                <span className="text-sm text-gray-600">{formatCurrency(totalAmount)}</span>
+              </button>
+              <button
+                onClick={() => onRemove(rec.id)}
+                className="p-1 text-gray-300 hover:text-red-500 rounded transition-colors"
+                title="Ta bort avstämning (transaktioner räknas igen)"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+            {isOpen && (
+              <div className="px-4 pb-3 pt-1 space-y-2 bg-gray-50/40">
+                {rec.matches.map((m) => (
+                  <div key={m.id} className="text-xs text-gray-600 px-2 py-2 bg-white rounded-lg border border-gray-100">
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                      <span className="font-medium text-gray-800">{formatCurrency(m.amount)}</span>
+                      <span className="text-gray-400">
+                        {m.dateA === m.dateB ? m.dateA : `${m.dateA} → ${m.dateB}`}
+                      </span>
+                      {m.keywordHit && <Badge variant="blue" size="sm">Swish/namn</Badge>}
+                    </div>
+                    <div className="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
+                      <span className="text-red-500">−</span>
+                      <span className="font-medium text-gray-700">{m.ownerA}</span>
+                      <span className="text-gray-400">→</span>
+                      <span className="text-emerald-600">+</span>
+                      <span className="font-medium text-gray-700">{m.ownerB}</span>
+                      {(m.descriptionA || m.descriptionB) && (
+                        <span className="text-gray-400 truncate">
+                          — {m.descriptionA || m.descriptionB}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </Card>
   )
 }

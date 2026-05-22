@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button'
 import { formatCurrency, MONTH_NAMES_SHORT } from '@/utils/budgetHelpers'
 import { exportToExcel } from '@/utils/excelExport'
 import { computeStartingBalance } from '@/utils/zlantarParser'
+import { reconciledKeysFromRecords } from '@/utils/transferReconciliation'
 import type { LiquidityEntry } from '@/types'
 
 function newId() {
@@ -121,15 +122,17 @@ export function LiquidityView() {
   // Large transactions from imports for the selected year
   const largeTxs = useMemo(() => {
     const yearStr = String(year)
+    const reconciledKeys = reconciledKeysFromRecords(store.reconciliations)
     return allTransactions
       .filter(
         (tx) =>
           tx.date?.startsWith(yearStr) &&
           tx.transaction_type !== 'transfer' &&
+          !reconciledKeys.has(`${tx.date}|${tx.amount}|${tx.description ?? ''}`) &&
           Math.abs(tx.amount) >= largeTxThreshold
       )
       .sort((a, b) => a.date.localeCompare(b.date))
-  }, [allTransactions, year, largeTxThreshold])
+  }, [allTransactions, year, largeTxThreshold, store.reconciliations])
 
   // Balance history from import snapshots
   const liquidityAccountIds = useMemo(
