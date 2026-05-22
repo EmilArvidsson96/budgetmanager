@@ -84,6 +84,10 @@ export interface Account {
   loanBalance?: number
   loanOriginalAmount?: number
   includeInLiquidity: boolean
+  // Free-text owner label (e.g. "Mig", "Sambo", partner's name). Required for
+  // the transfer-reconciliation logic to know which transactions can cancel
+  // each other out.
+  owner?: string
 }
 
 export type AccountType =
@@ -210,6 +214,31 @@ export interface LiquidityPlan {
   notes?: string
 }
 
+// ─── Transfer reconciliation (between owners) ────────────────────────────────
+
+export interface TransferMatch {
+  id: string
+  txAKey: string          // sender leg (negative amount)
+  txBKey: string          // receiver leg (positive amount)
+  dateA: string
+  dateB: string
+  amount: number          // absolute amount in SEK
+  ownerA: string
+  ownerB: string
+  accountAName: string
+  accountBName: string
+  descriptionA?: string
+  descriptionB?: string
+  daysDiff: number
+  keywordHit: boolean
+}
+
+export interface ReconciliationRecord {
+  id: string              // = importedAt
+  importedAt: string
+  matches: TransferMatch[]
+}
+
 // ─── Zlantar category mapping ─────────────────────────────────────────────────
 
 export interface ZlantarCategoryRule {
@@ -288,6 +317,8 @@ export interface AppSettings {
   zlantarCategoryRules: ZlantarCategoryRule[]
   anthropicApiKey?: string
   anthropicModel?: string
+  // Used as an extra keyword when matching swish/bank-transfers between owners.
+  partnerName?: string
 }
 
 // ─── Complete app state ───────────────────────────────────────────────────────
@@ -302,4 +333,5 @@ export interface AppState {
   allTransactions: ZlantarTransaction[]
   lastZlantarImport?: ZlantarImport
   importSnapshots: ImportSnapshot[]
+  reconciliations: ReconciliationRecord[]
 }

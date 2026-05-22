@@ -21,6 +21,7 @@ import {
 } from '@/utils/budgetHelpers'
 import { exportToExcel } from '@/utils/excelExport'
 import { getTransactionsForCategory } from '@/utils/zlantarParser'
+import { reconciledKeysFromRecords } from '@/utils/transferReconciliation'
 import type { CategoryDef, SubcategoryBudget, ZlantarTransaction } from '@/types'
 
 type MonthInitMode = 'prev-budget' | 'prev-actuals' | 'avg6-budget' | 'avg6-actuals' | 'blank'
@@ -323,7 +324,8 @@ export function MonthlyBudgetView() {
             settings.categories,
             settings.zlantarCategoryRules,
             settings.monthStartDay,
-            settings.monthStartBusinessDay
+            settings.monthStartBusinessDay,
+            reconciledKeysFromRecords(store.reconciliations)
           )}
           onClose={() => setTxPanel(null)}
         />

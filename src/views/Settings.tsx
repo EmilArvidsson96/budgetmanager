@@ -65,9 +65,11 @@ export function SettingsView() {
 
 function GeneralTab() {
   const store = useAppStore()
-  const { monthStartDay, monthStartBusinessDay } = store.settings
+  const { monthStartDay, monthStartBusinessDay, partnerName } = store.settings
   const [day, setDay] = useState(String(monthStartDay))
   const [saved, setSaved] = useState(false)
+  const [partner, setPartner] = useState(partnerName ?? '')
+  const [partnerSaved, setPartnerSaved] = useState(false)
 
   const save = () => {
     const parsed = parseInt(day)
@@ -75,6 +77,12 @@ function GeneralTab() {
     store.updateSettings({ monthStartDay: parsed, monthStartBusinessDay })
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
+  }
+
+  const savePartner = () => {
+    store.updateSettings({ partnerName: partner.trim() || undefined })
+    setPartnerSaved(true)
+    setTimeout(() => setPartnerSaved(false), 2000)
   }
 
   const toggleBusinessDay = (checked: boolean) => {
@@ -137,6 +145,37 @@ function GeneralTab() {
           )}
         </div>
       </Card>
+
+      <Card>
+        <CardHeader
+          title="Avstämning mellan ägare"
+          subtitle="Används när du importerar både din och din partners Zlantar-data. Swish och bankgireringar mellan er nollas ut i kategorisummorna."
+        />
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">
+              Partnerns namn <span className="font-normal text-gray-400">(valfritt)</span>
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="text"
+                value={partner}
+                onChange={(e) => { setPartner(e.target.value); setPartnerSaved(false) }}
+                placeholder="t.ex. Anna"
+                className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+              />
+              <Button onClick={savePartner} variant={partnerSaved ? 'secondary' : 'primary'} size="md">
+                {partnerSaved ? '✓ Sparat' : 'Spara'}
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-gray-400">
+              Används som extra nyckelord när matchande transaktioner identifieras (utöver
+              ”Swish”). För att avstämning ska aktiveras behöver dina konton också ha en
+              <strong> ägare</strong> satt under <em>Konton</em>.
+            </p>
+          </div>
+        </div>
+      </Card>
     </div>
   )
 }
@@ -148,6 +187,14 @@ function AccountsTab() {
   const { accounts } = store.settings
   const [editing, setEditing] = useState<Account | null>(null)
   const [form, setForm] = useState<Partial<Account>>({})
+
+  const knownOwners = Array.from(
+    new Set(
+      accounts
+        .map((a) => a.owner?.trim())
+        .filter((o): o is string => Boolean(o))
+    )
+  )
 
   const startNew = () => {
     setEditing({ id: newId(), name: '', type: 'checking', currency: 'SEK', includeInLiquidity: true })
@@ -207,6 +254,18 @@ function AccountsTab() {
                   placeholder="t.ex. Swedbank"
                 />
               </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1">
+                  Ägare <span className="font-normal text-gray-400">(valfritt)</span>
+                </label>
+                <input
+                  className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  value={form.owner ?? ''}
+                  onChange={(e) => setForm((f) => ({ ...f, owner: e.target.value }))}
+                  placeholder="t.ex. Mig, Anna"
+                  list="account-owners"
+                />
+              </div>
               {(form.type === 'loan' || form.type === 'credit') && (
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Ränta (%)</label>
@@ -245,6 +304,10 @@ function AccountsTab() {
           </p>
         )}
 
+        <datalist id="account-owners">
+          {knownOwners.map((o) => <option key={o} value={o} />)}
+        </datalist>
+
         <div className="space-y-2">
           {accounts.map((a) => (
             <div key={a.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
@@ -255,6 +318,7 @@ function AccountsTab() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {a.owner && <Badge variant="blue">{a.owner}</Badge>}
                 {a.interestRate !== undefined && (
                   <Badge variant="amber">{a.interestRate}%</Badge>
                 )}
