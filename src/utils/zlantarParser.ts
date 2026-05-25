@@ -45,18 +45,25 @@ export function parseZlantarFiles(
 
 // ─── Derive accounts from data.json banks array ───────────────────────────────
 
+export function extractOwner(data: ZlantarData): string | undefined {
+  const v = data.user?.first_name
+  return typeof v === 'string' && v.trim() ? v.trim() : undefined
+}
+
 export function deriveAccounts(data: ZlantarData): Account[] {
+  const owner = extractOwner(data)
   const result: Account[] = []
   for (const bank of data.banks ?? []) {
     for (const acc of bank.accounts ?? []) {
       result.push({
-        id: `${bank.name}_${acc.account_index}`,
+        id: acc.account_number,
         name: acc.name,
         type: normalizeAccountType(acc.type),
         bankName: formatBankName(bank.name),
         currency: 'SEK',
         loanBalance: acc.balance < 0 ? Math.abs(acc.balance) : undefined,
         includeInLiquidity: acc.type !== 'Loan',
+        owner,
       })
     }
   }
@@ -248,7 +255,7 @@ function buildAccountBalances(data: ZlantarData): AccountBalance[] {
   for (const bank of data.banks ?? []) {
     for (const acc of bank.accounts ?? []) {
       result.push({
-        accountId: `${bank.name}_${acc.account_index}`,
+        accountId: acc.account_number,
         accountName: acc.name,
         accountType: normalizeAccountType(acc.type),
         balance: acc.balance,

@@ -40,10 +40,15 @@ export interface ZlantarTransaction {
   notes?: string
 }
 
+export interface ZlantarUser {
+  first_name?: string
+  [key: string]: unknown
+}
+
 export interface ZlantarData {
   banks?: ZlantarBank[]
   agreements?: ZlantarAgreement[]
-  user?: Record<string, unknown>
+  user?: ZlantarUser
   budget?: unknown[]
   residenceValuation?: unknown[]
   receipts?: unknown[]

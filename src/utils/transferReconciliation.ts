@@ -13,7 +13,7 @@ export function txKey(tx: ZlantarTransaction): string {
 }
 
 export function accountIdForTx(tx: ZlantarTransaction): string {
-  return `${tx.bank_name}_${tx.account_index}`
+  return tx.account_number
 }
 
 export function reconciledKeysFromRecords(

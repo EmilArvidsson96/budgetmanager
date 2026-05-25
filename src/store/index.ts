@@ -24,6 +24,7 @@ import type {
   AccountType,
   ReconciliationRecord,
 } from '@/types'
+import { extractOwner } from '@/utils/zlantarParser'
 import { DEFAULT_CATEGORIES, DEFAULT_ZLANTAR_RULES } from './defaultCategories'
 
 // ─── Store migration ──────────────────────────────────────────────────────────
@@ -102,6 +103,77 @@ function migrateV2(raw: Record<string, unknown>): Record<string, unknown> {
 // v3 → v4: add reconciliations array for transfer reconciliation between owners
 function migrateV3(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, reconciliations: [] }
+}
+
+// v4 → v5: re-key accounts from `${bank.name}_${account_index}` to account_number,
+// so accounts from different Zlantar exports (e.g. two partners' data) don't collide.
+// The mapping is recovered from lastZlantarImport.data.banks if present; accounts
+// with no recoverable mapping keep their old ID.
+function migrateV4(raw: Record<string, unknown>): Record<string, unknown> {
+  const lastImport = raw.lastZlantarImport as ZlantarImport | undefined
+  const banks = lastImport?.data?.banks
+  if (!banks || banks.length === 0) return raw
+
+  const idMap = new Map<string, string>()
+  for (const bank of banks) {
+    for (const acc of bank.accounts ?? []) {
+      if (acc.account_number) {
+        idMap.set(`${bank.name}_${acc.account_index}`, acc.account_number)
+      }
+    }
+  }
+  if (idMap.size === 0) return raw
+
+  const remap = (id: string | undefined): string | undefined =>
+    id === undefined ? undefined : idMap.get(id) ?? id
+
+  // Settings: accounts + recurringItems.accountId
+  const settings = { ...(raw.settings as AppSettings | undefined) } as AppSettings
+  if (Array.isArray(settings.accounts)) {
+    const owner = lastImport && extractOwner(lastImport.data)
+    settings.accounts = settings.accounts.map((a) => {
+      const newId = idMap.get(a.id) ?? a.id
+      // Backfill owner for accounts that came from this lastImport but had no owner set.
+      const fillOwner = owner && !a.owner && idMap.has(a.id) ? owner : a.owner
+      return { ...a, id: newId, owner: fillOwner }
+    })
+  }
+  if (Array.isArray(settings.recurringItems)) {
+    settings.recurringItems = settings.recurringItems.map((r) =>
+      r.accountId ? { ...r, accountId: remap(r.accountId)! } : r
+    )
+  }
+
+  const remapBalances = (list: AccountBalance[] | undefined): AccountBalance[] =>
+    (list ?? []).map((ab) => ({ ...ab, accountId: remap(ab.accountId)! }))
+
+  // Actuals
+  const actuals = { ...(raw.actuals as Record<string, MonthlyActuals> | undefined) } as Record<string, MonthlyActuals>
+  for (const ym of Object.keys(actuals)) {
+    actuals[ym] = { ...actuals[ym], accountBalances: remapBalances(actuals[ym].accountBalances) }
+  }
+
+  // ImportSnapshots
+  const importSnapshots = (raw.importSnapshots as ImportSnapshot[] | undefined) ?? []
+  const remappedSnapshots = importSnapshots.map((s) => ({
+    ...s,
+    accountBalances: remapBalances(s.accountBalances),
+  }))
+
+  // LiquidityPlans
+  const liquidityPlans = { ...(raw.liquidityPlans as Record<string, LiquidityPlan> | undefined) } as Record<string, LiquidityPlan>
+  for (const yr of Object.keys(liquidityPlans)) {
+    const plan = liquidityPlans[yr]
+    liquidityPlans[yr] = {
+      ...plan,
+      startingBalances: remapBalances(plan.startingBalances),
+      entries: (plan.entries ?? []).map((e) =>
+        e.accountId ? { ...e, accountId: remap(e.accountId)! } : e
+      ),
+    }
+  }
+
+  return { ...raw, settings, actuals, importSnapshots: remappedSnapshots, liquidityPlans }
 }
 
 // v1 → v2: budget amounts for expense/savings/transfer are now stored as negative
@@ -374,7 +446,7 @@ export const useAppStore = create<AppStore>()(
                 }
               })()
               accountBalances.push({
-                accountId: `${bank.name}_${acc.account_index}`,
+                accountId: acc.account_number,
                 accountName: acc.name,
                 accountType: type,
                 balance: acc.balance,
@@ -438,13 +510,14 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 4,
+      version: 5,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
         if (version < 2) state = migrateV1(state)
         if (version < 3) state = migrateV2(state)
         if (version < 4) state = migrateV3(state)
+        if (version < 5) state = migrateV4(state)
         return state
       },
     }
