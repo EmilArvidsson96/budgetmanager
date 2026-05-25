@@ -25,6 +25,7 @@ import type {
   ReconciliationRecord,
 } from '@/types'
 import { extractOwner } from '@/utils/zlantarParser'
+import { txKey } from '@/utils/transferReconciliation'
 import { DEFAULT_CATEGORIES, DEFAULT_ZLANTAR_RULES } from './defaultCategories'
 
 // ─── Store migration ──────────────────────────────────────────────────────────
@@ -423,14 +424,8 @@ export const useAppStore = create<AppStore>()(
 
       setZlantarImport: (imp) =>
         set((state) => {
-          const existingKeys = new Set(
-            state.allTransactions.map((tx: ZlantarTransaction) =>
-              `${tx.date}|${tx.amount}|${tx.description ?? ''}`
-            )
-          )
-          const newTxs = imp.transactions.filter(
-            (tx) => !existingKeys.has(`${tx.date}|${tx.amount}|${tx.description ?? ''}`)
-          )
+          const existingKeys = new Set(state.allTransactions.map(txKey))
+          const newTxs = imp.transactions.filter((tx) => !existingKeys.has(txKey(tx)))
 
           // Build account balance snapshot from this import
           const accountBalances: AccountBalance[] = []

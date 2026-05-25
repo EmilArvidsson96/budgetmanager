@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/Button'
 import { formatCurrency, MONTH_NAMES_SHORT } from '@/utils/budgetHelpers'
 import { exportToExcel } from '@/utils/excelExport'
 import { computeStartingBalance } from '@/utils/zlantarParser'
-import { reconciledKeysFromRecords } from '@/utils/transferReconciliation'
+import { reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
 import type { LiquidityEntry } from '@/types'
 
 function newId() {
@@ -128,7 +128,7 @@ export function LiquidityView() {
         (tx) =>
           tx.date?.startsWith(yearStr) &&
           tx.transaction_type !== 'transfer' &&
-          !reconciledKeys.has(`${tx.date}|${tx.amount}|${tx.description ?? ''}`) &&
+          !reconciledKeys.has(txKey(tx)) &&
           Math.abs(tx.amount) >= largeTxThreshold
       )
       .sort((a, b) => a.date.localeCompare(b.date))

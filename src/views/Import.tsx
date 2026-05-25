@@ -6,7 +6,7 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories, actualsEquivalent } from '@/utils/zlantarParser'
-import { reconcileTransfers, reconciledKeysFromRecords } from '@/utils/transferReconciliation'
+import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
 import { formatCurrency } from '@/utils/budgetHelpers'
 import type { MonthlyActuals, RecurringItem, ReconciliationRecord, TransferMatch, ZlantarImport, ZlantarTransaction } from '@/types'
 
@@ -53,13 +53,12 @@ export function ImportView() {
       // Reconcile transfers between owners. Combine new transactions with the
       // existing pool (deduped by key) so cross-import pairs can match.
       const previouslyReconciled = reconciledKeysFromRecords(store.reconciliations)
-      const dedupKey = (tx: ZlantarTransaction) => `${tx.date}|${tx.amount}|${tx.description ?? ''}`
       const combinedTxs: ZlantarTransaction[] = [...store.allTransactions]
-      const seen = new Set(combinedTxs.map(dedupKey))
+      const seen = new Set(combinedTxs.map(txKey))
       for (const tx of imp.transactions) {
-        if (!seen.has(dedupKey(tx))) {
+        if (!seen.has(txKey(tx))) {
           combinedTxs.push(tx)
-          seen.add(dedupKey(tx))
+          seen.add(txKey(tx))
         }
       }
       const matches = reconcileTransfers({
@@ -70,8 +69,8 @@ export function ImportView() {
       })
 
       // Identify transactions not yet in the store, so warnings only reflect what's new
-      const existingTxKeys = new Set(store.allTransactions.map(dedupKey))
-      const newTxs = imp.transactions.filter((tx) => !existingTxKeys.has(dedupKey(tx)))
+      const existingTxKeys = new Set(store.allTransactions.map(txKey))
+      const newTxs = imp.transactions.filter((tx) => !existingTxKeys.has(txKey(tx)))
 
       const unknown = findUnknownCategories(newTxs, store.settings.categories, store.settings.zlantarCategoryRules)
       const accounts = deriveAccounts(imp.data)

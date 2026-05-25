@@ -9,7 +9,7 @@ import type {
 // store's `setZlantarImport`, so a reconciled key can be matched back to
 // transactions in `allTransactions`.
 export function txKey(tx: ZlantarTransaction): string {
-  return `${tx.date}|${tx.amount}|${tx.description ?? ''}`
+  return `${tx.date}|${tx.amount}|${tx.description ?? ''}|${tx.account_number}`
 }
 
 export function accountIdForTx(tx: ZlantarTransaction): string {
