@@ -1155,6 +1155,9 @@ function CategoryPicker({
         )}
       </div>
       <Button size="sm" onClick={() => onPick(catId, subId || undefined, level3Id || undefined)}>Spara</Button>
+      <Button size="sm" variant="secondary" onClick={() => onPick('transfer')}>
+        <ArrowLeftRight className="w-3.5 h-3.5" /> Överföring
+      </Button>
       {canReset && (
         <Button size="sm" variant="secondary" onClick={onReset}>
           <RotateCcw className="w-3.5 h-3.5" /> Återställ
