@@ -276,7 +276,7 @@ export function buildProjection({ state, startMonthId, horizon }: ProjectionInpu
       const r = num(a.expectedReturn) / 12
       const c = num(a.monthlyContribution)
       values[a.id] = values[a.id] * (1 + r) + c
-      contributions += c
+      if (!a.contributionIsBudgeted) contributions += c
     }
 
     // Accrue loan interest, then amortize (don't overpay).
@@ -287,7 +287,7 @@ export function buildProjection({ state, startMonthId, horizon }: ProjectionInpu
       const owed = Math.max(0, -values[l.id])
       const pay = Math.min(num(l.monthlyPayment), owed)
       values[l.id] += pay
-      loanPayments += pay
+      if (!l.contributionIsBudgeted) loanPayments += pay
     }
 
     // Budget-driven operating cashflow + manual one-offs.

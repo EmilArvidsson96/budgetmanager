@@ -360,6 +360,7 @@ export function PlanView() {
                   <th className="text-left px-4 py-2">Konto</th>
                   <th className="text-right px-4 py-2">Avkastning</th>
                   <th className="text-right px-4 py-2">Insättning/mån</th>
+                  <th className="px-2 py-2" title="Ingår i budget — påverkar inte likvid separat">I budget</th>
                   <th className="text-right px-4 py-2">Nuvärde</th>
                   <th className="text-right px-4 py-2">Prognos</th>
                 </tr>
@@ -417,6 +418,19 @@ export function PlanView() {
                           placeholder="0"
                         />
                       </td>
+                      <td className="px-2 py-1 text-center">
+                        {(contributionValue != null && contributionValue !== 0) || acc?.contributionIsBudgeted ? (
+                          <input
+                            type="checkbox"
+                            checked={!!acc?.contributionIsBudgeted}
+                            onChange={(e) => acc && store.upsertAccount({ ...acc, contributionIsBudgeted: e.target.checked || undefined })}
+                            title="Ingår redan i en budgetpost — dras inte från likvid igen"
+                            className="w-4 h-4 rounded accent-brand-600 cursor-pointer"
+                          />
+                        ) : (
+                          <span className="text-gray-200">—</span>
+                        )}
+                      </td>
                       <td className="px-4 py-2 text-right tabular-nums text-gray-700">{formatCurrency(cur)}</td>
                       <td className={`px-4 py-2 text-right tabular-nums font-medium ${fut >= cur ? 'text-gray-900' : 'text-red-600'}`}>
                         {formatCurrency(fut)}
@@ -428,7 +442,7 @@ export function PlanView() {
             </table>
           </div>
           <p className="text-xs text-gray-400 px-5 py-3 border-t border-gray-100">
-            Klicka på en cell för att redigera. Avkastning i % per år — insättning/amortering i kr/mån. Sparande styrs härifrån, inte av sparkategorier i budgeten.
+            Klicka på en cell för att redigera. "I budget" = insättningen/amorteringen finns redan som en budgetpost och ska inte dras från likvid en gång till.
           </p>
         </Card>
 

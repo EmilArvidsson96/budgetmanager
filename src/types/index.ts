@@ -111,6 +111,9 @@ export interface Account {
   monthlyContribution?: number
   // Recurring monthly amortization on a loan (SEK toward principal).
   monthlyPayment?: number
+  // When true, the contribution/payment is already captured in a budget category
+  // and should not be deducted from liquidity a second time in the projection.
+  contributionIsBudgeted?: boolean
   // Current value for assets not present in any Zlantar import (e.g. a property)
   // or a manual override of the imported balance.
   manualValue?: number
