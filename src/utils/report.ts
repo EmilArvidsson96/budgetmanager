@@ -105,18 +105,34 @@ function labelLong(monthId: string): string {
   return `${MONTH_NAMES_LONG[month - 1]} ${year}`
 }
 
-// Net worth at a month = signed sum of that month's imported account balances
-// (loans are stored negative), respecting each account's includeInNetWorth flag.
-function netWorthAt(state: AppState, monthId: string): number | undefined {
-  const act = state.actuals[monthId]
-  if (!act || act.accountBalances.length === 0) return undefined
+// Net worth per imported month, with per-account CARRY-FORWARD.
+//
+// Each month's balances come from its import, but Zlantar exports don't always
+// include every account every month. Summing only the accounts present in a given
+// month makes net worth lurch — e.g. a month missing the loan spikes by the whole
+// loan amount, which then flattens the rest of the trend line to nothing. So we
+// carry each account's most recent known balance forward into months that omit it.
+//
+// Loans are stored negative → result is a plain signed sum. Honors includeInNetWorth
+// (default included). A month gets a value once ≥1 net-worth account is known by then.
+function netWorthByMonth(state: AppState): Map<string, number> {
   const included = new Map(state.settings.accounts.map((a) => [a.id, a.includeInNetWorth !== false]))
-  let nw = 0
-  for (const ab of act.accountBalances) {
-    if (included.get(ab.accountId) === false) continue   // default to included when unknown
-    nw += ab.balance
+  const carried = new Map<string, number>()   // accountId -> latest known balance
+  const out = new Map<string, number>()
+  for (const monthId of Object.keys(state.actuals).sort()) {
+    for (const ab of state.actuals[monthId].accountBalances) {
+      carried.set(ab.accountId, ab.balance)
+    }
+    let nw = 0
+    let known = false
+    for (const [accId, balance] of carried) {
+      if (included.get(accId) === false) continue   // default to included when unknown
+      nw += balance
+      known = true
+    }
+    if (known) out.set(monthId, nw)
   }
-  return nw
+  return out
 }
 
 // Months with actuals, newest first — drives the report month picker.
@@ -161,9 +177,9 @@ function buildHighlights(
   if (avgExpense && avgExpense > 0) {
     const diff = cur.expense.actual - avgExpense
     if (diff <= -0.05 * avgExpense) {
-      out.push({ tone: 'good', icon: 'under-budget', text: `${kr(Math.abs(diff))} mindre än vanligt` })
+      out.push({ tone: 'good', icon: 'under-budget', text: `${kr(Math.abs(diff))} lägre utgifter än vanligt` })
     } else if (diff >= 0.05 * avgExpense) {
-      out.push({ tone: 'neutral', icon: 'over-budget', text: `${kr(diff)} mer än vanligt` })
+      out.push({ tone: 'neutral', icon: 'over-budget', text: `${kr(diff)} högre utgifter än vanligt` })
     }
   }
 
@@ -280,15 +296,16 @@ export function buildMonthlyReport(state: AppState, monthId: string): MonthlyRep
   }
 
   // ── Net worth (this month + a trailing series for the sparkline) ────────────
-  const nwValue = netWorthAt(state, monthId)
+  const nwByMonth = netWorthByMonth(state)
+  const nwValue = nwByMonth.get(monthId)
   let netWorth: MonthlyReport['netWorth']
   if (nwValue !== undefined) {
     const series: NetWorthPoint[] = []
     for (const p of history.slice(Math.max(0, idx - (TREND_MONTHS - 1)), idx + 1)) {
-      const v = netWorthAt(state, p.monthId)
+      const v = nwByMonth.get(p.monthId)
       if (v !== undefined) series.push({ label: p.label, value: v })
     }
-    netWorth = { value: nwValue, prev: prev ? netWorthAt(state, prev.monthId) : undefined, series }
+    netWorth = { value: nwValue, prev: prev ? nwByMonth.get(prev.monthId) : undefined, series }
   }
 
   // ── Trend window (resultat per månad), ending at the selected month ─────────

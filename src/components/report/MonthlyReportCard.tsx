@@ -256,7 +256,13 @@ export function MonthlyReportCard({ report, summary }: { report: MonthlyReport; 
               )}
             </div>
             {report.netWorth.series.length > 1 ? (
-              <Sparkline data={report.netWorth.series} color="#111827" />
+              <>
+                <Sparkline data={report.netWorth.series} color="#111827" />
+                <div className="flex justify-between mt-1.5 text-[10px] text-gray-400">
+                  <span>{report.netWorth.series[0].label}</span>
+                  <span>{report.netWorth.series[report.netWorth.series.length - 1].label}</span>
+                </div>
+              </>
             ) : (
               <p className="text-sm text-gray-400">Mer historik behövs för en trendkurva.</p>
             )}
