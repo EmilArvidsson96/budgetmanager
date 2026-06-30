@@ -119,6 +119,10 @@ export interface Account {
   manualValue?: number
   // Whether this account counts toward net worth. Defaults to true when unset.
   includeInNetWorth?: boolean
+  // For liability accounts: ID of the asset account this loan is secured against.
+  // When set the loan is netted into that asset in the wealth chart instead of
+  // appearing as a separate negative bar. Multiple loans can share the same asset.
+  linkedAssetId?: string
 }
 
 export type AccountType =

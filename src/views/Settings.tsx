@@ -282,16 +282,33 @@ function AccountsTab() {
                 </div>
               )}
               {form.type === 'loan' && (
-                <div>
-                  <label className="text-xs font-medium text-gray-600 block mb-1">Amortering / mån (kr)</label>
-                  <input
-                    type="number"
-                    className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-                    value={form.monthlyPayment ?? ''}
-                    onChange={(e) => setForm((f) => ({ ...f, monthlyPayment: parseFloat(e.target.value) || undefined }))}
-                    placeholder="t.ex. 3000"
-                  />
-                </div>
+                <>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Amortering / mån (kr)</label>
+                    <input
+                      type="number"
+                      className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                      value={form.monthlyPayment ?? ''}
+                      onChange={(e) => setForm((f) => ({ ...f, monthlyPayment: parseFloat(e.target.value) || undefined }))}
+                      placeholder="t.ex. 3000"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Kopplad tillgång (nettad i förmögenhetsgrafen)</label>
+                    <select
+                      className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                      value={form.linkedAssetId ?? ''}
+                      onChange={(e) => setForm((f) => ({ ...f, linkedAssetId: e.target.value || undefined }))}
+                    >
+                      <option value="">— Ingen (visas separat under noll) —</option>
+                      {accounts
+                        .filter((a) => ['savings', 'isk', 'investment', 'property', 'other'].includes(a.type))
+                        .map((a) => (
+                          <option key={a.id} value={a.id}>{a.name}</option>
+                        ))}
+                    </select>
+                  </div>
+                </>
               )}
               {(form.type === 'savings' || form.type === 'isk' || form.type === 'investment' || form.type === 'property' || form.type === 'other') && (
                 <>

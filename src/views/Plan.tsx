@@ -1,9 +1,9 @@
-import { useState, useMemo, useRef } from 'react'
+import React, { useState, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Trash2, Settings as SettingsIcon, TrendingUp, TrendingDown, AlertTriangle, Download } from 'lucide-react'
 import { Select } from '@/components/ui/Select'
 import {
-  ComposedChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend,
+  ComposedChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot,
 } from 'recharts'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
@@ -78,8 +78,102 @@ function tickFmt(v: number): string {
   return `${Math.round(v / 1000)}k`
 }
 
+const LARGE_TX_THRESHOLD = 10_000
+
 function newId() {
   return `liq-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+}
+
+function LiquidityTooltip({
+  active, payload, label, largeTxs, planned,
+}: {
+  active?: boolean
+  payload?: Array<{ value: number }>
+  label?: string
+  largeTxs: Map<string, { amount: number; description: string }[]>
+  planned: Map<string, LiquidityEntry[]>
+}) {
+  if (!active || !payload?.length || !label) return null
+  const flagTxs = largeTxs.get(label) ?? []
+  const flagPlanned = planned.get(label) ?? []
+  return (
+    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[180px]">
+      <p className="font-semibold text-gray-800 mb-1">{label}</p>
+      <p className="text-gray-600 tabular-nums">{formatCurrency(payload[0].value)}</p>
+      {flagTxs.length > 0 && (
+        <div className="mt-2 pt-2 border-t border-amber-100">
+          <p className="text-xs font-semibold text-amber-700 mb-1">Stor engångstransaktion</p>
+          {flagTxs.map((tx, i) => (
+            <p key={i} className="text-xs text-gray-600 flex justify-between gap-4">
+              <span className="truncate">{tx.description}</span>
+              <span className={`tabular-nums shrink-0 ${tx.amount < 0 ? 'text-red-600' : 'text-green-700'}`}>{formatCurrency(tx.amount, true)}</span>
+            </p>
+          ))}
+        </div>
+      )}
+      {flagPlanned.length > 0 && (
+        <div className="mt-2 pt-2 border-t border-violet-100">
+          <p className="text-xs font-semibold text-violet-700 mb-1">Planerad engångspost</p>
+          {flagPlanned.map((e, i) => (
+            <p key={i} className="text-xs text-gray-600 flex justify-between gap-4">
+              <span className="truncate">{e.description}</span>
+              <span className={`tabular-nums shrink-0 ${e.amount < 0 ? 'text-red-600' : 'text-green-700'}`}>{formatCurrency(e.amount, true)}</span>
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Custom bar shape for the wealth chart — renders positive segments above zero
+// and negative segments below zero in a single column using SVG paths.
+function WealthBarShape(props: any) {
+  const { x, y, width, height, _liquid = 0, _assetSegs = [], _liabSegs = [] } = props
+  if (!height || height <= 0 || !width) return null
+  const totalPos = (_liquid as number) + (_assetSegs as any[]).reduce((s: number, seg: any) => s + Math.max(0, seg.value), 0)
+  if (!totalPos) return null
+  const ppu = height / totalPos
+  const zeroY = y + height
+  const R = 4
+  const els: React.ReactNode[] = []
+
+  // Positive segments — draw upward from zero
+  let curY = zeroY
+  if ((_liquid as number) > 0) {
+    const h = Math.max(1, Math.round((_liquid as number) * ppu))
+    const isTop = !(_assetSegs as any[]).some((s: any) => s.value > 0)
+    els.push(isTop
+      ? <path key="liq" fill={LIQUID_COLOR} fillOpacity={0.9}
+          d={`M${x+R},${curY-h} h${width-2*R} a${R},${R} 0 0 1 ${R},${R} v${h-R} h${-width} v${-(h-R)} a${R},${R} 0 0 1 ${R},${-R}z`} />
+      : <rect key="liq" x={x} y={curY - h} width={width} height={h} fill={LIQUID_COLOR} fillOpacity={0.9} />)
+    curY -= h
+  }
+  ;(_assetSegs as any[]).forEach((seg: any, i: number) => {
+    if (seg.value <= 0) return
+    const h = Math.max(1, Math.round(seg.value * ppu))
+    const isTop = !(_assetSegs as any[]).slice(i + 1).some((s: any) => s.value > 0)
+    els.push(isTop
+      ? <path key={seg.name} fill={seg.color} fillOpacity={0.9}
+          d={`M${x+R},${curY-h} h${width-2*R} a${R},${R} 0 0 1 ${R},${R} v${h-R} h${-width} v${-(h-R)} a${R},${R} 0 0 1 ${R},${-R}z`} />
+      : <rect key={seg.name} x={x} y={curY - h} width={width} height={h} fill={seg.color} fillOpacity={0.9} />)
+    curY -= h
+  })
+
+  // Negative segments — draw downward from zero
+  let negY = zeroY
+  ;(_liabSegs as any[]).forEach((seg: any, i: number) => {
+    if (seg.value >= 0) return
+    const h = Math.max(1, Math.round(Math.abs(seg.value) * ppu))
+    const isBottom = !(_liabSegs as any[]).slice(i + 1).some((s: any) => s.value < 0)
+    els.push(isBottom
+      ? <path key={seg.name} fill={seg.color} fillOpacity={0.85}
+          d={`M${x},${negY} h${width} v${h-R} a${R},${R} 0 0 1 ${-R},${R} h${-(width-2*R)} a${R},${R} 0 0 1 ${-R},${-R}z`} />
+      : <rect key={seg.name} x={x} y={negY} width={width} height={h} fill={seg.color} fillOpacity={0.85} />)
+    negY += h
+  })
+
+  return <g>{els}</g>
 }
 
 export function PlanView() {
@@ -122,21 +216,39 @@ export function PlanView() {
   const assetAccounts = accounts.filter((a) => a.role === 'asset')
   const liabilityAccounts = accounts.filter((a) => a.role === 'liability')
 
+  // Liabilities with a linkedAssetId are netted into that asset's bar.
+  // Liabilities without one appear as separate negative bars.
+  const linkedLiabilities = liabilityAccounts.filter((l) => store.settings.accounts.find((a) => a.id === l.id)?.linkedAssetId)
+  const unlinkedLiabilities = liabilityAccounts.filter((l) => !store.settings.accounts.find((a) => a.id === l.id)?.linkedAssetId)
+
+  // Map: assetId → linked liability accounts
+  const liabilitiesByAsset = new Map<string, typeof liabilityAccounts>()
+  for (const l of linkedLiabilities) {
+    const assetId = store.settings.accounts.find((a) => a.id === l.id)!.linkedAssetId!
+    if (!liabilitiesByAsset.has(assetId)) liabilitiesByAsset.set(assetId, [])
+    liabilitiesByAsset.get(assetId)!.push(l)
+  }
+
   // ── Chart data ────────────────────────────────────────────────────────────
-  const chartData = months.map((m) => {
-    const row: Record<string, number | string> = { label: m.label }
-    row['Likvida medel'] = Math.round(m.liquidity)
-    for (const a of assetAccounts) row[a.name] = Math.round(m.values[a.id] ?? 0)
-    for (const l of liabilityAccounts) row[l.name] = Math.round(m.values[l.id] ?? 0)
-    row['Nettoförmögenhet'] = Math.round(m.netWorth)
-    return row
+  const wealthChartData = months.map((m) => {
+    const liquid = Math.max(0, Math.round(m.liquidity))
+    const assetSegs = assetAccounts.map((a, i) => {
+      const linked = liabilitiesByAsset.get(a.id) ?? []
+      const loanSum = linked.reduce((s, l) => s + (m.values[l.id] ?? 0), 0)
+      return { name: a.name, value: Math.max(0, Math.round((m.values[a.id] ?? 0) + loanSum)), color: ASSET_COLORS[i % ASSET_COLORS.length] }
+    })
+    const liabSegs = unlinkedLiabilities.map((l, i) => ({
+      name: l.name, value: Math.round(m.values[l.id] ?? 0), color: LIABILITY_COLORS[i % LIABILITY_COLORS.length],
+    }))
+    const totalAssets = liquid + assetSegs.reduce((s, seg) => s + seg.value, 0)
+    return { label: m.label, _wealth: totalAssets, _liquid: liquid, _assetSegs: assetSegs, _liabSegs: liabSegs, Nettoförmögenhet: Math.round(m.netWorth) }
   })
 
   const liquidityData = months.map((m) => ({ label: m.label, Likviditet: Math.round(m.liquidity) }))
   const liquidityGoesNegative = trough && trough.liquidity < 0
 
-  const minLiabilityValue = liabilityAccounts.length > 0
-    ? Math.min(...months.map(m => liabilityAccounts.reduce((s, l) => s + (m.values[l.id] ?? 0), 0)))
+  const minLiabilityValue = unlinkedLiabilities.length > 0
+    ? Math.min(...months.map(m => unlinkedLiabilities.reduce((s, l) => s + (m.values[l.id] ?? 0), 0)))
     : 0
 
   const netWorthDelta = end.netWorth - now.netWorth
@@ -182,6 +294,39 @@ export function PlanView() {
     }
     return list.sort((a, b) => a.entry.date.localeCompare(b.entry.date))
   }, [store.liquidityPlans, settings.monthStartDay, settings.monthStartBusinessDay, startMonthId, horizonEnd])
+
+  // Flags: large non-recurring actual transactions grouped by chart label.
+  const largeNonRecurringByLabel = useMemo(() => {
+    const recurringAmounts = settings.recurringItems.map((r) => Math.abs(r.amount))
+    const byLabel = new Map<string, { amount: number; description: string }[]>()
+    for (const m of months) {
+      const txs = store.allTransactions.filter((tx) => {
+        if (Math.abs(tx.amount) < LARGE_TX_THRESHOLD) return false
+        if (tx.transaction_type === 'transfer') return false
+        if (tx.category === 'salary') return false
+        if (recurringAmounts.some((r) => r > 0 && Math.abs(Math.abs(tx.amount) - r) / r < 0.15)) return false
+        const mid = getMonthIdForDate(tx.date, settings.monthStartDay, settings.monthStartBusinessDay)
+        return mid === m.monthId
+      })
+      if (txs.length > 0) {
+        byLabel.set(m.label, txs.map((tx) => ({ amount: tx.amount, description: tx.description ?? tx.category ?? 'Transaktion' })))
+      }
+    }
+    return byLabel
+  }, [store.allTransactions, months, settings.recurringItems, settings.monthStartDay, settings.monthStartBusinessDay])
+
+  // Flags: planned one-off entries grouped by chart label.
+  const plannedByLabel = useMemo(() => {
+    const byLabel = new Map<string, LiquidityEntry[]>()
+    for (const { entry } of upcomingEntries) {
+      const mid = getMonthIdForDate(entry.date, settings.monthStartDay, settings.monthStartBusinessDay)
+      const m = months.find((mo) => mo.monthId === mid)
+      if (!m) continue
+      if (!byLabel.has(m.label)) byLabel.set(m.label, [])
+      byLabel.get(m.label)!.push(entry)
+    }
+    return byLabel
+  }, [upcomingEntries, months, settings.monthStartDay, settings.monthStartBusinessDay])
 
   if (accounts.length === 0) {
     return (
@@ -261,7 +406,7 @@ export function PlanView() {
         <Card>
           <CardHeader title="Förmögenhet över tid" subtitle="Tillgångar ovan noll, skulder under noll — nettoförmögenhet som linje" />
           <ResponsiveContainer width="100%" height={340}>
-            <ComposedChart data={chartData} barSize={28} barGap={-28} barCategoryGap="20%">
+            <ComposedChart data={wealthChartData} barCategoryGap="20%">
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
               <YAxis
@@ -270,40 +415,50 @@ export function PlanView() {
                 tick={{ fontSize: 11 }}
               />
               <Tooltip
-                formatter={(v, name) => [formatCurrency(Number(v ?? 0)), name]}
-                labelStyle={{ fontWeight: 600 }}
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null
+                  const d = payload[0].payload
+                  return (
+                    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[200px]">
+                      <p className="font-semibold text-gray-800 mb-2">{label}</p>
+                      {d._liquid > 0 && (
+                        <div className="flex justify-between gap-8">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: LIQUID_COLOR }} />
+                            Likvida medel
+                          </span>
+                          <span className="tabular-nums text-gray-700">{formatCurrency(d._liquid)}</span>
+                        </div>
+                      )}
+                      {d._assetSegs?.filter((s: any) => s.value > 0).map((seg: any) => (
+                        <div key={seg.name} className="flex justify-between gap-8">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: seg.color }} />
+                            {seg.name}
+                          </span>
+                          <span className="tabular-nums text-gray-700">{formatCurrency(seg.value)}</span>
+                        </div>
+                      ))}
+                      {d._liabSegs?.filter((s: any) => s.value < 0).map((seg: any) => (
+                        <div key={seg.name} className="flex justify-between gap-8">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: seg.color }} />
+                            {seg.name}
+                          </span>
+                          <span className="tabular-nums text-red-600">{formatCurrency(seg.value)}</span>
+                        </div>
+                      ))}
+                      <div className="mt-2 pt-2 border-t border-gray-100 flex justify-between gap-8 font-semibold">
+                        <span>Nettoförmögenhet</span>
+                        <span className="tabular-nums">{formatCurrency(d.Nettoförmögenhet)}</span>
+                      </div>
+                    </div>
+                  )
+                }}
               />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
               <ReferenceLine y={0} stroke="#6b7280" strokeWidth={1} />
-              {/* Positive stack — assets above zero (stackId="pos") */}
-              <Bar
-                dataKey="Likvida medel"
-                stackId="pos"
-                fill={LIQUID_COLOR}
-                fillOpacity={0.9}
-                radius={assetAccounts.length === 0 ? [4, 4, 0, 0] : undefined}
-              />
-              {assetAccounts.map((a, i) => (
-                <Bar
-                  key={a.id}
-                  dataKey={a.name}
-                  stackId="pos"
-                  fill={ASSET_COLORS[i % ASSET_COLORS.length]}
-                  fillOpacity={0.9}
-                  radius={i === assetAccounts.length - 1 ? [4, 4, 0, 0] : undefined}
-                />
-              ))}
-              {/* Negative stack — liabilities below zero (stackId="neg", same x via barGap=-barSize) */}
-              {liabilityAccounts.map((l, i) => (
-                <Bar
-                  key={l.id}
-                  dataKey={l.name}
-                  stackId="neg"
-                  fill={LIABILITY_COLORS[i % LIABILITY_COLORS.length]}
-                  fillOpacity={0.85}
-                  radius={i === liabilityAccounts.length - 1 ? [0, 0, 4, 4] : undefined}
-                />
-              ))}
+              {/* Single Bar with custom shape that renders all segments */}
+              <Bar dataKey="_wealth" isAnimationActive={false} shape={WealthBarShape} legendType="none" />
               {/* Net worth line */}
               <Line type="monotone" dataKey="Nettoförmögenhet" stroke={NETWORTH_COLOR} strokeWidth={2.5} dot={false} />
             </ComposedChart>
@@ -318,11 +473,41 @@ export function PlanView() {
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
               <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(v) => formatCurrency(Number(v ?? 0))} labelStyle={{ fontWeight: 600 }} />
+              <Tooltip content={(props: any) => (
+                <LiquidityTooltip
+                  active={props.active}
+                  payload={props.payload}
+                  label={props.label}
+                  largeTxs={largeNonRecurringByLabel}
+                  planned={plannedByLabel}
+                />
+              )} />
               <ReferenceLine y={0} stroke="#dc2626" strokeDasharray="3 3" />
               <Area type="monotone" dataKey="Likviditet" stroke={LIQUID_COLOR} fill={LIQUID_COLOR} fillOpacity={0.15} strokeWidth={2} />
+              {liquidityData.filter((d) => largeNonRecurringByLabel.has(d.label)).map((d) => (
+                <ReferenceDot key={`l-${d.label}`} x={d.label} y={d.Likviditet} r={5} fill="#f59e0b" stroke="white" strokeWidth={2} />
+              ))}
+              {liquidityData.filter((d) => plannedByLabel.has(d.label)).map((d) => (
+                <ReferenceDot key={`p-${d.label}`} x={d.label} y={d.Likviditet} r={9} fill="#7c3aed" fillOpacity={0.25} stroke="#7c3aed" strokeWidth={2} />
+              ))}
             </ComposedChart>
           </ResponsiveContainer>
+          {(largeNonRecurringByLabel.size > 0 || plannedByLabel.size > 0) && (
+            <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
+              {largeNonRecurringByLabel.size > 0 && (
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
+                  Stor engångstransaktion (&gt;{(LARGE_TX_THRESHOLD / 1000).toFixed(0)}k)
+                </span>
+              )}
+              {plannedByLabel.size > 0 && (
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-violet-600 inline-block" />
+                  Planerad engångspost
+                </span>
+              )}
+            </div>
+          )}
           {carryForward && (
             <p className="text-xs text-gray-400 mt-2">
               Från {lastBudgetYear! + 1} rullas {lastBudgetYear} års budget framåt — lägg in en budget för senare år för en mer exakt prognos.
