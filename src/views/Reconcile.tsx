@@ -409,16 +409,6 @@ interface SavingsAccountDelta {
   known: boolean
 }
 
-interface CFRow {
-  id: string
-  label: string
-  value: number
-  color: string
-  sign: '+' | '−'
-  txs?: ZlantarTransaction[]
-  balances?: SavingsAccountDelta[]
-}
-
 interface CashflowExpenseGroup {
   catId: string
   catName: string
@@ -436,102 +426,121 @@ interface CashflowData {
   expenseGroups: CashflowExpenseGroup[]
 }
 
+// One step in the waterfall. `prev`/`next` are the running cumulative totals
+// before and after this step (signed — can go below zero). `kind` 'total'
+// bars are anchored to the zero line (Inkomst, the final result); 'delta'
+// bars float between prev and next.
+interface WFStep {
+  id: string
+  label: string
+  prev: number
+  next: number
+  displayValue: number
+  sign: '+' | '−'
+  color: string
+  kind: 'total' | 'delta'
+  txs?: ZlantarTransaction[]
+  balances?: SavingsAccountDelta[]
+}
+
 function WaterfallCard({ data }: { data: CashflowData }) {
   const { income, incomeTxs, netSavings, savingsAccounts, expenseGroups } = data
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const bufferAmt = netSavings < 0 ? Math.abs(netSavings) : 0
   const savingsAmt = netSavings > 0 ? netSavings : 0
-  const totalExpenses = expenseGroups.reduce((s, g) => s + g.total, 0)
-  const net = income - netSavings - totalExpenses
 
-  // Money coming in this month.
-  const inRows: CFRow[] = [
-    { id: 'income', label: 'Inkomst', value: income, color: '#6479b3', sign: '+', txs: incomeTxs },
-    ...(bufferAmt > 0
-      ? [{ id: 'buffer', label: 'Från buffert', value: bufferAmt, color: '#94a3b8', sign: '+' as const, balances: savingsAccounts }]
-      : []),
-  ]
-  // Where it went.
-  const outRows: CFRow[] = [
-    ...(savingsAmt > 0
-      ? [{ id: 'savings', label: 'Sparande', value: savingsAmt, color: '#52a871', sign: '−' as const, balances: savingsAccounts }]
-      : []),
-    ...expenseGroups.map((g) => ({ id: g.catId, label: g.catName, value: g.total, color: g.catColor, sign: '−' as const, txs: g.txs })),
-  ]
+  // Build the running cascade: income (from 0) → +buffer / −savings → −expenses → net.
+  const steps: WFStep[] = []
+  let running = 0
+  steps.push({ id: 'income', label: 'Inkomst', prev: 0, next: income, displayValue: income, sign: '+', color: '#6479b3', kind: 'total', txs: incomeTxs })
+  running = income
+  if (bufferAmt > 0) {
+    steps.push({ id: 'buffer', label: 'Från buffert', prev: running, next: running + bufferAmt, displayValue: bufferAmt, sign: '+', color: '#94a3b8', kind: 'delta', balances: savingsAccounts })
+    running += bufferAmt
+  } else if (savingsAmt > 0) {
+    steps.push({ id: 'savings', label: 'Sparande', prev: running, next: running - savingsAmt, displayValue: savingsAmt, sign: '−', color: '#52a871', kind: 'delta', balances: savingsAccounts })
+    running -= savingsAmt
+  }
+  for (const g of expenseGroups) {
+    steps.push({ id: g.catId, label: g.catName, prev: running, next: running - g.total, displayValue: g.total, sign: '−', color: g.catColor, kind: 'delta', txs: g.txs })
+    running -= g.total
+  }
+  const net = running
+  steps.push({ id: 'net', label: net >= 0 ? 'Överskott' : 'Underskott', prev: 0, next: net, displayValue: Math.abs(net), sign: net >= 0 ? '+' : '−', color: net >= 0 ? '#10b981' : '#ef4444', kind: 'total' })
 
-  // Scale so the largest single bar fills the track.
-  const scale = Math.max(income, bufferAmt, savingsAmt, ...expenseGroups.map((g) => g.total), Math.abs(net), 1)
-  const toPct = (v: number) => Math.max(2, Math.min(100, (v / scale) * 100))
+  // Axis spans every running value (so a sub-zero net extends left of the zero line).
+  const allVals = steps.flatMap((s) => [s.prev, s.next])
+  const axisMax = Math.max(...allVals, 0)
+  const axisMin = Math.min(...allVals, 0)
+  const span = axisMax - axisMin || 1
+  const x = (v: number) => ((v - axisMin) / span) * 100
+  const zeroPct = x(0)
+  const hasNegative = axisMin < 0
 
-  const detailCount = (row: CFRow) => row.txs?.length ?? row.balances?.length ?? 0
-  const allRows = [...inRows, ...outRows]
-  const selected = allRows.find((r) => r.id === selectedId && detailCount(r) > 0) ?? null
+  const detailCount = (s: WFStep) => s.txs?.length ?? s.balances?.length ?? 0
+  const selected = steps.find((s) => s.id === selectedId && detailCount(s) > 0) ?? null
   const selectedTxs = selected?.txs
     ? [...selected.txs].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
     : []
-
-  const Row = ({ row }: { row: CFRow }) => {
-    const clickable = detailCount(row) > 0
-    const isActive = selectedId === row.id
-    return (
-      <div className="flex items-center gap-3">
-        <span className="text-xs w-24 md:w-28 text-right flex-shrink-0 text-gray-500 truncate" title={row.label}>{row.label}</span>
-        <button
-          type="button"
-          disabled={!clickable}
-          onClick={() => clickable && setSelectedId(isActive ? null : row.id)}
-          className={`flex-1 relative h-6 bg-warm-50 rounded-md overflow-hidden transition-shadow ${clickable ? 'cursor-pointer hover:ring-2 hover:ring-gray-200' : 'cursor-default'} ${isActive ? 'ring-2 ring-gray-400' : ''}`}
-          title={clickable ? 'Visa detaljer' : undefined}
-        >
-          <div
-            className="absolute inset-y-0 left-0 rounded-md transition-all duration-300"
-            style={{ width: `${toPct(row.value)}%`, backgroundColor: row.color }}
-          />
-        </button>
-        <span className="text-sm w-24 text-right flex-shrink-0 tabular-nums font-medium text-gray-800">
-          {row.sign}{formatCurrency(row.value)}
-        </span>
-      </div>
-    )
-  }
 
   return (
     <Card padding={false} className="p-4 md:p-5">
       <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4">Kassaflöde</div>
 
-      <div className="space-y-1.5">
-        {inRows.map((row) => <Row key={row.id} row={row} />)}
+      <div className="space-y-1">
+        {steps.map((s, i) => {
+          const lo = Math.min(s.prev, s.next)
+          const hi = Math.max(s.prev, s.next)
+          const leftPct = x(lo)
+          const widthPct = Math.max(x(hi) - x(lo), 0.6)
+          const connectorPct = i > 0 ? x(steps[i - 1].next) : null
+          const clickable = detailCount(s) > 0
+          const isActive = selectedId === s.id
+          const isResult = s.id === 'net'
+
+          return (
+            <div key={s.id} className={`flex items-center gap-3 ${isResult ? 'mt-1 pt-2 border-t border-warm-200' : ''}`}>
+              <span className={`text-xs w-24 md:w-28 text-right flex-shrink-0 truncate ${isResult ? `font-semibold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}` : 'text-gray-500'}`} title={s.label}>
+                {s.label}
+              </span>
+
+              <div className="flex-1 relative h-7">
+                {/* zero baseline (only meaningful when something dips below 0) */}
+                {hasNegative && (
+                  <div className="absolute inset-y-0 w-px bg-warm-300" style={{ left: `${zeroPct}%` }} />
+                )}
+                {/* connector from the previous step's running total */}
+                {connectorPct !== null && (
+                  <div
+                    className="absolute border-l border-dashed border-gray-300"
+                    style={{ left: `${connectorPct}%`, top: '-0.25rem', height: '0.25rem' }}
+                  />
+                )}
+                {/* the floating bar */}
+                <button
+                  type="button"
+                  disabled={!clickable}
+                  onClick={() => clickable && setSelectedId(isActive ? null : s.id)}
+                  className={`absolute inset-y-0 rounded-[3px] transition-shadow ${clickable ? 'cursor-pointer hover:ring-2 hover:ring-gray-300' : 'cursor-default'} ${isActive ? 'ring-2 ring-gray-400' : ''}`}
+                  style={{ left: `${leftPct}%`, width: `${widthPct}%`, backgroundColor: s.color }}
+                  title={clickable ? 'Visa detaljer' : undefined}
+                />
+              </div>
+
+              <span className={`text-sm w-24 text-right flex-shrink-0 tabular-nums ${isResult ? `font-bold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}` : 'font-medium text-gray-800'}`}>
+                {s.sign}{formatCurrency(s.displayValue)}
+              </span>
+            </div>
+          )
+        })}
       </div>
 
-      <div className="my-2.5 border-t border-warm-100" />
-
-      <div className="space-y-1.5">
-        {outRows.map((row) => <Row key={row.id} row={row} />)}
-      </div>
-
-      {/* Result */}
-      <div className="mt-3 pt-3 border-t border-warm-200">
-        <div className="flex items-center gap-3">
-          <span className={`text-xs w-24 md:w-28 text-right flex-shrink-0 font-semibold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
-            {net < 0 ? 'Underskott' : 'Överskott'}
-          </span>
-          <div className="flex-1 relative h-6 bg-warm-50 rounded-md overflow-hidden">
-            <div
-              className="absolute inset-y-0 left-0 rounded-md"
-              style={{ width: `${toPct(Math.abs(net))}%`, backgroundColor: net < 0 ? '#ef4444' : '#10b981' }}
-            />
-          </div>
-          <span className={`text-sm w-24 text-right flex-shrink-0 tabular-nums font-bold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
-            {net < 0 ? '−' : '+'}{formatCurrency(Math.abs(net))}
-          </span>
-        </div>
-        {net < 0 && (
-          <p className="text-xs text-gray-400 mt-2 ml-[6.75rem] md:ml-[7.75rem]">
-            Utgifter och sparande översteg inkomsten med {formatCurrency(Math.abs(net))} denna månad.
-          </p>
-        )}
-      </div>
+      {net < 0 && (
+        <p className="text-xs text-gray-400 mt-3 ml-[6.75rem] md:ml-[7.75rem]">
+          Utgifter och sparande översteg inkomsten med {formatCurrency(Math.abs(net))} denna månad.
+        </p>
+      )}
 
       {selected && (
         <div className="mt-4 border border-warm-200 rounded-lg overflow-hidden">
