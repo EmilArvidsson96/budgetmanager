@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Trash2, Settings as SettingsIcon, TrendingUp, TrendingDown, AlertTriangle, Download } from 'lucide-react'
 import { Select } from '@/components/ui/Select'
@@ -31,6 +31,46 @@ const TYPE_LABELS: Record<LiquidityEntry['type'], string> = {
   expense: 'Utgift',
   transfer: 'Överföring',
   loan_payment: 'Lånebetal.',
+}
+
+function InlineNumber({
+  value,
+  onCommit,
+  format,
+  placeholder,
+}: {
+  value: number | undefined
+  onCommit: (v: number | null) => void
+  format: (v: number) => string
+  placeholder?: string
+}) {
+  const [editing, setEditing] = useState(false)
+  const [raw, setRaw] = useState('')
+  const ref = useRef<HTMLInputElement>(null)
+
+  const commit = () => {
+    setEditing(false)
+    const cleaned = raw.replace(',', '.').trim()
+    if (cleaned === '') { onCommit(null); return }
+    const parsed = parseFloat(cleaned)
+    if (isNaN(parsed)) { onCommit(null); return }
+    onCommit(parsed)
+  }
+
+  return (
+    <input
+      ref={ref}
+      value={editing ? raw : value != null ? format(value) : ''}
+      placeholder={placeholder ?? '–'}
+      onFocus={() => { setEditing(true); setRaw(value != null ? String(value) : '') }}
+      onChange={(e) => setRaw(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') ref.current?.blur() }}
+      className="w-full text-right text-sm tabular-nums rounded px-2 py-1 bg-transparent border border-transparent
+        hover:border-warm-200 focus:outline-none focus:ring-1 focus:ring-brand-400 focus:bg-white focus:border-transparent
+        text-gray-600 placeholder:text-gray-300"
+    />
+  )
 }
 
 function tickFmt(v: number): string {
@@ -283,8 +323,8 @@ export function PlanView() {
               <h3 className="font-semibold text-gray-900">Innehav & antaganden</h3>
               <p className="text-sm text-gray-500">Nuvärde → prognos om {horizon} mån</p>
             </div>
-            <Link to="/installningar" className="text-sm text-brand-600 hover:underline flex items-center gap-1">
-              <SettingsIcon className="w-3.5 h-3.5" /> Redigera
+            <Link to="/installningar" className="text-sm text-gray-400 hover:text-gray-600 flex items-center gap-1">
+              <SettingsIcon className="w-3.5 h-3.5" /> Mer
             </Link>
           </div>
           <div className="overflow-x-auto">
@@ -303,24 +343,56 @@ export function PlanView() {
                   const acc = settings.accounts.find((x) => x.id === a.id)
                   const cur = now.values[a.id] ?? 0
                   const fut = end.values[a.id] ?? 0
+                  const isLiability = a.role === 'liability'
+
+                  const handleReturn = (v: number | null) => {
+                    if (!acc) return
+                    if (isLiability) {
+                      store.upsertAccount({ ...acc, interestRate: v ?? undefined })
+                    } else {
+                      store.upsertAccount({ ...acc, expectedReturn: v != null ? v / 100 : undefined })
+                    }
+                  }
+                  const handleContribution = (v: number | null) => {
+                    if (!acc) return
+                    if (isLiability) {
+                      store.upsertAccount({ ...acc, monthlyPayment: v ?? undefined })
+                    } else {
+                      store.upsertAccount({ ...acc, monthlyContribution: v ?? undefined })
+                    }
+                  }
+
+                  const returnValue = isLiability
+                    ? acc?.interestRate
+                    : acc?.expectedReturn != null ? acc.expectedReturn * 100 : undefined
+                  const contributionValue = isLiability ? acc?.monthlyPayment : acc?.monthlyContribution
+
                   return (
                     <tr key={a.id} className="border-t border-gray-100">
-                      <td className="px-4 py-2.5">
+                      <td className="px-4 py-2">
                         <span className="font-medium text-gray-800">{a.name}</span>
                         <span className="ml-2 text-xs text-gray-400">
                           {a.role === 'liquid' ? 'Likvid' : a.role === 'liability' ? 'Skuld' : 'Tillgång'}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-right text-gray-600">
-                        {acc?.expectedReturn != null ? `${(acc.expectedReturn * 100).toFixed(1)} %` : a.role === 'liability' && acc?.interestRate != null ? `${acc.interestRate} %` : '–'}
+                      <td className="px-1 py-1">
+                        <InlineNumber
+                          value={returnValue}
+                          onCommit={handleReturn}
+                          format={(v) => `${v.toFixed(1)} %`}
+                          placeholder="0.0 %"
+                        />
                       </td>
-                      <td className="px-4 py-2.5 text-right text-gray-600">
-                        {a.role === 'liability'
-                          ? acc?.monthlyPayment ? formatCurrency(acc.monthlyPayment) : '–'
-                          : acc?.monthlyContribution ? formatCurrency(acc.monthlyContribution) : '–'}
+                      <td className="px-1 py-1">
+                        <InlineNumber
+                          value={contributionValue}
+                          onCommit={handleContribution}
+                          format={(v) => Math.round(v).toLocaleString('sv-SE')}
+                          placeholder="0"
+                        />
                       </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-gray-700">{formatCurrency(cur)}</td>
-                      <td className={`px-4 py-2.5 text-right tabular-nums font-medium ${fut >= cur ? 'text-gray-900' : 'text-red-600'}`}>
+                      <td className="px-4 py-2 text-right tabular-nums text-gray-700">{formatCurrency(cur)}</td>
+                      <td className={`px-4 py-2 text-right tabular-nums font-medium ${fut >= cur ? 'text-gray-900' : 'text-red-600'}`}>
                         {formatCurrency(fut)}
                       </td>
                     </tr>
@@ -330,7 +402,7 @@ export function PlanView() {
             </table>
           </div>
           <p className="text-xs text-gray-400 px-5 py-3 border-t border-gray-100">
-            Sparande styrs av kontonas månadsinsättning ovan — inte av budgetens sparkategorier — för att undvika dubbelräkning.
+            Klicka på en cell för att redigera. Avkastning i % per år — insättning/amortering i kr/mån. Sparande styrs härifrån, inte av sparkategorier i budgeten.
           </p>
         </Card>
 
