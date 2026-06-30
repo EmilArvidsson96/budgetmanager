@@ -289,6 +289,135 @@ function migrateV8(raw: Record<string, unknown>): Record<string, unknown> {
   }
 }
 
+// v9 → v10: merge orphaned top-level income categories into the canonical 'income'
+// category as subcategories. These could have been created by the import flow before
+// handleCreateCategory was fixed to add subcategories instead of new top-level cats.
+function migrateV9(raw: Record<string, unknown>): Record<string, unknown> {
+  const settings = { ...(raw.settings as AppSettings) }
+  const cats: CategoryDef[] = settings.categories ?? DEFAULT_CATEGORIES
+
+  // Any category with type 'income' that is not the canonical 'income' category is orphaned.
+  const orphaned = cats.filter((c) => c.type === 'income' && c.id !== 'income')
+  if (orphaned.length === 0) return raw
+
+  const orphanedIds = new Set(orphaned.map((c) => c.id))
+  const incomeCat = cats.find((c) => c.id === 'income')
+  if (!incomeCat) return raw
+
+  // Add orphaned categories as subcategories under 'income', using their id as subcategory id.
+  const newSubs = orphaned.map((c) => ({ id: c.id, name: c.name, parentId: 'income' }))
+  settings.categories = cats
+    .filter((c) => !orphanedIds.has(c.id))
+    .map((c) => c.id === 'income' ? { ...c, subcategories: [...c.subcategories, ...newSubs] } : c)
+
+  // Remap Zlantar rules.
+  settings.zlantarCategoryRules = (settings.zlantarCategoryRules ?? []).map((r) =>
+    orphanedIds.has(r.appCategoryId)
+      ? { ...r, appCategoryId: 'income', appSubcategoryId: r.appCategoryId }
+      : r
+  )
+
+  // Remap budget baseline entries.
+  const baseline = raw.budgetBaseline as BudgetBaseline | undefined
+  let newBaseline = baseline
+  if (baseline) {
+    const orphanedLines = baseline.categories.filter((c) => orphanedIds.has(c.categoryId))
+    if (orphanedLines.length > 0) {
+      const newSubTargets = orphanedLines.map((e) => ({ subcategoryId: e.categoryId, target: e.target }))
+      const hasIncomeEntry = baseline.categories.some((c) => c.categoryId === 'income')
+      const updatedCats: BaselineCategory[] = baseline.categories
+        .filter((c) => !orphanedIds.has(c.categoryId))
+        .map((c) =>
+          c.categoryId === 'income'
+            ? { ...c, bySub: true, subTargets: [...(c.subTargets ?? []), ...newSubTargets] }
+            : c
+        )
+      if (!hasIncomeEntry) {
+        updatedCats.push({
+          categoryId: 'income',
+          target: orphanedLines.reduce((s, e) => s + e.target, 0),
+          bySub: true,
+          subTargets: newSubTargets,
+        })
+      }
+      newBaseline = { ...baseline, categories: updatedCats }
+    }
+  }
+
+  // Remap budget overrides (monthId → categoryId → amount).
+  const overrides = raw.budgetOverrides as Record<string, Record<string, number>> | undefined
+  let newOverrides = overrides
+  if (overrides) {
+    newOverrides = {}
+    for (const [monthId, monthMap] of Object.entries(overrides)) {
+      const newMonth: Record<string, number> = {}
+      for (const [catId, amount] of Object.entries(monthMap)) {
+        if (orphanedIds.has(catId)) {
+          newMonth['income'] = (newMonth['income'] ?? 0) + amount
+        } else {
+          newMonth[catId] = amount
+        }
+      }
+      newOverrides[monthId] = newMonth
+    }
+  }
+
+  // Remap actuals entries.
+  const actuals = raw.actuals as Record<string, MonthlyActuals> | undefined
+  let newActuals = actuals
+  if (actuals) {
+    newActuals = {}
+    for (const [monthId, monthActuals] of Object.entries(actuals)) {
+      newActuals[monthId] = {
+        ...monthActuals,
+        entries: monthActuals.entries.map((e) =>
+          orphanedIds.has(e.categoryId)
+            ? { ...e, categoryId: 'income', subcategoryId: e.categoryId, subcategoryName: e.categoryName }
+            : e
+        ),
+      }
+    }
+  }
+
+  // Remap planGrid categoryIds.
+  const planGrid = raw.planGrid as PlanGridConfig | undefined
+  let newPlanGrid = planGrid
+  if (planGrid?.categoryIds) {
+    const hasIncome = planGrid.categoryIds.includes('income')
+    const ids = planGrid.categoryIds.reduce<string[]>((acc, id) => {
+      if (orphanedIds.has(id)) {
+        if (!hasIncome && !acc.includes('income')) acc.push('income')
+      } else {
+        acc.push(id)
+      }
+      return acc
+    }, [])
+    newPlanGrid = { ...planGrid, categoryIds: ids }
+  }
+
+  // Remap transaction overrides.
+  const txOverrides = raw.transactionOverrides as Record<string, TxOverride> | undefined
+  let newTxOverrides = txOverrides
+  if (txOverrides) {
+    newTxOverrides = {}
+    for (const [key, override] of Object.entries(txOverrides)) {
+      newTxOverrides[key] = orphanedIds.has(override.categoryId)
+        ? { ...override, categoryId: 'income', subcategoryId: override.categoryId }
+        : override
+    }
+  }
+
+  return {
+    ...raw,
+    settings,
+    budgetBaseline: newBaseline,
+    budgetOverrides: newOverrides,
+    actuals: newActuals,
+    planGrid: newPlanGrid,
+    transactionOverrides: newTxOverrides,
+  }
+}
+
 // Rebuild one already-imported month's actuals from allTransactions + overrides,
 // preserving the snapshot's accountBalances / importedAt. Runs after every
 // re-categorization so aggregated budget totals stay in sync with the transactions.
@@ -740,7 +869,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 9,
+      version: 10,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
@@ -752,6 +881,7 @@ export const useAppStore = create<AppStore>()(
         if (version < 7) state = migrateV6(state)
         if (version < 8) state = migrateV7(state)
         if (version < 9) state = migrateV8(state)
+        if (version < 10) state = migrateV9(state)
         return state
       },
     }
