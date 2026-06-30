@@ -7,15 +7,17 @@ import {
   HelpCircle,
   Receipt,
   ListTree,
+  List,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
-  { to: '/plan',           icon: LineChart,     label: 'Plan',          short: 'Plan' },
-  { to: '/floede',         icon: ListTree,      label: 'Flöde',         short: 'Flöde' },
-  { to: '/avstamning',     icon: CheckCircle2,  label: 'Avstämning',    short: 'Avst.' },
-  { to: '/kvitton',        icon: Receipt,       label: 'Matkvitton',    short: 'Kvitto' },
-  { to: '/installningar',  icon: Settings,      label: 'Inställningar', short: 'Inst.' },
-  { to: '/hjalp',          icon: HelpCircle,    label: 'Hjälp',         short: 'Hjälp' },
+  { to: '/plan',           icon: LineChart,     label: 'Plan',           short: 'Plan' },
+  { to: '/floede',         icon: ListTree,      label: 'Flöde',          short: 'Flöde' },
+  { to: '/transaktioner',  icon: List,          label: 'Transaktioner',  short: 'Trans.' },
+  { to: '/avstamning',     icon: CheckCircle2,  label: 'Avstämning',     short: 'Avst.' },
+  { to: '/kvitton',        icon: Receipt,       label: 'Matkvitton',     short: 'Kvitto' },
+  { to: '/installningar',  icon: Settings,      label: 'Inställningar',  short: 'Inst.' },
+  { to: '/hjalp',          icon: HelpCircle,    label: 'Hjälp',          short: 'Hjälp' },
 ]
 
 export function Sidebar() {
