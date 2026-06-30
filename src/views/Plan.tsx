@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { Plus, Trash2, Settings as SettingsIcon, TrendingUp, TrendingDown, AlertTriangle, Download } from 'lucide-react'
 import { Select } from '@/components/ui/Select'
 import {
-  ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend,
+  ComposedChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend,
 } from 'recharts'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
@@ -120,15 +120,16 @@ export function PlanView() {
   )
 
   const assetAccounts = accounts.filter((a) => a.role === 'asset')
-  const hasLiabilities = accounts.some((a) => a.role === 'liability')
+  const liabilityAccounts = accounts.filter((a) => a.role === 'liability')
+  const hasLiabilities = liabilityAccounts.length > 0
 
   // ── Chart data ────────────────────────────────────────────────────────────
   const chartData = months.map((m) => {
     const row: Record<string, number | string> = { label: m.label }
     row['Likvida medel'] = Math.round(m.liquidity)
     for (const a of assetAccounts) row[a.name] = Math.round(m.values[a.id] ?? 0)
+    for (const l of liabilityAccounts) row[l.name] = Math.round(m.values[l.id] ?? 0)
     row['Nettoförmögenhet'] = Math.round(m.netWorth)
-    if (hasLiabilities) row['Skulder'] = Math.round(m.totalLiabilities)
     return row
   })
 
@@ -255,30 +256,39 @@ export function PlanView() {
 
         {/* Net worth composition */}
         <Card>
-          <CardHeader title="Förmögenhet över tid" subtitle="Hur tillgångarna ackumuleras — staplat per tillgång" />
-          <ResponsiveContainer width="100%" height={300}>
-            <ComposedChart data={chartData}>
+          <CardHeader title="Förmögenhet över tid" subtitle="Tillgångar (ovan noll) och skulder (under noll) staplat per konto — nettoförmögenhet som linje" />
+          <ResponsiveContainer width="100%" height={320}>
+            <ComposedChart data={chartData} barCategoryGap="20%">
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
               <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(v) => formatCurrency(Number(v ?? 0))} labelStyle={{ fontWeight: 600 }} />
+              <Tooltip
+                formatter={(v, name) => [formatCurrency(Number(v ?? 0)), name]}
+                labelStyle={{ fontWeight: 600 }}
+              />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Area type="monotone" dataKey="Likvida medel" stackId="assets" stroke={LIQUID_COLOR} fill={LIQUID_COLOR} fillOpacity={0.25} strokeWidth={1.5} />
+              <ReferenceLine y={0} stroke="#9ca3af" strokeWidth={1} />
+              {/* All bars share one stackId — Recharts renders positives above zero, negatives below */}
+              <Bar dataKey="Likvida medel" stackId="wealth" fill={LIQUID_COLOR} fillOpacity={0.85} />
               {assetAccounts.map((a, i) => (
-                <Area
+                <Bar
                   key={a.id}
-                  type="monotone"
                   dataKey={a.name}
-                  stackId="assets"
-                  stroke={ASSET_COLORS[i % ASSET_COLORS.length]}
+                  stackId="wealth"
                   fill={ASSET_COLORS[i % ASSET_COLORS.length]}
-                  fillOpacity={0.25}
-                  strokeWidth={1.5}
+                  fillOpacity={0.85}
                 />
               ))}
-              {hasLiabilities && (
-                <Line type="monotone" dataKey="Skulder" stroke={DEBT_COLOR} strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
-              )}
+              {liabilityAccounts.map((l, i) => (
+                <Bar
+                  key={l.id}
+                  dataKey={l.name}
+                  stackId="wealth"
+                  fill={DEBT_COLOR}
+                  fillOpacity={0.7 + i * 0.1}
+                />
+              ))}
+              {/* Net worth line floating across both stacks */}
               <Line type="monotone" dataKey="Nettoförmögenhet" stroke={NETWORTH_COLOR} strokeWidth={2.5} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
