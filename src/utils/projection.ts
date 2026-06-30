@@ -99,8 +99,8 @@ function resolveCarryMonthly(state: AppState, monthId: string) {
 // budgetHelpers.getYearlyMonthData (monthly budget → custom month → equal split),
 // extended with carry-forward so future months without a budget reuse the latest
 // known one. Unlike that helper we divide regardless of sign so expenses (stored
-// negative) are included in the forecast.
-function budgetedAmount(state: AppState, monthId: string, categoryId: string): number {
+// negative) are included in the forecast. Exported for plan-vs-actual comparisons.
+export function budgetedAmount(state: AppState, monthId: string, categoryId: string): number {
   const year = parseInt(monthId.slice(0, 4))
   const month = parseInt(monthId.slice(5, 7))
 

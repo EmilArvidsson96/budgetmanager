@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, Search, X, Pencil, RotateCcw } from 'lucide-react'
+import type { ElementType, ReactNode } from 'react'
+import { Link } from 'react-router-dom'
+import { ChevronLeft, ChevronRight, Search, X, Pencil, RotateCcw, Upload, Tag, ArrowLeftRight, AlertTriangle, Banknote, CheckCircle2, TrendingUp } from 'lucide-react'
 import {
   PieChart, Pie, Cell,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -15,9 +17,10 @@ import {
   makeMonthId,
   formatCurrency,
 } from '@/utils/budgetHelpers'
+import { budgetedAmount } from '@/utils/projection'
 import { getMonthIdForDate } from '@/utils/periodUtils'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
-import { txKey } from '@/utils/transferReconciliation'
+import { txKey, reconciledKeysFromRecords, reconcileTransfers } from '@/utils/transferReconciliation'
 import { GROCERY_CATEGORY_LABELS } from '@/types'
 import type {
   CategoryDef,
@@ -26,6 +29,7 @@ import type {
   TxOverride,
   GroceryReceipt,
   GroceryCategory,
+  TransferMatch,
 } from '@/types'
 
 type RuleTarget = { appCategoryId: string; appSubcategoryId?: string }
@@ -107,7 +111,33 @@ interface TrendDatum {
   [categoryId: string]: string | number
 }
 
-export function TransactionsView() {
+
+interface SubTimelineEntry {
+  id: string
+  name: string
+  color: string
+}
+
+interface CatTimelineResult {
+  cat: CategoryDef
+  rows: TrendDatum[]
+  activeSubs: SubTimelineEntry[]
+}
+
+// Generate lighter shades of baseColor for each subcategory index.
+function derivedSubColor(baseColor: string, index: number, total: number): string {
+  if (!baseColor || !baseColor.startsWith('#') || baseColor.length < 7) return '#94a3b8'
+  const r = parseInt(baseColor.slice(1, 3), 16)
+  const g = parseInt(baseColor.slice(3, 5), 16)
+  const b = parseInt(baseColor.slice(5, 7), 16)
+  const steps = Math.max(total, 1)
+  const factor = steps <= 1 ? 0 : (index / steps) * 0.62
+  const blend = (c: number) => Math.round(c + (255 - c) * factor)
+  const toHex = (n: number) => n.toString(16).padStart(2, '0')
+  return `#${toHex(blend(r))}${toHex(blend(g))}${toHex(blend(b))}`
+}
+
+export function FlowView() {
   const today = new Date()
   const [year, setYear] = useState(today.getFullYear())
   const [month, setMonth] = useState(today.getMonth() + 1)
@@ -115,11 +145,17 @@ export function TransactionsView() {
   const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [view, setView] = useState<'categories' | 'transfers'>('categories')
+  const [openInbox, setOpenInbox] = useState<string | null>(null)
+  const [selectedCatId, setSelectedCatId] = useState<string | null>(null)
+  const largeTxThreshold = 5000
 
-  const { settings, allTransactions, transactionOverrides, groceryReceipts } = useAppStore()
+  const store = useAppStore()
+  const { settings, allTransactions, transactionOverrides, groceryReceipts, reconciliations } = store
   const { categories, zlantarCategoryRules, monthStartDay, monthStartBusinessDay } = settings
 
   const monthId = makeMonthId(year, month)
+
+  const reconciledKeys = useMemo(() => reconciledKeysFromRecords(reconciliations), [reconciliations])
 
   const prevMonth = () => {
     if (month === 1) { setMonth(12); setYear((y) => y - 1) }
@@ -139,6 +175,7 @@ export function TransactionsView() {
     for (const tx of allTransactions) {
       if (!tx.date) continue
       if (tx.transaction_type === 'transfer') continue
+      if (reconciledKeys.has(txKey(tx))) continue
       if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) continue
       if (searchLower) {
         const hay = `${tx.description ?? ''} ${tx.account_name ?? ''}`.toLowerCase()
@@ -189,7 +226,7 @@ export function TransactionsView() {
         }
       })
       .filter((g) => g.count > 0)
-  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, monthId, monthStartDay, monthStartBusinessDay, search])
+  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, monthId, monthStartDay, monthStartBusinessDay, search, reconciledKeys])
 
   // Transfers for the selected month (own-account transfers — excluded from budget
   // totals; surfaced here so you can see what was moved).
@@ -211,6 +248,73 @@ export function TransactionsView() {
 
   const grandTotal = groups.reduce((s, g) => s + g.total, 0)
   const grandCount = groups.reduce((s, g) => s + g.count, 0)
+
+  // ── Inbox signal 1: uncategorized transactions (resolved to 'other') ──────────
+  const uncategorizedTxs = useMemo<ResolvedTx[]>(() => {
+    const g = groups.find((x) => x.cat.id === 'other')
+    if (!g) return []
+    return [...g.subgroups.flatMap((s) => s.transactions), ...g.uncategorized]
+      .sort((a, b) => b.tx.date.localeCompare(a.tx.date))
+  }, [groups])
+
+  // ── Inbox signal 2: pending transfer matches between owners (not yet reconciled)
+  const pendingMatches = useMemo<TransferMatch[]>(() => {
+    if (!settings.accounts.some((a) => a.owner?.trim())) return []
+    return reconcileTransfers({
+      transactions: allTransactions,
+      accounts: settings.accounts,
+      partnerName: settings.partnerName,
+      alreadyReconciledKeys: reconciledKeys,
+    })
+  }, [allTransactions, settings.accounts, settings.partnerName, reconciledKeys])
+
+  // ── Inbox signal 3: categories over plan this month ───────────────────────────
+  const overBudget = useMemo(() => {
+    return categories
+      .filter((c) => c.type === 'expense')
+      .map((cat) => {
+        const g = groups.find((x) => x.cat.id === cat.id)
+        const actual = Math.abs(g?.total ?? 0)
+        const budget = Math.abs(budgetedAmount(store, monthId, cat.id))
+        return { cat, actual, budget }
+      })
+      .filter((r) => r.budget > 0 && r.actual > r.budget)
+      .sort((a, b) => b.actual - b.budget - (a.actual - a.budget))
+  }, [groups, categories, store, monthId])
+
+  // ── Inbox signal 4: large transactions this month ─────────────────────────────
+  const largeTxs = useMemo(() => {
+    return allTransactions
+      .filter(
+        (tx) =>
+          tx.date &&
+          tx.transaction_type !== 'transfer' &&
+          !reconciledKeys.has(txKey(tx)) &&
+          getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) === monthId &&
+          Math.abs(tx.amount) >= largeTxThreshold
+      )
+      .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
+  }, [allTransactions, reconciledKeys, monthId, monthStartDay, monthStartBusinessDay])
+
+  // Plan-vs-actual rows for the month (income/expense/savings with a budget or spend).
+  const planRows = useMemo(() => {
+    return categories
+      .filter((c) => c.type === 'expense' || c.type === 'income' || c.type === 'savings')
+      .map((cat) => {
+        const g = groups.find((x) => x.cat.id === cat.id)
+        const actual = Math.abs(g?.total ?? 0)
+        const budget = Math.abs(budgetedAmount(store, monthId, cat.id))
+        return { cat, actual, budget }
+      })
+      .filter((r) => r.budget > 0 || r.actual > 0)
+  }, [groups, categories, store, monthId])
+
+  const inboxTotal = uncategorizedTxs.length + pendingMatches.length + overBudget.length + largeTxs.length
+
+  const confirmMatch = (m: TransferMatch) => {
+    store.addReconciliationRecord({ id: `rec-${m.id}`, importedAt: new Date().toISOString(), matches: [m] })
+  }
+  const toggleInbox = (key: string) => setOpenInbox((cur) => (cur === key ? null : key))
 
   // Donut: spending share by expense category for the selected month.
   const donutData = useMemo<DonutSlice[]>(() => {
@@ -289,6 +393,83 @@ export function TransactionsView() {
     expenseCategories.some((c) => (d[c.id] as number) > 0)
   )
 
+
+  // 12-month subcategory breakdown for the selected category (no search filter — shows true trend).
+  const catTimeline = useMemo<CatTimelineResult | null>(() => {
+    if (!selectedCatId) return null
+    const cat = categories.find((c) => c.id === selectedCatId)
+    if (!cat) return null
+
+    const catIds = new Set(categories.map((c) => c.id))
+    const ruleMap = buildRuleLookup(zlantarCategoryRules ?? DEFAULT_ZLANTAR_RULES)
+
+    const monthIds: string[] = []
+    for (let i = 11; i >= 0; i--) {
+      let m = month - i
+      let y = year
+      while (m <= 0) { m += 12; y-- }
+      monthIds.push(makeMonthId(y, m))
+    }
+    const monthSet = new Set(monthIds)
+
+    const buckets: Record<string, Record<string, number>> = {}
+    for (const id of monthIds) buckets[id] = {}
+
+    for (const tx of allTransactions) {
+      if (!tx.date || tx.transaction_type === 'transfer') continue
+      const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay)
+      if (!monthSet.has(mid)) continue
+      const { catId, subId } = resolveCategory(
+        tx.category ?? '', tx.subcategory ?? '',
+        catIds, ruleMap, transactionOverrides[txKey(tx)]
+      )
+      if (catId !== selectedCatId) continue
+      const subKey = subId || '__none__'
+      buckets[mid][subKey] = (buckets[mid][subKey] ?? 0) + Math.abs(tx.amount)
+    }
+
+    const rows = monthIds.map((id, idx) => {
+      const [yStr, mStr] = id.split('-')
+      const mNum = parseInt(mStr)
+      const yNum = parseInt(yStr)
+      const prevId = idx > 0 ? monthIds[idx - 1] : null
+      const prevYear = prevId ? parseInt(prevId.split('-')[0]) : -1
+      const showYear = yNum !== prevYear
+      const row: TrendDatum = {
+        monthId: id,
+        label: showYear
+          ? `${MONTH_NAMES_SHORT[mNum - 1]} '${String(yNum).slice(2)}`
+          : MONTH_NAMES_SHORT[mNum - 1],
+      }
+      for (const sub of cat.subcategories) {
+        row[sub.id] = buckets[id][sub.id] ?? 0
+      }
+      row['__none__'] = buckets[id]['__none__'] ?? 0
+      return row
+    })
+
+    const hasData = rows.some((r) =>
+      cat.subcategories.some((s) => (r[s.id] as number) > 0) || (r['__none__'] as number) > 0
+    )
+    if (!hasData) return null
+
+    const hasNone = rows.some((r) => (r['__none__'] as number) > 0)
+    const qualifiedSubs = cat.subcategories.filter((s) =>
+      rows.some((r) => (r[s.id] as number) > 0)
+    )
+    const totalColors = qualifiedSubs.length + (hasNone ? 1 : 0)
+    const activeSubs: SubTimelineEntry[] = qualifiedSubs.map((s, i) => ({
+      id: s.id,
+      name: s.name,
+      color: derivedSubColor(cat.color ?? '#94a3b8', i, totalColors),
+    }))
+    if (hasNone) {
+      activeSubs.push({ id: '__none__', name: 'Övrigt', color: '#cbd5e1' })
+    }
+
+    return { cat, rows, activeSubs }
+  }, [selectedCatId, allTransactions, transactionOverrides, categories, zlantarCategoryRules, year, month, monthStartDay, monthStartBusinessDay])
+
   const toggleCat = (id: string) => {
     setExpandedCats((prev) => {
       const next = new Set(prev)
@@ -309,8 +490,13 @@ export function TransactionsView() {
   return (
     <Layout>
       <PageHeader
-        title="Transaktioner"
-        subtitle="Bläddra alla transaktioner per kategori, underkategori och månad."
+        title="Flöde"
+        subtitle="Följ upp transaktionerna och håll dig inom planen."
+        actions={
+          <Link to="/importera">
+            <Button variant="secondary" size="sm"><Upload className="w-4 h-4" /> Importera</Button>
+          </Link>
+        }
       />
 
       {/* Month navigator */}
@@ -333,6 +519,94 @@ export function TransactionsView() {
           <ChevronRight className="w-4 h-4" />
         </button>
       </div>
+
+      {/* Attention inbox */}
+      <Card padding={false} className="mb-5 overflow-hidden">
+        <div className="px-4 md:px-5 py-3.5 border-b border-warm-100 flex items-center justify-between">
+          <h3 className="font-semibold text-gray-900 text-sm">Att åtgärda</h3>
+          {inboxTotal === 0 ? (
+            <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Allt hanterat</span>
+          ) : (
+            <span className="text-xs text-gray-400">{inboxTotal} poster</span>
+          )}
+        </div>
+
+        <InboxRow icon={Tag} color="amber" label="Okategoriserade poster" count={uncategorizedTxs.length}
+          open={openInbox === 'uncat'} onToggle={() => toggleInbox('uncat')}>
+          {uncategorizedTxs.slice(0, 12).map((t) => (
+            <TransactionRow key={txKey(t.tx)} tx={t.tx} categories={categories} catId="other" subId={undefined} />
+          ))}
+          {uncategorizedTxs.length > 12 && (
+            <p className="text-xs text-gray-400 px-4 md:px-5 py-2">+{uncategorizedTxs.length - 12} till — öppna kategorin nedan</p>
+          )}
+        </InboxRow>
+
+        <InboxRow icon={ArrowLeftRight} color="blue" label="Väntande överföringar att kvitta" count={pendingMatches.length}
+          open={openInbox === 'transfers'} onToggle={() => toggleInbox('transfers')}>
+          {pendingMatches.slice(0, 12).map((m) => (
+            <div key={m.id} className="flex items-center gap-2 px-4 md:px-5 py-2.5 border-t border-warm-100">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-gray-700 truncate">{m.ownerA} → {m.ownerB}: {m.descriptionA || m.descriptionB || '—'}</div>
+                <div className="text-[11px] text-gray-400 truncate tabular-nums">{m.dateA.slice(0, 10)}{m.daysDiff > 0 ? ` · ${m.daysDiff} dgr` : ''} · {m.accountAName} ↔ {m.accountBName}</div>
+              </div>
+              <span className="text-sm tabular-nums font-medium text-gray-700 shrink-0">{formatCurrency(m.amount)}</span>
+              <Button size="sm" variant="secondary" onClick={() => confirmMatch(m)}>Kvitta</Button>
+            </div>
+          ))}
+        </InboxRow>
+
+        <InboxRow icon={AlertTriangle} color="red" label="Kategorier över plan" count={overBudget.length}
+          open={openInbox === 'over'} onToggle={() => toggleInbox('over')}>
+          {overBudget.map((r) => (
+            <div key={r.cat.id} className="flex items-center gap-2 px-4 md:px-5 py-2.5 border-t border-warm-100">
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: r.cat.color ?? '#94a3b8' }} />
+              <span className="text-sm text-gray-700 flex-1 truncate">{r.cat.name}</span>
+              <span className="text-xs text-gray-400 tabular-nums">{formatCurrency(r.actual)} / {formatCurrency(r.budget)}</span>
+              <span className="text-sm tabular-nums font-medium text-red-600 shrink-0">+{formatCurrency(r.actual - r.budget)}</span>
+            </div>
+          ))}
+        </InboxRow>
+
+        <InboxRow icon={Banknote} color="gray" label={`Stora transaktioner (≥ ${formatCurrency(largeTxThreshold)})`} count={largeTxs.length}
+          open={openInbox === 'large'} onToggle={() => toggleInbox('large')} last>
+          {largeTxs.slice(0, 12).map((tx) => (
+            <div key={txKey(tx)} className="flex items-center gap-2 px-4 md:px-5 py-2.5 border-t border-warm-100">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-gray-700 truncate">{tx.description || '—'}</div>
+                <div className="text-[11px] text-gray-400 truncate tabular-nums">{tx.date.slice(0, 10)} · {tx.account_name}</div>
+              </div>
+              <span className={`text-sm tabular-nums font-medium shrink-0 ${tx.amount < 0 ? 'text-red-500' : 'text-emerald-600'}`}>{formatCurrency(tx.amount)}</span>
+            </div>
+          ))}
+        </InboxRow>
+      </Card>
+
+      {/* This month vs plan */}
+      {planRows.length > 0 && (
+        <Card className="mb-5">
+          <CardHeader title="Denna månad mot plan" subtitle={`${MONTH_NAMES_LONG[month - 1]} ${year}`} />
+          <div className="space-y-2.5">
+            {planRows.map((r) => {
+              const pct = r.budget > 0 ? Math.min((r.actual / r.budget) * 100, 100) : 0
+              const over = r.cat.type === 'expense' && r.budget > 0 && r.actual > r.budget
+              const barColor = over ? '#dc2626' : (r.cat.color ?? '#94a3b8')
+              return (
+                <div key={r.cat.id}>
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className="text-gray-700">{r.cat.name}</span>
+                    <span className="tabular-nums text-gray-400">
+                      {formatCurrency(r.actual)}{r.budget > 0 ? ` / ${formatCurrency(r.budget)}` : ' (ingen plan)'}
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-warm-100 overflow-hidden">
+                    <div className="h-full rounded-full transition-all" style={{ width: `${r.budget > 0 ? pct : 0}%`, backgroundColor: barColor }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </Card>
+      )}
 
       {/* Search */}
       <div className="relative mb-6">
@@ -375,8 +649,15 @@ export function TransactionsView() {
 
       {view === 'categories' && (
         <>
-          {/* Charts */}
-          {(donutData.length > 0 || trendHasData) && (
+          {/* Charts: category detail drill-down, or month overview */}
+          {catTimeline ? (
+            <CategoryDetailChart
+              cat={catTimeline.cat}
+              rows={catTimeline.rows}
+              activeSubs={catTimeline.activeSubs}
+              onClose={() => setSelectedCatId(null)}
+            />
+          ) : (donutData.length > 0 || trendHasData) && (
             <div className="grid md:grid-cols-2 gap-4 mb-6">
               {donutData.length > 0 && (
                 <Card padding={false} className="p-3 md:p-5">
@@ -384,13 +665,13 @@ export function TransactionsView() {
                     title="Utgifter per kategori"
                     subtitle={`${MONTH_NAMES_LONG[month - 1]} ${year}`}
                   />
-                  <CategoryDonut data={donutData} total={donutTotal} />
+                  <CategoryDonut data={donutData} total={donutTotal} onCategoryClick={setSelectedCatId} />
                 </Card>
               )}
               {trendHasData && (
                 <Card padding={false} className="p-3 md:p-5">
-                  <CardHeader title="Utgifter senaste 6 månaderna" subtitle="Stapel per månad, färg per kategori" />
-                  <CategoryTrendBar data={trendData} categories={expenseCategories} />
+                  <CardHeader title="Utgifter senaste 6 månaderna" subtitle="Klicka på en kategori för att se trend" />
+                  <CategoryTrendBar data={trendData} categories={expenseCategories} onCategoryClick={setSelectedCatId} />
                 </Card>
               )}
             </div>
@@ -424,6 +705,7 @@ export function TransactionsView() {
                   onToggle={() => toggleCat(g.cat.id)}
                   expandedSubs={expandedSubs}
                   onToggleSub={toggleSub}
+                  onCategoryChart={() => setSelectedCatId(g.cat.id)}
                 />
               ))}
             </Card>
@@ -466,6 +748,39 @@ export function TransactionsView() {
   )
 }
 
+// ─── Attention-inbox row (accordion) ─────────────────────────────────────────
+
+function InboxRow({
+  icon: Icon, color, label, count, open, onToggle, last, children,
+}: {
+  icon: ElementType
+  color: 'amber' | 'blue' | 'red' | 'gray'
+  label: string
+  count: number
+  open: boolean
+  onToggle: () => void
+  last?: boolean
+  children: ReactNode
+}) {
+  const colorMap = { amber: 'text-amber-500', blue: 'text-blue-500', red: 'text-red-500', gray: 'text-gray-400' }
+  const disabled = count === 0
+  return (
+    <div className={last ? '' : 'border-b border-warm-100'}>
+      <button
+        onClick={onToggle}
+        disabled={disabled}
+        className={`w-full flex items-center gap-3 px-4 md:px-5 py-3 text-left transition-colors ${disabled ? 'opacity-50 cursor-default' : 'hover:bg-warm-50'}`}
+      >
+        <Icon className={`w-4 h-4 shrink-0 ${colorMap[color]}`} />
+        <span className="text-sm text-gray-700 flex-1">{label}</span>
+        <span className={`text-xs tabular-nums rounded-full px-2 py-0.5 font-medium ${count > 0 ? 'bg-warm-100 text-gray-700' : 'text-gray-300'}`}>{count}</span>
+        {count > 0 && <ChevronRight className={`w-4 h-4 text-gray-300 transition-transform ${open ? 'rotate-90' : ''}`} />}
+      </button>
+      {open && count > 0 && <div className="bg-warm-50/40 pb-1">{children}</div>}
+    </div>
+  )
+}
+
 // ─── Category branch ──────────────────────────────────────────────────────────
 
 function CategoryBranch({
@@ -476,6 +791,7 @@ function CategoryBranch({
   onToggle,
   expandedSubs,
   onToggleSub,
+  onCategoryChart,
 }: {
   group: CatGroup
   categories: CategoryDef[]
@@ -484,6 +800,7 @@ function CategoryBranch({
   onToggle: () => void
   expandedSubs: Set<string>
   onToggleSub: (key: string) => void
+  onCategoryChart?: () => void
 }) {
   const { cat, total, count, subgroups, uncategorized } = group
   const hasBranches = subgroups.length > 0 || uncategorized.length > 0
@@ -505,6 +822,15 @@ function CategoryBranch({
         <Badge variant={cat.type === 'income' ? 'green' : cat.type === 'savings' ? 'blue' : 'gray'} size="sm">
           {cat.type === 'income' ? 'Inkomst' : cat.type === 'savings' ? 'Spar' : 'Utgift'}
         </Badge>
+        {onCategoryChart && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onCategoryChart() }}
+            className="text-gray-300 hover:text-brand-500 transition-colors shrink-0"
+            title="Visa trend över tid"
+          >
+            <TrendingUp className="w-3.5 h-3.5" />
+          </button>
+        )}
         <div className="text-right shrink-0 ml-1 md:ml-3 min-w-[88px]">
           <div className="text-sm font-medium tabular-nums text-gray-800">
             {formatCurrency(total)}
@@ -772,7 +1098,7 @@ function CategoryPicker({
 
 // ─── Category donut ───────────────────────────────────────────────────────────
 
-function CategoryDonut({ data, total }: { data: DonutSlice[]; total: number }) {
+function CategoryDonut({ data, total, onCategoryClick }: { data: DonutSlice[]; total: number; onCategoryClick?: (catId: string) => void }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr] gap-3 items-center">
       <ResponsiveContainer width="100%" height={200}>
@@ -788,7 +1114,12 @@ function CategoryDonut({ data, total }: { data: DonutSlice[]; total: number }) {
             stroke="none"
           >
             {data.map((entry) => (
-              <Cell key={entry.catId} fill={entry.color} />
+              <Cell
+                key={entry.catId}
+                fill={entry.color}
+                style={{ cursor: onCategoryClick ? 'pointer' : 'default' }}
+                onClick={() => onCategoryClick?.(entry.catId)}
+              />
             ))}
           </Pie>
           <Tooltip
@@ -805,7 +1136,11 @@ function CategoryDonut({ data, total }: { data: DonutSlice[]; total: number }) {
       </ResponsiveContainer>
       <div className="space-y-1 max-h-52 overflow-y-auto pr-1">
         {data.map((entry) => (
-          <div key={entry.catId} className="flex items-center gap-2">
+          <div
+            key={entry.catId}
+            className={`flex items-center gap-2 rounded px-1 -mx-1 py-0.5 transition-colors ${onCategoryClick ? 'cursor-pointer hover:bg-warm-100' : ''}`}
+            onClick={() => onCategoryClick?.(entry.catId)}
+          >
             <div
               className="w-2.5 h-2.5 rounded-full shrink-0"
               style={{ backgroundColor: entry.color }}
@@ -830,9 +1165,11 @@ function CategoryDonut({ data, total }: { data: DonutSlice[]; total: number }) {
 function CategoryTrendBar({
   data,
   categories,
+  onCategoryClick,
 }: {
   data: TrendDatum[]
   categories: CategoryDef[]
+  onCategoryClick?: (catId: string) => void
 }) {
   // Only stack categories that have at least one non-zero value to keep the legend tidy.
   const activeCats = categories.filter((c) =>
@@ -865,13 +1202,19 @@ function CategoryTrendBar({
               name={cat.name}
               fill={cat.color ?? '#94a3b8'}
               radius={i === activeCats.length - 1 ? [4, 4, 0, 0] : 0}
+              style={{ cursor: onCategoryClick ? 'pointer' : 'default' }}
+              onClick={() => onCategoryClick?.(cat.id)}
             />
           ))}
         </BarChart>
       </ResponsiveContainer>
       <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
         {activeCats.map((cat) => (
-          <div key={cat.id} className="flex items-center gap-1.5">
+          <div
+            key={cat.id}
+            className={`flex items-center gap-1.5 rounded px-1 -mx-1 py-0.5 transition-colors ${onCategoryClick ? 'cursor-pointer hover:opacity-70' : ''}`}
+            onClick={() => onCategoryClick?.(cat.id)}
+          >
             <div
               className="w-2 h-2 rounded-sm shrink-0"
               style={{ backgroundColor: cat.color ?? '#94a3b8' }}
@@ -881,5 +1224,79 @@ function CategoryTrendBar({
         ))}
       </div>
     </div>
+  )
+}
+
+// ─── Category detail chart (12-month subcategory drill-down) ──────────────────
+
+function CategoryDetailChart({
+  cat,
+  rows,
+  activeSubs,
+  onClose,
+}: {
+  cat: CategoryDef
+  rows: TrendDatum[]
+  activeSubs: SubTimelineEntry[]
+  onClose: () => void
+}) {
+  return (
+    <Card padding={false} className="p-3 md:p-5 mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2 min-w-0">
+          <div
+            className="w-2.5 h-2.5 rounded-full shrink-0"
+            style={{ backgroundColor: cat.color ?? '#94a3b8' }}
+          />
+          <span className="font-medium text-sm text-gray-800 truncate">{cat.name}</span>
+          <span className="text-xs text-gray-400 shrink-0">· senaste 12 månader</span>
+        </div>
+        <button
+          onClick={onClose}
+          className="p-1 rounded-md text-gray-300 hover:text-gray-600 hover:bg-warm-100 transition-colors shrink-0 ml-2"
+          aria-label="Stäng detaljvy"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+      <ResponsiveContainer width="100%" height={220}>
+        <BarChart data={rows} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe0" vertical={false} />
+          <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+          <YAxis
+            width={36}
+            tick={{ fontSize: 10 }}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`)}
+          />
+          <Tooltip
+            cursor={{ fill: '#f5f1e6' }}
+            contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e7e2d3' }}
+            formatter={(v, name) => [formatCurrency(Number(v ?? 0)), String(name)]}
+          />
+          {activeSubs.map((sub, i) => (
+            <Bar
+              key={sub.id}
+              dataKey={sub.id}
+              stackId="sub"
+              name={sub.name}
+              fill={sub.color}
+              radius={i === activeSubs.length - 1 ? [4, 4, 0, 0] : 0}
+            />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
+      {activeSubs.length > 1 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+          {activeSubs.map((sub) => (
+            <div key={sub.id} className="flex items-center gap-1.5">
+              <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: sub.color }} />
+              <span className="text-[11px] text-gray-500">{sub.name}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   )
 }

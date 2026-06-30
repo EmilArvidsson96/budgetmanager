@@ -4,7 +4,6 @@ import {
   CalendarDays,
   CalendarRange,
   Settings,
-  Upload,
   TrendingUp,
   HelpCircle,
   Receipt,
@@ -13,10 +12,9 @@ import {
 
 const NAV_ITEMS = [
   { to: '/plan',           icon: LineChart,     label: 'Plan',          short: 'Plan' },
+  { to: '/floede',         icon: ListTree,      label: 'Flöde',         short: 'Flöde' },
   { to: '/manad',          icon: CalendarDays,  label: 'Månadsbudget',  short: 'Månad' },
   { to: '/ar',             icon: CalendarRange, label: 'Årsbudget',     short: 'År' },
-  { to: '/transaktioner',  icon: ListTree,      label: 'Transaktioner', short: 'Trans.' },
-  { to: '/importera',      icon: Upload,        label: 'Importera',     short: 'Import' },
   { to: '/kvitton',        icon: Receipt,       label: 'Matkvitton',    short: 'Kvitto' },
   { to: '/installningar',  icon: Settings,      label: 'Inställningar', short: 'Inst.' },
   { to: '/hjalp',          icon: HelpCircle,    label: 'Hjälp',         short: 'Hjälp' },

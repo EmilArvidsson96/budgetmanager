@@ -7,7 +7,7 @@ import { ImportView }           from './views/Import'
 import { SettingsView }         from './views/Settings'
 import { HelpView }             from './views/Help'
 import { GroceryReceiptsView }  from './views/GroceryReceipts'
-import { TransactionsView }     from './views/Transactions'
+import { FlowView }             from './views/Transactions'
 import { PinGate }              from './components/PinGate'
 
 export default function App() {
@@ -21,9 +21,10 @@ export default function App() {
         <Route path="/ar"             element={<YearlyBudgetView />} />
         <Route path="/likviditet"     element={<Navigate to="/plan" replace />} />
         <Route path="/likviditet-gammal" element={<LiquidityView />} />
+        <Route path="/floede"         element={<FlowView />} />
+        <Route path="/transaktioner"  element={<Navigate to="/floede" replace />} />
         <Route path="/importera"      element={<ImportView />} />
         <Route path="/kvitton"        element={<GroceryReceiptsView />} />
-        <Route path="/transaktioner"  element={<TransactionsView />} />
         <Route path="/installningar"  element={<SettingsView />} />
         <Route path="/hjalp"          element={<HelpView />} />
       </Routes>
