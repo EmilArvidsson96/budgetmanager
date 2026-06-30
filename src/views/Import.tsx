@@ -779,23 +779,19 @@ function UnknownCategoryRow({
         </Button>
         <Badge variant={suggestedType === 'income' ? 'green' : suggestedType === 'savings' ? 'blue' : 'gray'}>{typeLabel}</Badge>
         <span className="text-xs text-gray-400">eller mappa till</span>
-        <select
-          className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+        <Select
           value={mapCatId}
           onChange={(e) => { setMapCatId(e.target.value); setMapSubId('') }}
-        >
-          <option value="">Välj kategori…</option>
-          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+          options={categories.map((c) => ({ value: c.id, label: c.name }))}
+          placeholder="Välj kategori…"
+        />
         {selectedCat && selectedCat.subcategories.length > 0 && (
-          <select
-            className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+          <Select
             value={mapSubId}
             onChange={(e) => setMapSubId(e.target.value)}
-          >
-            <option value="">(ingen underkategori)</option>
-            {selectedCat.subcategories.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+            options={selectedCat.subcategories.map((s) => ({ value: s.id, label: s.name }))}
+            placeholder="(ingen underkategori)"
+          />
         )}
         <Button size="sm" variant="secondary" disabled={!mapCatId} onClick={() => onMap(mapCatId, mapSubId || undefined)}>
           Mappa
@@ -874,7 +870,7 @@ function ConflictsCard({
   expanded: boolean
   onToggle: () => void
 }) {
-  const prevMap = new Map(previouslyFlagged.map((c) => c.txKey))
+  const prevMap = new Map(previouslyFlagged.map((c) => [c.txKey, c] as const))
 
   const isOld = (c: ConflictItem): boolean => {
     const prev = prevMap.get(c.key)
