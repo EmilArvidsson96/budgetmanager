@@ -23,6 +23,7 @@ import type {
   AccountType,
   ReconciliationRecord,
   TxOverride,
+  MonthClose,
 } from '@/types'
 import { extractOwner, buildMonthEntries } from '@/utils/zlantarParser'
 import { txKey, reconciledKeysFromRecords } from '@/utils/transferReconciliation'
@@ -242,6 +243,11 @@ function migrateV5(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, transactionOverrides, settings: { ...settings, categories } }
 }
 
+// v6 → v7: add monthCloses map for the monthly close/reconciliation ritual.
+function migrateV6(raw: Record<string, unknown>): Record<string, unknown> {
+  return { ...raw, monthCloses: (raw.monthCloses as Record<string, MonthClose>) ?? {} }
+}
+
 // Rebuild one already-imported month's actuals from allTransactions + overrides,
 // preserving the snapshot's accountBalances / importedAt. Runs after every
 // re-categorization so aggregated budget totals stay in sync with the transactions.
@@ -317,6 +323,10 @@ interface AppStore extends AppState {
   addReconciliationRecord: (record: ReconciliationRecord) => void
   removeReconciliationRecord: (id: string) => void
 
+  // Monthly close / reconciliation ritual
+  closeMonth: (close: MonthClose) => void
+  reopenMonth: (monthId: string) => void
+
   // Grocery receipts
   addGroceryReceipt: (receipt: GroceryReceipt) => void
   removeGroceryReceipt: (id: string) => void
@@ -338,6 +348,7 @@ export const useAppStore = create<AppStore>()(
       lastZlantarImport: undefined,
       importSnapshots: [],
       reconciliations: [],
+      monthCloses: {},
 
       updateSettings: (s) =>
         set((state) => ({ settings: { ...state.settings, ...s } })),
@@ -536,6 +547,15 @@ export const useAppStore = create<AppStore>()(
           reconciliations: state.reconciliations.filter((r) => r.id !== id),
         })),
 
+      closeMonth: (close) =>
+        set((state) => ({ monthCloses: { ...state.monthCloses, [close.monthId]: close } })),
+
+      reopenMonth: (monthId) =>
+        set((state) => {
+          const { [monthId]: _, ...rest } = state.monthCloses
+          return { monthCloses: rest }
+        }),
+
       addGroceryReceipt: (receipt) =>
         set((state) => ({ groceryReceipts: [...state.groceryReceipts, receipt] })),
 
@@ -562,7 +582,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 6,
+      version: 7,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
@@ -571,6 +591,7 @@ export const useAppStore = create<AppStore>()(
         if (version < 4) state = migrateV3(state)
         if (version < 5) state = migrateV4(state)
         if (version < 6) state = migrateV5(state)
+        if (version < 7) state = migrateV6(state)
         return state
       },
     }

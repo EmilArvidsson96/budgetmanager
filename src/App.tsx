@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { PlanView }             from './views/Plan'
+import { ReconcileView }        from './views/Reconcile'
 import { MonthlyBudgetView }    from './views/MonthlyBudget'
 import { YearlyBudgetView }     from './views/YearlyBudget'
 import { LiquidityView }        from './views/Liquidity'
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="/likviditet"     element={<Navigate to="/plan" replace />} />
         <Route path="/likviditet-gammal" element={<LiquidityView />} />
         <Route path="/floede"         element={<FlowView />} />
+        <Route path="/avstamning"     element={<ReconcileView />} />
         <Route path="/transaktioner"  element={<Navigate to="/floede" replace />} />
         <Route path="/importera"      element={<ImportView />} />
         <Route path="/kvitton"        element={<GroceryReceiptsView />} />

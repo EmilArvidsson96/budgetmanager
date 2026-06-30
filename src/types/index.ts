@@ -243,6 +243,21 @@ export interface LiquidityPlan {
   notes?: string
 }
 
+// ─── Monthly close / reconciliation ritual ───────────────────────────────────
+
+// A record that a month has been reviewed and "closed". Stores a snapshot of the
+// outcome totals at close time, so the historical result survives later edits to
+// transactions or budgets.
+export interface MonthClose {
+  monthId: string        // 'YYYY-MM'
+  closedAt: string       // ISO timestamp
+  note?: string
+  income: number         // snapshot of actual totals at close
+  expense: number
+  savings: number
+  net: number
+}
+
 // ─── Transfer reconciliation (between owners) ────────────────────────────────
 
 export interface TransferMatch {
@@ -373,4 +388,5 @@ export interface AppState {
   lastZlantarImport?: ZlantarImport
   importSnapshots: ImportSnapshot[]
   reconciliations: ReconciliationRecord[]
+  monthCloses: Record<string, MonthClose>          // key: 'YYYY-MM'
 }
