@@ -6,6 +6,7 @@ import { Select } from '@/components/ui/Select'
 import { MONTH_NAMES_SHORT } from '@/utils/budgetHelpers'
 import { baselineTarget, budgetedAmount } from '@/utils/projection'
 import { getMonthIdForDate } from '@/utils/periodUtils'
+import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import type { CategoryDef } from '@/types'
 
 // Adjustable "coming months" grid. Rows = categories, columns = months — both can
@@ -29,16 +30,17 @@ const fmt = (v: number) => Math.round(v).toLocaleString('sv-SE')
 export function PlanGrid() {
   const store = useAppStore()
   const { categories, monthStartDay, monthStartBusinessDay } = store.settings
+  const { anchors } = useSalaryAnchors()
   const [addCat, setAddCat] = useState('')
 
   const defaultMonths = useMemo(() => {
     const today = new Date()
     const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-    let m = getMonthIdForDate(iso, monthStartDay, monthStartBusinessDay)
+    let m = getMonthIdForDate(iso, monthStartDay, monthStartBusinessDay, anchors)
     const arr = [m]
     for (let i = 0; i < 11; i++) { m = nextMonthId(m); arr.push(m) }
     return arr
-  }, [monthStartDay, monthStartBusinessDay])
+  }, [monthStartDay, monthStartBusinessDay, anchors])
 
   const budgetCats = useMemo(
     () => categories.filter((c) => c.type === 'income' || c.type === 'expense'),

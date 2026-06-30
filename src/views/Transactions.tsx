@@ -21,6 +21,7 @@ import {
 import { budgetedAmount, baselineTarget } from '@/utils/projection'
 import { suggestForCategory, seasonalHint } from '@/utils/budgetSuggestions'
 import { getMonthIdForDate, getPeriodProgress } from '@/utils/periodUtils'
+import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import { txKey, reconciledKeysFromRecords, reconcileTransfers } from '@/utils/transferReconciliation'
 import { GROCERY_CATEGORY_LABELS } from '@/types'
@@ -160,6 +161,7 @@ export function FlowView() {
   const store = useAppStore()
   const { settings, allTransactions, transactionOverrides, groceryReceipts, reconciliations } = store
   const { categories, zlantarCategoryRules, monthStartDay, monthStartBusinessDay } = settings
+  const { anchors, flaggedMonths } = useSalaryAnchors()
 
   const monthId = makeMonthId(year, month)
   const seasonHint = seasonalHint(month)
@@ -185,7 +187,7 @@ export function FlowView() {
       if (!tx.date) continue
       if (tx.transaction_type === 'transfer') continue
       if (reconciledKeys.has(txKey(tx))) continue
-      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) continue
+      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) continue
       if (searchLower) {
         const hay = `${tx.description ?? ''} ${tx.account_name ?? ''}`.toLowerCase()
         if (!hay.includes(searchLower)) continue
@@ -236,7 +238,7 @@ export function FlowView() {
         }
       })
       .filter((g) => g.count > 0)
-  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, monthId, monthStartDay, monthStartBusinessDay, search, reconciledKeys])
+  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, monthId, monthStartDay, monthStartBusinessDay, anchors, search, reconciledKeys])
 
   // Transfers for the selected month (own-account transfers — excluded from budget
   // totals; surfaced here so you can see what was moved).
@@ -252,7 +254,7 @@ export function FlowView() {
           const resolvedCat = categories.find((c) => c.id === override.categoryId)
           if (resolvedCat?.type !== 'transfer') return false
         }
-        if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) return false
+        if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) return false
         if (searchLower) {
           const hay = `${tx.description ?? ''} ${tx.account_name ?? ''}`.toLowerCase()
           if (!hay.includes(searchLower)) return false
@@ -260,7 +262,7 @@ export function FlowView() {
         return true
       })
       .sort((a, b) => b.date.localeCompare(a.date))
-  }, [allTransactions, transactionOverrides, categories, monthId, monthStartDay, monthStartBusinessDay, search])
+  }, [allTransactions, transactionOverrides, categories, monthId, monthStartDay, monthStartBusinessDay, anchors, search])
   const transferTotal = transfers.reduce((s, t) => s + t.amount, 0)
 
   const grandTotal = groups.reduce((s, g) => s + g.total, 0)
@@ -314,14 +316,14 @@ export function FlowView() {
         if (!tx.date) return false
         if (tx.transaction_type === 'transfer') return false
         if (reconciledKeys.has(txKey(tx))) return false
-        if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) return false
+        if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) return false
         if (Math.abs(tx.amount) < largeTxThreshold) return false
         const override = transactionOverrides[txKey(tx)]
         if (override && categories.find((c) => c.id === override.categoryId)?.type === 'transfer') return false
         return true
       })
       .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
-  }, [allTransactions, reconciledKeys, transactionOverrides, categories, monthId, monthStartDay, monthStartBusinessDay])
+  }, [allTransactions, reconciledKeys, transactionOverrides, categories, monthId, monthStartDay, monthStartBusinessDay, anchors])
 
   // Plan-vs-actual rows for the month (income/expense/savings with a budget or spend).
   const planRows = useMemo(() => {
@@ -389,7 +391,7 @@ export function FlowView() {
 
     for (const tx of allTransactions) {
       if (!tx.date || tx.transaction_type === 'transfer') continue
-      const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay)
+      const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors)
       if (!monthSet.has(mid)) continue
       if (searchLower) {
         const hay = `${tx.description ?? ''} ${tx.account_name ?? ''}`.toLowerCase()
@@ -419,7 +421,7 @@ export function FlowView() {
       }
       return row
     })
-  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, year, month, monthStartDay, monthStartBusinessDay, search])
+  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, year, month, monthStartDay, monthStartBusinessDay, anchors, search])
 
   const expenseCategories = useMemo(
     () => categories.filter((c) => c.type === 'expense'),
@@ -453,7 +455,7 @@ export function FlowView() {
 
     for (const tx of allTransactions) {
       if (!tx.date || tx.transaction_type === 'transfer') continue
-      const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay)
+      const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors)
       if (!monthSet.has(mid)) continue
       const { catId, subId } = resolveCategory(
         tx.category ?? '', tx.subcategory ?? '',
@@ -504,7 +506,7 @@ export function FlowView() {
     }
 
     return { cat, rows, activeSubs }
-  }, [selectedCatId, allTransactions, transactionOverrides, categories, zlantarCategoryRules, year, month, monthStartDay, monthStartBusinessDay])
+  }, [selectedCatId, allTransactions, transactionOverrides, categories, zlantarCategoryRules, year, month, monthStartDay, monthStartBusinessDay, anchors])
 
 
   // Actual cash flow for the month: income, real savings (via account transfers), and expenses.
@@ -551,6 +553,14 @@ export function FlowView() {
             <span className="text-base font-medium text-gray-800 min-w-44 text-center tabular-nums">
               {MONTH_NAMES_LONG[month - 1]} {year}
             </span>
+            {flaggedMonths.includes(monthId) && (
+              <span
+                className="inline-flex items-center gap-1 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5"
+                title="Ingen lön kunde identifieras för den här perioden — den utgår från den förväntade startdagen."
+              >
+                <AlertTriangle className="w-3 h-3" /> Lön ej hittad
+              </span>
+            )}
             <button
               onClick={nextMonth}
               className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-700"
@@ -816,6 +826,7 @@ function MonthPlanRow({ cat, actual, monthId, incomeBase }: { cat: CategoryDef; 
   const store = useAppStore()
   const [editing, setEditing] = useState(false)
   const { monthStartDay, monthStartBusinessDay } = store.settings
+  const { anchors } = useSalaryAnchors()
 
   const signedBudget = budgetedAmount(store, monthId, cat.id)
   const budget = Math.abs(signedBudget)
@@ -825,7 +836,7 @@ function MonthPlanRow({ cat, actual, monthId, incomeBase }: { cat: CategoryDef; 
 
   // How far through the month we are — drives the pace colour.
   const today = useMemo(() => new Date(), [])
-  const { elapsed, state } = getPeriodProgress(monthId, monthStartDay, monthStartBusinessDay, today)
+  const { elapsed, state } = getPeriodProgress(monthId, monthStartDay, monthStartBusinessDay, today, anchors)
   // Salary lands late, so income is only "due" once we're past the 25th (or the
   // period has closed). Before that, a missing income shouldn't flag red.
   const incomeDue = state === 'past' || (state === 'current' && today.getDate() >= 26)

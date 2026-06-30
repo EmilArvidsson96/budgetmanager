@@ -6,6 +6,7 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { MONTH_NAMES_LONG, makeMonthId, formatCurrency } from '@/utils/budgetHelpers'
 import { getMonthIdForDate } from '@/utils/periodUtils'
+import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { budgetedAmount } from '@/utils/projection'
 import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
@@ -56,6 +57,7 @@ export function ReconcileView() {
   const store = useAppStore()
   const { settings, actuals, monthCloses, reconciliations, allTransactions, transactionOverrides } = store
   const { categories, monthStartDay, monthStartBusinessDay, zlantarCategoryRules } = settings
+  const { anchors } = useSalaryAnchors()
 
   const monthId = makeMonthId(year, month)
   const actual = actuals[monthId]
@@ -135,7 +137,7 @@ export function ReconcileView() {
 
     for (const tx of allTransactions) {
       if (!tx.date) continue
-      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) continue
+      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) continue
       if (tx.transaction_type === 'transfer') continue   // never counted
 
       const { catId } = resolveCategory(
@@ -187,7 +189,7 @@ export function ReconcileView() {
     const totalExpenses = expenseGroups.reduce((s, g) => s + g.total, 0)
 
     return { income, incomeTxs, netSavings, savingsAccounts, totalExpenses, expenseGroups }
-  }, [actual, actuals, prevMonthId, allTransactions, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, monthId])
+  }, [actual, actuals, prevMonthId, allTransactions, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, anchors, monthId])
 
   // Checklist signals.
   // Only entries in Övrigt WITHOUT a meaningful subcategory count as

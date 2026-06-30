@@ -23,15 +23,21 @@ import type {
   MatchedTransaction,
   ImportSnapshot,
   AccountBalance,
-  AccountType,
   ReconciliationRecord,
   TxOverride,
   TxConflict,
   MonthClose,
 } from '@/types'
-import { extractOwner, buildMonthEntries } from '@/utils/zlantarParser'
+import {
+  extractOwner,
+  buildMonthEntries,
+  buildAccountBalances,
+  mergeAccountBalances,
+  accountBalancesEqual,
+} from '@/utils/zlantarParser'
 import { txKey, reconciledKeysFromRecords } from '@/utils/transferReconciliation'
 import { getMonthIdForDate } from '@/utils/periodUtils'
+import { getSalaryAnchors } from '@/utils/salaryDetection'
 import { DEFAULT_CATEGORIES, DEFAULT_ZLANTAR_RULES, GROCERY_LEVEL3 } from './defaultCategories'
 
 // ─── Store migration ──────────────────────────────────────────────────────────
@@ -432,9 +438,15 @@ function recomputeMonth(
   if (!existing) return state.actuals
   const { settings } = state
   const reconciled = reconciledKeysFromRecords(state.reconciliations)
+  // Use the incoming overrides so anchors reflect the same data as the entries.
+  const { anchors } = getSalaryAnchors({
+    allTransactions: state.allTransactions,
+    settings,
+    transactionOverrides: overrides,
+  })
   const entries = buildMonthEntries(
     state.allTransactions, monthId, settings.categories, settings.zlantarCategoryRules,
-    overrides, reconciled, settings.monthStartDay, settings.monthStartBusinessDay
+    overrides, reconciled, settings.monthStartDay, settings.monthStartBusinessDay, anchors
   )
   return { ...state.actuals, [monthId]: { ...existing, entries } }
 }
@@ -451,12 +463,17 @@ function recomputeAllActuals(
   if (state.allTransactions.length === 0) return state.actuals
 
   const reconciled = reconciledKeysFromRecords(state.reconciliations)
+  const { anchors } = getSalaryAnchors({
+    allTransactions: state.allTransactions,
+    settings: newSettings,
+    transactionOverrides: state.transactionOverrides,
+  })
 
   // Months that will have transactions under the new period settings
   const newMonthIds = new Set<string>()
   for (const tx of state.allTransactions) {
     if (!tx.date || tx.transaction_type === 'transfer') continue
-    newMonthIds.add(getMonthIdForDate(tx.date, newSettings.monthStartDay, newSettings.monthStartBusinessDay))
+    newMonthIds.add(getMonthIdForDate(tx.date, newSettings.monthStartDay, newSettings.monthStartBusinessDay, anchors))
   }
 
   // Union old + new month IDs so a period shift doesn't silently drop data
@@ -473,7 +490,7 @@ function recomputeAllActuals(
     const existing = state.actuals[monthId]
     const entries = buildMonthEntries(
       state.allTransactions, monthId, newSettings.categories, newSettings.zlantarCategoryRules,
-      state.transactionOverrides, reconciled, newSettings.monthStartDay, newSettings.monthStartBusinessDay
+      state.transactionOverrides, reconciled, newSettings.monthStartDay, newSettings.monthStartBusinessDay, anchors
     )
     if (entries.length === 0) continue
     const [yearStr, monthStr] = monthId.split('-')
@@ -495,6 +512,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   fiscalYearStart: 1,
   monthStartDay: 1,
   monthStartBusinessDay: false,
+  salaryAnchoredMonths: false,
+  salaryDetectionWindowDays: 6,
+  salaryMinAmount: 5000,
   categories: DEFAULT_CATEGORIES,
   accounts: [],
   recurringItems: [],
@@ -588,7 +608,10 @@ export const useAppStore = create<AppStore>()(
           const newSettings = { ...state.settings, ...s }
           const periodChanged =
             (s.monthStartDay !== undefined && s.monthStartDay !== state.settings.monthStartDay) ||
-            (s.monthStartBusinessDay !== undefined && s.monthStartBusinessDay !== state.settings.monthStartBusinessDay)
+            (s.monthStartBusinessDay !== undefined && s.monthStartBusinessDay !== state.settings.monthStartBusinessDay) ||
+            (s.salaryAnchoredMonths !== undefined && s.salaryAnchoredMonths !== state.settings.salaryAnchoredMonths) ||
+            (s.salaryDetectionWindowDays !== undefined && s.salaryDetectionWindowDays !== state.settings.salaryDetectionWindowDays) ||
+            (s.salaryMinAmount !== undefined && s.salaryMinAmount !== state.settings.salaryMinAmount)
           if (periodChanged) {
             return { settings: newSettings, actuals: recomputeAllActuals(state, newSettings) }
           }
@@ -761,39 +784,32 @@ export const useAppStore = create<AppStore>()(
           const existingKeys = new Set(state.allTransactions.map(txKey))
           const newTxs = imp.transactions.filter((tx) => !existingKeys.has(txKey(tx)))
 
-          // Build account balance snapshot from this import
-          const accountBalances: AccountBalance[] = []
-          for (const bank of imp.data.banks ?? []) {
-            for (const acc of bank.accounts ?? []) {
-              const type = ((): AccountType => {
-                switch (acc.type) {
-                  case 'Loan':          return 'loan'
-                  case 'Credit':        return 'credit'
-                  case 'Savings':       return 'savings'
-                  case 'Transactional': return 'checking'
-                  default:              return 'other'
-                }
-              })()
-              accountBalances.push({
-                accountId: acc.account_number,
-                accountName: acc.name,
-                accountType: type,
-                balance: acc.balance,
-                currency: 'SEK',
-              })
-            }
-          }
+          // Account balances carried by this upload (empty for a tx-only import).
+          const incomingBalances = buildAccountBalances(imp.data)
 
-          const snapshot: ImportSnapshot = {
-            id: imp.importedAt,
-            importedAt: imp.importedAt,
-            accountBalances,
-          }
+          // Carry forward balances for accounts not present in this upload so a
+          // partial data.json (e.g. only one partner's banks) never drops the
+          // other accounts' latest balance from the running snapshot.
+          const prevSnapshot = state.importSnapshots.length > 0
+            ? state.importSnapshots.reduce((a, b) => (a.importedAt > b.importedAt ? a : b))
+            : null
+          const mergedBalances = mergeAccountBalances(
+            prevSnapshot?.accountBalances ?? [],
+            incomingBalances
+          )
 
-          // Avoid duplicate snapshots (same importedAt)
-          const snapshots = state.importSnapshots.some((s) => s.id === snapshot.id)
-            ? state.importSnapshots
-            : [...state.importSnapshots, snapshot]
+          // Record a new snapshot only when this upload actually changes the
+          // balances — re-uploading an identical data.json doesn't pile up dupes,
+          // and a tx-only upload (no balances at all) records nothing.
+          const isDuplicate =
+            prevSnapshot != null && accountBalancesEqual(prevSnapshot.accountBalances, mergedBalances)
+          const snapshots =
+            mergedBalances.length === 0 || isDuplicate
+              ? state.importSnapshots
+              : [
+                  ...state.importSnapshots,
+                  { id: imp.importedAt, importedAt: imp.importedAt, accountBalances: mergedBalances } satisfies ImportSnapshot,
+                ]
 
           return {
             lastZlantarImport: imp,
@@ -807,7 +823,8 @@ export const useAppStore = create<AppStore>()(
           const transactionOverrides = { ...state.transactionOverrides, [txId]: override }
           const tx = state.allTransactions.find((t) => txKey(t) === txId)
           if (!tx?.date) return { transactionOverrides }
-          const monthId = getMonthIdForDate(tx.date, state.settings.monthStartDay, state.settings.monthStartBusinessDay)
+          const { anchors } = getSalaryAnchors({ allTransactions: state.allTransactions, settings: state.settings, transactionOverrides })
+          const monthId = getMonthIdForDate(tx.date, state.settings.monthStartDay, state.settings.monthStartBusinessDay, anchors)
           return { transactionOverrides, actuals: recomputeMonth(state, monthId, transactionOverrides) }
         }),
 
@@ -816,7 +833,8 @@ export const useAppStore = create<AppStore>()(
           const { [txId]: _removed, ...transactionOverrides } = state.transactionOverrides
           const tx = state.allTransactions.find((t) => txKey(t) === txId)
           if (!tx?.date) return { transactionOverrides }
-          const monthId = getMonthIdForDate(tx.date, state.settings.monthStartDay, state.settings.monthStartBusinessDay)
+          const { anchors } = getSalaryAnchors({ allTransactions: state.allTransactions, settings: state.settings, transactionOverrides })
+          const monthId = getMonthIdForDate(tx.date, state.settings.monthStartDay, state.settings.monthStartBusinessDay, anchors)
           return { transactionOverrides, actuals: recomputeMonth(state, monthId, transactionOverrides) }
         }),
 

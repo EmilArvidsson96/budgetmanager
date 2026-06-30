@@ -397,6 +397,12 @@ export interface AppSettings {
   fiscalYearStart: number   // month 1-12
   monthStartDay: number           // 1-28, day the period month begins
   monthStartBusinessDay: boolean  // if true, use the weekday on or before monthStartDay
+  // Salary anchoring: pin each period's start to the date salary actually landed
+  // that month, instead of the fixed monthStartDay. monthStartDay then acts as the
+  // expected day (window centre + fallback when no salary is detected).
+  salaryAnchoredMonths?: boolean        // default false; when on, periods start at detected salary
+  salaryDetectionWindowDays?: number    // ± days around monthStartDay to search (default 6)
+  salaryMinAmount?: number              // min positive amount to count as salary (default 5000)
   categories: CategoryDef[]
   accounts: Account[]
   recurringItems: RecurringItem[]

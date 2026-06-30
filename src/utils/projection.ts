@@ -18,7 +18,8 @@
 
 import type { AppState, Account, AccountType } from '@/types'
 import { MONTH_NAMES_SHORT } from './budgetHelpers'
-import { getMonthIdForDate } from './periodUtils'
+import { getMonthIdForDate, type SalaryAnchors } from './periodUtils'
+import { getSalaryAnchors } from './salaryDetection'
 
 export type AccountRole = 'liquid' | 'asset' | 'liability'
 
@@ -172,13 +173,13 @@ function budgetedFlowForMonth(state: AppState, monthId: string): { income: numbe
 }
 
 // Signed sum of manual one-off entries that fall in the given period.
-function manualNetForMonth(state: AppState, monthId: string): number {
+function manualNetForMonth(state: AppState, monthId: string, anchors?: SalaryAnchors): number {
   const { monthStartDay, monthStartBusinessDay } = state.settings
   let net = 0
   for (const plan of Object.values(state.liquidityPlans)) {
     for (const e of plan.entries) {
       if (!e.date) continue
-      if (getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay) === monthId) {
+      if (getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, anchors) === monthId) {
         net += e.amount
       }
     }
@@ -194,6 +195,7 @@ export interface ProjectionInput {
 
 export function buildProjection({ state, startMonthId, horizon }: ProjectionInput): ProjectionResult {
   const accounts = state.settings.accounts.filter((a) => a.includeInNetWorth !== false)
+  const { anchors } = getSalaryAnchors(state)
 
   // Latest import snapshot → map of accountId -> raw-signed balance.
   const snapMap = new Map<string, number>()
@@ -292,7 +294,7 @@ export function buildProjection({ state, startMonthId, horizon }: ProjectionInpu
 
     // Budget-driven operating cashflow + manual one-offs.
     const { income, operatingExpense } = budgetedFlowForMonth(state, monthId)
-    const manualNet = manualNetForMonth(state, monthId)
+    const manualNet = manualNetForMonth(state, monthId, anchors)
     const netCashflow = income - operatingExpense - contributions - loanPayments + manualNet
 
     liquidity += netCashflow

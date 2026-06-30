@@ -13,7 +13,7 @@ import type {
   TxOverride,
 } from '@/types'
 import { AGREEMENT_CATEGORY_MAP, DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
-import { getMonthIdForDate } from '@/utils/periodUtils'
+import { getMonthIdForDate, type SalaryAnchors } from '@/utils/periodUtils'
 import { txKey as makeTxKey } from '@/utils/transferReconciliation'
 
 // ─── Parse raw JSON files ─────────────────────────────────────────────────────
@@ -181,6 +181,26 @@ function resolveCategory(
   return { catId: 'other', subId: rawSub }
 }
 
+// Resolve a single transaction's app category/subcategory, applying overrides,
+// rules and direct-id matching (same precedence as the aggregation path).
+// Exported so salary detection can classify income without duplicating the rules.
+export function resolveTxCategory(
+  tx: ZlantarTransaction,
+  categories: CategoryDef[],
+  rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES,
+  overrides: Record<string, TxOverride> = {}
+): { catId: string; subId: string } {
+  const catIds = new Set(categories.map((c) => c.id))
+  const ruleMap = buildRuleLookup(rules)
+  return resolveCategory(
+    tx.category ?? '',
+    tx.subcategory ?? '',
+    catIds,
+    ruleMap,
+    overrides[makeTxKey(tx)]
+  )
+}
+
 // ─── Build monthly actuals grouped by YYYY-MM ────────────────────────────────
 
 // Aggregate one month's transactions into ActualEntry[]. Shared by the import
@@ -195,7 +215,8 @@ export function buildMonthEntries(
   overrides: Record<string, TxOverride> = {},
   excludeKeys?: Set<string>,
   monthStartDay = 1,
-  monthStartBusinessDay = false
+  monthStartBusinessDay = false,
+  anchors?: SalaryAnchors
 ): ActualEntry[] {
   const catIds = new Set(categories.map((c) => c.id))
   const ruleMap = buildRuleLookup(rules)
@@ -205,7 +226,7 @@ export function buildMonthEntries(
     if (!tx.date) continue
     if (tx.transaction_type === 'transfer') continue
     if (excludeKeys && excludeKeys.has(makeTxKey(tx))) continue
-    if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) continue
+    if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) continue
 
     const { catId, subId } = resolveCategory(
       tx.category ?? '',
@@ -244,7 +265,8 @@ export function buildMonthlyActuals(
   monthStartDay = 1,
   monthStartBusinessDay = false,
   excludeKeys?: Set<string>,
-  overrides: Record<string, TxOverride> = {}
+  overrides: Record<string, TxOverride> = {},
+  anchors?: SalaryAnchors
 ): Record<string, MonthlyActuals> {
   const { transactions, data } = imp
 
@@ -253,7 +275,7 @@ export function buildMonthlyActuals(
   for (const tx of transactions) {
     if (!tx.date || tx.transaction_type === 'transfer') continue
     if (excludeKeys && excludeKeys.has(makeTxKey(tx))) continue
-    months.add(getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay))
+    months.add(getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors))
   }
 
   const accountBalances = buildAccountBalances(data)
@@ -265,7 +287,7 @@ export function buildMonthlyActuals(
       id: ym,
       year: parseInt(yearStr),
       month: parseInt(monthStr),
-      entries: buildMonthEntries(transactions, ym, categories, rules, overrides, excludeKeys, monthStartDay, monthStartBusinessDay),
+      entries: buildMonthEntries(transactions, ym, categories, rules, overrides, excludeKeys, monthStartDay, monthStartBusinessDay, anchors),
       accountBalances,
       importedAt: imp.importedAt,
     }
@@ -276,7 +298,7 @@ export function buildMonthlyActuals(
 
 // ─── Account balance snapshot ─────────────────────────────────────────────────
 
-function buildAccountBalances(data: ZlantarData): AccountBalance[] {
+export function buildAccountBalances(data: ZlantarData): AccountBalance[] {
   const result: AccountBalance[] = []
   for (const bank of data.banks ?? []) {
     for (const acc of bank.accounts ?? []) {
@@ -292,6 +314,65 @@ function buildAccountBalances(data: ZlantarData): AccountBalance[] {
     }
   }
   return result
+}
+
+// Merge a new set of account balances over a previous snapshot: balances present
+// in `next` win, but balances for accounts absent from `next` are carried forward
+// from `prev`. This keeps a partial data.json upload (e.g. only one partner's
+// banks) from wiping the other accounts' latest known balance from the snapshot.
+export function mergeAccountBalances(
+  prev: AccountBalance[],
+  next: AccountBalance[]
+): AccountBalance[] {
+  if (next.length === 0) return prev
+  const nextIds = new Set(next.map((ab) => ab.accountId))
+  return [...next, ...prev.filter((ab) => !nextIds.has(ab.accountId))]
+}
+
+// True when two balance sets describe the same accounts with the same balances.
+// Used to skip recording a snapshot when an upload carries no new balance info.
+export function accountBalancesEqual(a: AccountBalance[], b: AccountBalance[]): boolean {
+  if (a.length !== b.length) return false
+  const m = new Map(a.map((x) => [x.accountId, x.balance]))
+  for (const y of b) {
+    const x = m.get(y.accountId)
+    if (x === undefined || Math.abs(x - y.balance) > 0.005) return false
+  }
+  return true
+}
+
+// Per-account comparison of incoming balances against the previous snapshot, for
+// surfacing "what changed" in the import preview. `oldBalance` is null for an
+// account not seen in the previous snapshot (a brand-new account).
+export interface AccountBalanceChange {
+  accountId: string
+  accountName: string
+  accountType: AccountType
+  oldBalance: number | null
+  newBalance: number
+  delta: number
+  changed: boolean
+}
+
+export function diffAccountBalances(
+  prev: AccountBalance[],
+  next: AccountBalance[]
+): AccountBalanceChange[] {
+  const prevMap = new Map(prev.map((ab) => [ab.accountId, ab.balance]))
+  return next.map((ab) => {
+    const old = prevMap.get(ab.accountId)
+    const oldBalance = old === undefined ? null : old
+    const changed = oldBalance === null || Math.abs(oldBalance - ab.balance) > 0.005
+    return {
+      accountId: ab.accountId,
+      accountName: ab.accountName,
+      accountType: ab.accountType,
+      oldBalance,
+      newBalance: ab.balance,
+      delta: ab.balance - (oldBalance ?? 0),
+      changed,
+    }
+  })
 }
 
 // ─── Compare two MonthlyActuals records for equivalent transaction data ─────
@@ -390,13 +471,14 @@ export function getTransactionsForCategory(
   monthStartDay = 1,
   monthStartBusinessDay = false,
   excludeKeys?: Set<string>,
-  overrides: Record<string, TxOverride> = {}
+  overrides: Record<string, TxOverride> = {},
+  anchors?: SalaryAnchors
 ): ZlantarTransaction[] {
   const catIds = new Set(categories.map((c) => c.id))
   const ruleMap = buildRuleLookup(rules)
 
   return transactions.filter((tx) => {
-    if (!tx.date || getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) return false
+    if (!tx.date || getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) return false
     if (tx.transaction_type === 'transfer') return false
     if (excludeKeys && excludeKeys.has(makeTxKey(tx))) return false
     const { catId: resolvedCat, subId: resolvedSub } = resolveCategory(

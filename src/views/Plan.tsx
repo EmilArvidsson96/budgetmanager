@@ -11,6 +11,7 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { formatCurrency } from '@/utils/budgetHelpers'
 import { getMonthIdForDate } from '@/utils/periodUtils'
+import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { buildProjection } from '@/utils/projection'
 import { exportToExcel } from '@/utils/excelExport'
 import { BaselineEditor } from '@/components/budget/BaselineEditor'
@@ -212,6 +213,7 @@ export function PlanView() {
   const [exporting, setExporting] = useState(false)
   const store = useAppStore()
   const { settings } = store
+  const { anchors } = useSalaryAnchors()
 
   const handleExport = async () => {
     setExporting(true)
@@ -224,13 +226,13 @@ export function PlanView() {
 
   const today = new Date()
   const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-  const startMonthId = getMonthIdForDate(todayIso, settings.monthStartDay, settings.monthStartBusinessDay)
+  const startMonthId = getMonthIdForDate(todayIso, settings.monthStartDay, settings.monthStartBusinessDay, anchors)
 
   const projection = useMemo(
     () => buildProjection({ state: store, startMonthId, horizon }),
     // recompute when inputs that affect the projection change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [store.settings.accounts, store.monthlyBudgets, store.yearlyBudgets, store.liquidityPlans, store.importSnapshots, startMonthId, horizon]
+    [store.settings.accounts, store.monthlyBudgets, store.yearlyBudgets, store.liquidityPlans, store.importSnapshots, startMonthId, horizon, anchors]
   )
 
   const { months, accounts } = projection
@@ -349,12 +351,12 @@ export function PlanView() {
     for (const plan of Object.values(store.liquidityPlans)) {
       for (const e of plan.entries) {
         if (!e.date) continue
-        const mid = getMonthIdForDate(e.date, settings.monthStartDay, settings.monthStartBusinessDay)
+        const mid = getMonthIdForDate(e.date, settings.monthStartDay, settings.monthStartBusinessDay, anchors)
         if (mid >= startMonthId && mid <= horizonEnd) list.push({ planYear: plan.id, entry: e })
       }
     }
     return list.sort((a, b) => a.entry.date.localeCompare(b.entry.date))
-  }, [store.liquidityPlans, settings.monthStartDay, settings.monthStartBusinessDay, startMonthId, horizonEnd])
+  }, [store.liquidityPlans, settings.monthStartDay, settings.monthStartBusinessDay, anchors, startMonthId, horizonEnd])
 
   // Flags: large non-recurring actual transactions grouped by chart label.
   const largeNonRecurringByLabel = useMemo(() => {
@@ -366,7 +368,7 @@ export function PlanView() {
         if (tx.transaction_type === 'transfer') return false
         if (tx.category === 'salary') return false
         if (recurringAmounts.some((r) => r > 0 && Math.abs(Math.abs(tx.amount) - r) / r < 0.15)) return false
-        const mid = getMonthIdForDate(tx.date, settings.monthStartDay, settings.monthStartBusinessDay)
+        const mid = getMonthIdForDate(tx.date, settings.monthStartDay, settings.monthStartBusinessDay, anchors)
         return mid === m.monthId
       })
       if (txs.length > 0) {
@@ -374,20 +376,20 @@ export function PlanView() {
       }
     }
     return byLabel
-  }, [store.allTransactions, months, settings.recurringItems, settings.monthStartDay, settings.monthStartBusinessDay])
+  }, [store.allTransactions, months, settings.recurringItems, settings.monthStartDay, settings.monthStartBusinessDay, anchors])
 
   // Flags: planned one-off entries grouped by chart label.
   const plannedByLabel = useMemo(() => {
     const byLabel = new Map<string, LiquidityEntry[]>()
     for (const { entry } of upcomingEntries) {
-      const mid = getMonthIdForDate(entry.date, settings.monthStartDay, settings.monthStartBusinessDay)
+      const mid = getMonthIdForDate(entry.date, settings.monthStartDay, settings.monthStartBusinessDay, anchors)
       const m = months.find((mo) => mo.monthId === mid)
       if (!m) continue
       if (!byLabel.has(m.label)) byLabel.set(m.label, [])
       byLabel.get(m.label)!.push(entry)
     }
     return byLabel
-  }, [upcomingEntries, months, settings.monthStartDay, settings.monthStartBusinessDay])
+  }, [upcomingEntries, months, settings.monthStartDay, settings.monthStartBusinessDay, anchors])
 
   if (accounts.length === 0) {
     return (

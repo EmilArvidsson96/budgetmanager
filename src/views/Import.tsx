@@ -1,14 +1,16 @@
 import { useMemo, useState, useRef } from 'react'
-import { Upload, CheckCircle, AlertTriangle, Info, ChevronDown, ChevronRight, Trash2, ArrowLeftRight, Plus } from 'lucide-react'
+import { Upload, CheckCircle, AlertTriangle, Info, ChevronDown, ChevronRight, Trash2, ArrowLeftRight, Plus, Wallet, ArrowUpRight, ArrowDownRight } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Select } from '@/components/ui/Select'
 import { Badge } from '@/components/ui/Badge'
-import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories } from '@/utils/zlantarParser'
+import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories, buildAccountBalances, diffAccountBalances } from '@/utils/zlantarParser'
+import type { AccountBalanceChange } from '@/utils/zlantarParser'
 import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
 import { getMonthIdForDate } from '@/utils/periodUtils'
+import { getSalaryAnchors } from '@/utils/salaryDetection'
 import { formatCurrency } from '@/utils/budgetHelpers'
 import { uniqueSlug } from '@/utils/slug'
 import type { MonthlyActuals, RecurringItem, ReconciliationRecord, TransferMatch, ZlantarImport, ZlantarTransaction, CategoryDef, TxConflict } from '@/types'
@@ -40,6 +42,7 @@ export function ImportView() {
   const [acceptedMatchIds, setAcceptedMatchIds] = useState<Set<string>>(new Set())
   const [conflicts, setConflicts] = useState<ConflictItem[]>([])
   const [conflictsExpanded, setConflictsExpanded] = useState(false)
+  const [balanceChanges, setBalanceChanges] = useState<AccountBalanceChange[]>([])
 
   const dataRef = useRef<HTMLInputElement>(null)
   const txRef = useRef<HTMLInputElement>(null)
@@ -102,6 +105,15 @@ export function ImportView() {
       const accounts = deriveAccounts(imp.data)
       const recurring = deriveRecurringItems(imp.data)
 
+      // Compare the balances carried by this data.json against the most recent
+      // stored snapshot, so the preview can show which accounts moved and by how
+      // much — even when the upload contains no new transactions.
+      const latestSnapshot = store.importSnapshots.length > 0
+        ? store.importSnapshots.reduce((a, b) => (a.importedAt > b.importedAt ? a : b))
+        : null
+      const incomingBalances = buildAccountBalances(imp.data)
+      setBalanceChanges(diffAccountBalances(latestSnapshot?.accountBalances ?? [], incomingBalances))
+
       const existingAccountIds = new Set(store.settings.accounts.map((a) => a.id))
       const existingRecurringIds = new Set(store.settings.recurringItems.map((r) => r.id))
       const newAccs = accounts.filter((a) => !existingAccountIds.has(a.id))
@@ -121,11 +133,18 @@ export function ImportView() {
       // (not already in allTransactions). Months where only existing transactions
       // changed are treated as conflicts, not re-importable.
       const existingKeys = new Set(store.allTransactions.map(txKey))
+      // Detect salary anchors over existing + incoming so the imported months
+      // bucket on the real payday, not the nominal day.
+      const { anchors: importAnchors } = getSalaryAnchors({
+        allTransactions: [...store.allTransactions, ...imp.transactions],
+        settings: store.settings,
+        transactionOverrides: store.transactionOverrides,
+      })
       const newTxMonths = new Set<string>()
       for (const tx of imp.transactions) {
         if (!tx.date || tx.transaction_type === 'transfer') continue
         if (!existingKeys.has(txKey(tx))) {
-          newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay))
+          newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay, importAnchors))
         }
       }
       const initialAccepted = new Set<string>(previouslyReconciled)
@@ -139,7 +158,9 @@ export function ImportView() {
         store.settings.zlantarCategoryRules,
         store.settings.monthStartDay,
         store.settings.monthStartBusinessDay,
-        initialAccepted
+        initialAccepted,
+        undefined,
+        importAnchors
       )
       const initialMonths = new Set<string>()
       for (const ym of Object.keys(fullActuals)) {
@@ -171,13 +192,20 @@ export function ImportView() {
 
   const { preview, unchangedMonthCount } = useMemo(() => {
     if (!parsedImport) return { preview: null as Record<string, MonthlyActuals> | null, unchangedMonthCount: 0 }
+    const { anchors } = getSalaryAnchors({
+      allTransactions: [...store.allTransactions, ...parsedImport.transactions],
+      settings: store.settings,
+      transactionOverrides: store.transactionOverrides,
+    })
     const full = buildMonthlyActuals(
       parsedImport,
       store.settings.categories,
       store.settings.zlantarCategoryRules,
       store.settings.monthStartDay,
       store.settings.monthStartBusinessDay,
-      acceptedKeys
+      acceptedKeys,
+      undefined,
+      anchors
     )
     // Only show months that contain at least one new transaction
     const existingKeys = new Set(store.allTransactions.map(txKey))
@@ -185,7 +213,7 @@ export function ImportView() {
     for (const tx of parsedImport.transactions) {
       if (!tx.date || tx.transaction_type === 'transfer') continue
       if (!existingKeys.has(txKey(tx))) {
-        newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay))
+        newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay, anchors))
       }
     }
     const filtered: Record<string, MonthlyActuals> = {}
@@ -198,7 +226,7 @@ export function ImportView() {
       filtered[ym] = candidate
     }
     return { preview: filtered, unchangedMonthCount: unchanged }
-  }, [parsedImport, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay, acceptedKeys, store.allTransactions])
+  }, [parsedImport, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay, store.settings.salaryAnchoredMonths, store.settings.salaryDetectionWindowDays, store.settings.salaryMinAmount, store.transactionOverrides, acceptedKeys, store.allTransactions])
 
   // Unmapped categories among the new transactions, grouped by raw category, with a
   // suggested Swedish name. Recomputes as the user creates/maps categories below.
@@ -309,6 +337,7 @@ export function ImportView() {
     setAcceptedMatchIds(new Set())
     setConflicts([])
     setConflictsExpanded(false)
+    setBalanceChanges([])
   }
 
   const toggleMatch = (id: string) =>
@@ -356,6 +385,7 @@ export function ImportView() {
   const months = preview ? Object.keys(preview).sort() : []
   const importedMonths = months.filter((m) => selectedMonths.has(m))
   const existingActuals = Object.keys(store.actuals).sort()
+  const changedBalances = balanceChanges.filter((c) => c.changed)
 
   return (
     <Layout>
@@ -466,7 +496,7 @@ export function ImportView() {
       {step === 'preview' && preview && (
         <div className="space-y-4">
           {/* Nothing new */}
-          {months.length === 0 && newAccounts.length === 0 && newRecurring.length === 0 && transferMatches.length === 0 && (
+          {months.length === 0 && newAccounts.length === 0 && newRecurring.length === 0 && transferMatches.length === 0 && changedBalances.length === 0 && (
             <Card>
               <div className="flex items-start gap-3">
                 <Info className="w-5 h-5 text-brand-600 mt-0.5 shrink-0" />
@@ -483,7 +513,7 @@ export function ImportView() {
           )}
 
           {/* Unchanged months banner */}
-          {unchangedMonthCount > 0 && (months.length > 0 || newAccounts.length > 0 || newRecurring.length > 0 || transferMatches.length > 0) && (
+          {unchangedMonthCount > 0 && (months.length > 0 || newAccounts.length > 0 || newRecurring.length > 0 || transferMatches.length > 0 || changedBalances.length > 0) && (
             <Card>
               <div className="flex items-start gap-3">
                 <Info className="w-5 h-5 text-brand-600 mt-0.5 shrink-0" />
@@ -502,6 +532,11 @@ export function ImportView() {
               expanded={conflictsExpanded}
               onToggle={() => setConflictsExpanded((v) => !v)}
             />
+          )}
+
+          {/* Account balance updates from data.json */}
+          {changedBalances.length > 0 && (
+            <AccountBalancesCard changes={changedBalances} />
           )}
 
           {/* Transfer reconciliation between owners */}
@@ -729,11 +764,14 @@ export function ImportView() {
                 importedMonths.length === 0 &&
                 selectedAccountIds.size === 0 &&
                 selectedRecurringIds.size === 0 &&
-                acceptedMatchIds.size === 0
+                acceptedMatchIds.size === 0 &&
+                changedBalances.length === 0
               }
             >
               <CheckCircle className="w-4 h-4" />
-              Bekräfta import ({importedMonths.length} {importedMonths.length === 1 ? 'månad' : 'månader'})
+              {importedMonths.length === 0 && changedBalances.length > 0
+                ? 'Spara kontosaldon'
+                : `Bekräfta import (${importedMonths.length} ${importedMonths.length === 1 ? 'månad' : 'månader'})`}
             </Button>
           </div>
         </div>
@@ -745,8 +783,17 @@ export function ImportView() {
           <CheckCircle className="w-12 h-12 text-green-500 mx-auto mb-4" />
           <h3 className="text-xl font-semibold text-gray-800 mb-2">Import klar!</h3>
           <p className="text-gray-500 mb-6">
-            {importedMonths.length} {importedMonths.length === 1 ? 'månad' : 'månader'} med utfallsdata har importerats.
-            Gå till månads- eller årsbudgeten för att jämföra med dina budgetar.
+            {importedMonths.length === 0 && changedBalances.length > 0 ? (
+              <>
+                {changedBalances.length} {changedBalances.length === 1 ? 'kontosaldo' : 'kontosaldon'} uppdaterades och en ny
+                ögonblicksbild sparades. Saldohistoriken syns under Likviditet.
+              </>
+            ) : (
+              <>
+                {importedMonths.length} {importedMonths.length === 1 ? 'månad' : 'månader'} med utfallsdata har importerats.
+                Gå till månads- eller årsbudgeten för att jämföra med dina budgetar.
+              </>
+            )}
           </p>
           <div className="flex justify-center gap-3">
             <Button variant="secondary" onClick={reset}>Importera mer</Button>
@@ -1001,6 +1048,65 @@ function ConflictRow({
             <span className="text-gray-300">→</span>
             <code className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100">{incoming.transaction_type}</code>
           </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Account balance updates (from data.json) ────────────────────────────────
+
+function AccountBalancesCard({ changes }: { changes: AccountBalanceChange[] }) {
+  const newAccounts = changes.filter((c) => c.oldBalance === null)
+  const moved = changes.filter((c) => c.oldBalance !== null)
+
+  return (
+    <Card padding={false}>
+      <div className="p-4 border-b border-gray-100 flex items-start gap-3">
+        <Wallet className="w-5 h-5 text-brand-600 mt-0.5 shrink-0" />
+        <div>
+          <h3 className="font-semibold text-gray-900">
+            {changes.length} {changes.length === 1 ? 'kontosaldo uppdateras' : 'kontosaldon uppdateras'}
+          </h3>
+          <p className="text-sm text-gray-500">
+            Sparas som en ny ögonblicksbild så att kontots värdeförändring kan följas över tid.
+            {newAccounts.length > 0 && ` ${newAccounts.length} ${newAccounts.length === 1 ? 'nytt konto' : 'nya konton'}.`}
+          </p>
+        </div>
+      </div>
+      <div className="divide-y divide-gray-50">
+        {moved.map((c) => (
+          <BalanceChangeRow key={c.accountId} change={c} />
+        ))}
+        {newAccounts.map((c) => (
+          <BalanceChangeRow key={c.accountId} change={c} />
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+function BalanceChangeRow({ change }: { change: AccountBalanceChange }) {
+  const isNew = change.oldBalance === null
+  const up = change.delta > 0
+  return (
+    <div className="flex items-center justify-between px-4 py-3 gap-3">
+      <div className="min-w-0">
+        <span className="text-sm font-medium text-gray-800">{change.accountName}</span>
+        {isNew && <span className="ml-2"><Badge variant="green" size="sm">Nytt</Badge></span>}
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        {!isNew && (
+          <span className="text-xs text-gray-400">
+            {formatCurrency(change.oldBalance!)} <span className="text-gray-300">→</span>
+          </span>
+        )}
+        <span className="text-sm font-medium text-gray-700">{formatCurrency(change.newBalance)}</span>
+        {!isNew && (
+          <span className={`flex items-center gap-0.5 text-xs font-medium ${up ? 'text-emerald-600' : 'text-red-500'}`}>
+            {up ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
+            {formatCurrency(Math.abs(change.delta))}
+          </span>
         )}
       </div>
     </div>

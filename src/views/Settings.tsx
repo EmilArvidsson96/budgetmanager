@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Plus, Trash2, Edit2, X, Check, ArrowRight } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
@@ -8,6 +8,8 @@ import { Badge } from '@/components/ui/Badge'
 import { Select } from '@/components/ui/Select'
 import { RECEIPT_MODELS, DEFAULT_RECEIPT_MODEL } from '@/utils/receiptModels'
 import { slugify } from '@/utils/slug'
+import { getSalaryAnchors } from '@/utils/salaryDetection'
+import { MONTH_NAMES_SHORT } from '@/utils/budgetHelpers'
 import type { Account, RecurringItem, AccountType, ZlantarCategoryRule, CategoryDef, Level3Def } from '@/types'
 
 function newId() { return `id-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
@@ -68,11 +70,24 @@ export function SettingsView() {
 
 function GeneralTab() {
   const store = useAppStore()
-  const { monthStartDay, monthStartBusinessDay, partnerName } = store.settings
+  const { monthStartDay, monthStartBusinessDay, partnerName, salaryAnchoredMonths } = store.settings
   const [day, setDay] = useState(String(monthStartDay))
   const [saved, setSaved] = useState(false)
   const [partner, setPartner] = useState(partnerName ?? '')
   const [partnerSaved, setPartnerSaved] = useState(false)
+
+  // Live preview of which months the salary detector anchored vs. fell back on.
+  const salaryInfo = useMemo(
+    () => getSalaryAnchors({
+      allTransactions: store.allTransactions,
+      settings: store.settings,
+      transactionOverrides: store.transactionOverrides,
+    }),
+    [store.allTransactions, store.settings, store.transactionOverrides]
+  )
+  const anchorEntries = Object.entries(salaryInfo.anchors ?? {}).sort((a, b) => b[0].localeCompare(a[0]))
+  const fmtPeriod = (id: string) => `${MONTH_NAMES_SHORT[parseInt(id.slice(5, 7)) - 1]} ${id.slice(2, 4)}`
+  const fmtDay = (iso: string) => `${parseInt(iso.slice(8, 10))} ${MONTH_NAMES_SHORT[parseInt(iso.slice(5, 7)) - 1].toLowerCase()}`
 
   const save = () => {
     const parsed = parseInt(day)
@@ -146,6 +161,80 @@ function GeneralTab() {
               Befintliga utfall räknas om automatiskt.
             </div>
           )}
+
+          <div className="border-t border-gray-100 pt-5">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!salaryAnchoredMonths}
+                onChange={(e) => store.updateSettings({ salaryAnchoredMonths: e.target.checked })}
+                className="mt-0.5 rounded accent-brand-600"
+              />
+              <div>
+                <span className="text-sm font-medium text-gray-700">Starta perioden när lönen kommer</span>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Letar upp lönen (inkomst&nbsp;→&nbsp;Lön) runt startdagen ovan och låter perioden
+                  börja på det faktiska lönedatumet i stället för en fast dag. Startdagen blir den
+                  förväntade lönedagen — och reserv för månader där ingen lön hittas.
+                </p>
+              </div>
+            </label>
+
+            {salaryAnchoredMonths && (
+              <div className="mt-4 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Sökfönster (± dagar)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={store.settings.salaryDetectionWindowDays ?? 6}
+                      onChange={(e) => store.updateSettings({ salaryDetectionWindowDays: Math.max(1, Math.min(20, parseInt(e.target.value) || 6)) })}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Minsta lönebelopp (kr)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={500}
+                      value={store.settings.salaryMinAmount ?? 5000}
+                      onChange={(e) => store.updateSettings({ salaryMinAmount: Math.max(0, parseInt(e.target.value) || 0) })}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                </div>
+
+                {anchorEntries.length > 0 && (
+                  <div className="p-3 bg-gray-50 border border-gray-100 rounded-lg">
+                    <p className="text-xs font-medium text-gray-600 mb-2">
+                      Identifierade lönedatum ({anchorEntries.length} perioder)
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {anchorEntries.slice(0, 18).map(([id, iso]) => (
+                        <span key={id} className="inline-flex items-center gap-1 text-[11px] bg-white border border-gray-200 rounded px-2 py-0.5 text-gray-600">
+                          <span className="font-medium text-gray-800">{fmtPeriod(id)}</span>
+                          <span className="text-gray-400">→</span>
+                          <span>{fmtDay(iso)}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {salaryInfo.flaggedMonths.length > 0 && (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+                    <span className="font-medium">Lön ej hittad i {salaryInfo.flaggedMonths.length} månader</span> —
+                    dessa använder den förväntade startdagen ({monthStartDay}). Kontrollera fönstret/beloppet ovan om det ser fel ut:{' '}
+                    {salaryInfo.flaggedMonths.slice(-6).map(fmtPeriod).join(', ')}
+                    {salaryInfo.flaggedMonths.length > 6 ? ' …' : ''}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </Card>
 
