@@ -121,7 +121,6 @@ export function PlanView() {
 
   const assetAccounts = accounts.filter((a) => a.role === 'asset')
   const liabilityAccounts = accounts.filter((a) => a.role === 'liability')
-  const hasLiabilities = liabilityAccounts.length > 0
 
   // ── Chart data ────────────────────────────────────────────────────────────
   const chartData = months.map((m) => {
