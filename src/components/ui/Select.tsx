@@ -63,6 +63,10 @@ export function Select({ value, onChange, options, placeholder, className = '', 
         <div
           className={`absolute z-50 left-0 min-w-full bg-white border border-gray-200 rounded-xl shadow-xl py-1 overflow-y-auto ${openUpward ? 'bottom-full mb-1' : 'top-full mt-1'}`}
           style={{ maxHeight: '16rem' }}
+          onMouseDown={(e) => {
+            // Close when clicking empty padding areas, not option buttons
+            if (!(e.target as Element).closest('button')) setOpen(false)
+          }}
         >
           {placeholder && (
             <button
