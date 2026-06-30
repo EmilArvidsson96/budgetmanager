@@ -102,6 +102,20 @@ export interface Account {
   // the transfer-reconciliation logic to know which transactions can cancel
   // each other out.
   owner?: string
+
+  // ─── Forward-projection assumptions (used by the Plan view) ───────────────
+  // Expected annual return/appreciation as a fraction (0.07 = 7 %). Applies to
+  // asset accounts (isk/investment/savings/property) for net-worth growth.
+  expectedReturn?: number
+  // Recurring monthly deposit into this asset account (SEK).
+  monthlyContribution?: number
+  // Recurring monthly amortization on a loan (SEK toward principal).
+  monthlyPayment?: number
+  // Current value for assets not present in any Zlantar import (e.g. a property)
+  // or a manual override of the imported balance.
+  manualValue?: number
+  // Whether this account counts toward net worth. Defaults to true when unset.
+  includeInNetWorth?: boolean
 }
 
 export type AccountType =
@@ -111,6 +125,7 @@ export type AccountType =
   | 'loan'
   | 'isk'
   | 'investment'
+  | 'property'
   | 'other'
 
 export interface RecurringItem {

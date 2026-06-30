@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { PlanView }             from './views/Plan'
 import { MonthlyBudgetView }    from './views/MonthlyBudget'
 import { YearlyBudgetView }     from './views/YearlyBudget'
 import { LiquidityView }        from './views/Liquidity'
@@ -14,10 +15,12 @@ export default function App() {
     <PinGate>
     <BrowserRouter basename="/budgetmanager">
       <Routes>
-        <Route path="/"               element={<Navigate to="/manad" replace />} />
+        <Route path="/"               element={<Navigate to="/plan" replace />} />
+        <Route path="/plan"           element={<PlanView />} />
         <Route path="/manad"          element={<MonthlyBudgetView />} />
         <Route path="/ar"             element={<YearlyBudgetView />} />
-        <Route path="/likviditet"     element={<LiquidityView />} />
+        <Route path="/likviditet"     element={<Navigate to="/plan" replace />} />
+        <Route path="/likviditet-gammal" element={<LiquidityView />} />
         <Route path="/importera"      element={<ImportView />} />
         <Route path="/kvitton"        element={<GroceryReceiptsView />} />
         <Route path="/transaktioner"  element={<TransactionsView />} />

@@ -18,6 +18,7 @@ const ACCOUNT_TYPES: { value: AccountType; label: string }[] = [
   { value: 'loan',       label: 'Lån' },
   { value: 'isk',        label: 'ISK' },
   { value: 'investment', label: 'Investeringskonto' },
+  { value: 'property',   label: 'Bostad / fastighet' },
   { value: 'other',      label: 'Övrigt' },
 ]
 
@@ -280,6 +281,60 @@ function AccountsTab() {
                   />
                 </div>
               )}
+              {form.type === 'loan' && (
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">Amortering / mån (kr)</label>
+                  <input
+                    type="number"
+                    className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                    value={form.monthlyPayment ?? ''}
+                    onChange={(e) => setForm((f) => ({ ...f, monthlyPayment: parseFloat(e.target.value) || undefined }))}
+                    placeholder="t.ex. 3000"
+                  />
+                </div>
+              )}
+              {(form.type === 'savings' || form.type === 'isk' || form.type === 'investment' || form.type === 'property' || form.type === 'other') && (
+                <>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">
+                      Nuvarande värde (kr) {form.type === 'property' && <span className="text-brand-600">*</span>}
+                    </label>
+                    <input
+                      type="number"
+                      className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                      value={form.manualValue ?? ''}
+                      onChange={(e) => setForm((f) => ({ ...f, manualValue: parseFloat(e.target.value) || undefined }))}
+                      placeholder={form.type === 'property' ? 't.ex. 4500000' : 'Tomt = importerat saldo'}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Förväntad avkastning (%/år)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                      value={form.expectedReturn != null ? Math.round(form.expectedReturn * 1000) / 10 : ''}
+                      onChange={(e) => {
+                        const pct = parseFloat(e.target.value)
+                        setForm((f) => ({ ...f, expectedReturn: isNaN(pct) ? undefined : pct / 100 }))
+                      }}
+                      placeholder={form.type === 'property' ? 't.ex. 2' : 't.ex. 7'}
+                    />
+                  </div>
+                  {form.type !== 'property' && (
+                    <div>
+                      <label className="text-xs font-medium text-gray-600 block mb-1">Månadsinsättning (kr)</label>
+                      <input
+                        type="number"
+                        className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                        value={form.monthlyContribution ?? ''}
+                        onChange={(e) => setForm((f) => ({ ...f, monthlyContribution: parseFloat(e.target.value) || undefined }))}
+                        placeholder="t.ex. 5000"
+                      />
+                    </div>
+                  )}
+                </>
+              )}
               <div className="flex items-end pb-1">
                 <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
                   <input
@@ -289,6 +344,17 @@ function AccountsTab() {
                     className="rounded"
                   />
                   Inkludera i likviditet
+                </label>
+              </div>
+              <div className="flex items-end pb-1">
+                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.includeInNetWorth ?? true}
+                    onChange={(e) => setForm((f) => ({ ...f, includeInNetWorth: e.target.checked }))}
+                    className="rounded"
+                  />
+                  Räkna med i förmögenhet
                 </label>
               </div>
             </div>
