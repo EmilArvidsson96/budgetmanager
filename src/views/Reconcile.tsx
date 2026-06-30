@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react'
-import { ChevronLeft, ChevronRight, CheckCircle2, AlertTriangle, Lock, Unlock, Tag, ArrowLeftRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CheckCircle2, AlertTriangle, Lock, Unlock, Tag, ArrowLeftRight, X } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
@@ -7,15 +7,51 @@ import { Button } from '@/components/ui/Button'
 import { MONTH_NAMES_LONG, makeMonthId, formatCurrency } from '@/utils/budgetHelpers'
 import { getMonthIdForDate } from '@/utils/periodUtils'
 import { budgetedAmount } from '@/utils/projection'
-import { reconcileTransfers, reconciledKeysFromRecords } from '@/utils/transferReconciliation'
+import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
+import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
+import type { ZlantarTransaction, ZlantarCategoryRule, TxOverride } from '@/types'
+
+type RuleTarget = { appCategoryId: string; appSubcategoryId?: string }
+
+function buildRuleLookup(rules: ZlantarCategoryRule[]): Map<string, RuleTarget> {
+  const map = new Map<string, RuleTarget>()
+  for (const r of rules) {
+    const key = r.zlantarSubcategory
+      ? `${r.zlantarCategory}|||${r.zlantarSubcategory}`
+      : r.zlantarCategory
+    map.set(key, { appCategoryId: r.appCategoryId, appSubcategoryId: r.appSubcategoryId })
+  }
+  return map
+}
+
+function resolveCategory(
+  rawCat: string,
+  rawSub: string,
+  catIds: Set<string>,
+  ruleMap: Map<string, RuleTarget>,
+  override?: TxOverride
+): { catId: string; subId: string } {
+  if (override) return { catId: override.categoryId, subId: override.subcategoryId ?? '' }
+  if (!rawCat) return { catId: 'other', subId: '' }
+  const exactMatch = rawSub ? ruleMap.get(`${rawCat}|||${rawSub}`) : undefined
+  if (exactMatch) {
+    return { catId: exactMatch.appCategoryId, subId: exactMatch.appSubcategoryId ?? rawSub }
+  }
+  const catMatch = ruleMap.get(rawCat)
+  if (catMatch) {
+    return { catId: catMatch.appCategoryId, subId: catMatch.appSubcategoryId !== undefined ? catMatch.appSubcategoryId : rawSub }
+  }
+  if (catIds.has(rawCat)) return { catId: rawCat, subId: rawSub }
+  return { catId: 'other', subId: rawSub }
+}
 
 export function ReconcileView() {
   const today = new Date()
   const [year, setYear] = useState(today.getFullYear())
   const [month, setMonth] = useState(today.getMonth() + 1)
   const store = useAppStore()
-  const { settings, actuals, monthCloses, reconciliations, allTransactions } = store
-  const { categories, accounts, monthStartDay, monthStartBusinessDay } = settings
+  const { settings, actuals, monthCloses, reconciliations, allTransactions, transactionOverrides } = store
+  const { categories, accounts, monthStartDay, monthStartBusinessDay, zlantarCategoryRules } = settings
 
   const monthId = makeMonthId(year, month)
   const actual = actuals[monthId]
@@ -64,7 +100,8 @@ export function ReconcileView() {
     return { income, expense, savings, net: income - expense - savings }
   }, [rows])
 
-  // Cashflow data for waterfall (actual savings flow from account transfers).
+  // Cashflow data for waterfall. Derived from the raw transactions (not the
+  // aggregated actuals) so each bar can list the exact transactions behind it.
   const cashflowData = useMemo(() => {
     if (!actual) return null
     const savingsAccountIds = new Set(
@@ -72,22 +109,57 @@ export function ReconcileView() {
         .filter((a) => ['savings', 'isk', 'investment'].includes(a.type))
         .map((a) => a.id)
     )
+    const catIds = new Set(categories.map((c) => c.id))
+    const ruleMap = buildRuleLookup(zlantarCategoryRules ?? DEFAULT_ZLANTAR_RULES)
+
+    let income = 0
+    const incomeTxs: ZlantarTransaction[] = []
+    const savingsTxs: ZlantarTransaction[] = []
     let savingsIn = 0, savingsOut = 0
+    const expenseByCat: Record<string, { total: number; txs: ZlantarTransaction[] }> = {}
+
     for (const tx of allTransactions) {
       if (!tx.date) continue
       if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) continue
-      if (tx.transaction_type !== 'transfer') continue
-      if (savingsAccountIds.has(tx.account_number)) {
-        if (tx.amount > 0) savingsIn += tx.amount
-        else savingsOut += tx.amount
+
+      if (tx.transaction_type === 'transfer') {
+        if (savingsAccountIds.has(tx.account_number)) {
+          if (tx.amount > 0) savingsIn += tx.amount
+          else savingsOut += tx.amount
+          savingsTxs.push(tx)
+        }
+        continue
+      }
+
+      const { catId } = resolveCategory(
+        tx.category ?? '', tx.subcategory ?? '',
+        catIds, ruleMap, transactionOverrides[txKey(tx)]
+      )
+      const cat = categories.find((c) => c.id === catId)
+      if (!cat) continue
+      if (cat.type === 'income') { income += tx.amount; incomeTxs.push(tx) }
+      else if (cat.type === 'expense') {
+        const e = expenseByCat[catId] ?? { total: 0, txs: [] }
+        e.total += tx.amount
+        e.txs.push(tx)
+        expenseByCat[catId] = e
       }
     }
+
     const netSavings = savingsIn + savingsOut
-    const expenseGroups = rows
-      .filter((r) => r.cat.type === 'expense' && r.actual > 0)
-      .map((r) => ({ catId: r.cat.id, catName: r.cat.name, catColor: r.cat.color ?? '#94a3b8', total: r.actual }))
-    return { income: totals.income, netSavings, totalExpenses: totals.expense, expenseGroups }
-  }, [actual, allTransactions, accounts, monthStartDay, monthStartBusinessDay, monthId, rows, totals])
+    const expenseGroups = categories
+      .filter((c) => c.type === 'expense' && expenseByCat[c.id])
+      .map((c) => ({
+        catId: c.id,
+        catName: c.name,
+        catColor: c.color ?? '#94a3b8',
+        total: Math.abs(expenseByCat[c.id].total),
+        txs: expenseByCat[c.id].txs,
+      }))
+    const totalExpenses = expenseGroups.reduce((s, g) => s + g.total, 0)
+
+    return { income, incomeTxs, netSavings, savingsTxs, totalExpenses, expenseGroups }
+  }, [actual, allTransactions, accounts, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, monthId])
 
   // Checklist signals.
   const uncategorizedCount = actual?.entries.find((e) => e.categoryId === 'other')?.transactionCount ?? 0
@@ -286,6 +358,7 @@ export function ReconcileView() {
 // ─── Kassaflöde waterfall ──────────────────────────────────────────────────────
 
 interface WFRow {
+  id: string
   label: string
   value: number
   leftPct: number
@@ -293,6 +366,7 @@ interface WFRow {
   color: string
   isResult?: boolean
   sign: '+' | '−'
+  txs?: ZlantarTransaction[]
 }
 
 interface CashflowExpenseGroup {
@@ -300,17 +374,21 @@ interface CashflowExpenseGroup {
   catName: string
   catColor: string
   total: number
+  txs: ZlantarTransaction[]
 }
 
 interface CashflowData {
   income: number
+  incomeTxs: ZlantarTransaction[]
   netSavings: number
+  savingsTxs: ZlantarTransaction[]
   totalExpenses: number
   expenseGroups: CashflowExpenseGroup[]
 }
 
 function WaterfallCard({ data }: { data: CashflowData }) {
-  const { income, netSavings, expenseGroups } = data
+  const { income, incomeTxs, netSavings, savingsTxs, expenseGroups } = data
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const bufferAmt = netSavings < 0 ? Math.abs(netSavings) : 0
   const savingsAmt = netSavings > 0 ? netSavings : 0
@@ -322,22 +400,23 @@ function WaterfallCard({ data }: { data: CashflowData }) {
   const wfRows: WFRow[] = []
   let remaining = totalIncoming
 
-  wfRows.push({ label: 'Inkomst', value: income, leftPct: 0, widthPct: toPct(income), color: '#6479b3', sign: '+' })
+  wfRows.push({ id: 'income', label: 'Inkomst', value: income, leftPct: 0, widthPct: toPct(income), color: '#6479b3', sign: '+', txs: incomeTxs })
 
   if (bufferAmt > 0) {
-    wfRows.push({ label: 'Från buffert', value: bufferAmt, leftPct: toPct(income), widthPct: toPct(bufferAmt), color: '#94a3b8', sign: '+' })
+    wfRows.push({ id: 'buffer', label: 'Från buffert', value: bufferAmt, leftPct: toPct(income), widthPct: toPct(bufferAmt), color: '#94a3b8', sign: '+', txs: savingsTxs })
   } else if (savingsAmt > 0) {
     remaining -= savingsAmt
-    wfRows.push({ label: 'Sparande', value: savingsAmt, leftPct: toPct(remaining), widthPct: toPct(savingsAmt), color: '#52a871', sign: '−' })
+    wfRows.push({ id: 'savings', label: 'Sparande', value: savingsAmt, leftPct: toPct(remaining), widthPct: toPct(savingsAmt), color: '#52a871', sign: '−', txs: savingsTxs })
   }
 
   for (const g of expenseGroups) {
     remaining -= g.total
-    wfRows.push({ label: g.catName, value: g.total, leftPct: toPct(Math.max(0, remaining)), widthPct: toPct(g.total), color: g.catColor, sign: '−' })
+    wfRows.push({ id: g.catId, label: g.catName, value: g.total, leftPct: toPct(Math.max(0, remaining)), widthPct: toPct(g.total), color: g.catColor, sign: '−', txs: g.txs })
   }
 
   const net = remaining
   wfRows.push({
+    id: 'net',
     label: net >= 0 ? 'Överskott' : 'Underskott',
     value: Math.abs(net),
     leftPct: 0,
@@ -347,40 +426,79 @@ function WaterfallCard({ data }: { data: CashflowData }) {
     isResult: true,
   })
 
+  const selected = wfRows.find((r) => r.id === selectedId && r.txs && r.txs.length > 0) ?? null
+  const selectedTxs = selected?.txs
+    ? [...selected.txs].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+    : []
+
   return (
     <Card padding={false} className="p-4 md:p-5">
       <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4">Kassaflöde</div>
       <div className="space-y-2">
-        {wfRows.map((row, i) => (
-          <div key={i} className={`flex items-center gap-2.5${row.isResult ? ' mt-1 pt-2 border-t border-warm-100' : ''}`}>
-            <span className={`text-xs w-28 text-right flex-shrink-0 ${row.isResult ? 'font-semibold text-gray-700' : 'text-gray-400'}`}>
-              {row.label}
-            </span>
-            <div className="flex-1 relative h-7 bg-gray-50 rounded-md overflow-hidden">
-              <div
-                className="absolute h-full rounded-md transition-all duration-300"
-                style={{
-                  left: `${row.leftPct}%`,
-                  width: `${Math.min(row.widthPct, 100 - row.leftPct)}%`,
-                  backgroundColor: row.color,
-                  opacity: row.isResult ? 1 : 0.85,
-                }}
-              />
-              {row.widthPct > 15 && (
-                <span
-                  className="absolute top-1/2 -translate-y-1/2 text-white text-xs font-medium px-1.5 pointer-events-none"
-                  style={{ left: `calc(${row.leftPct}% + 4px)` }}
-                >
-                  {formatCurrency(row.value)}
-                </span>
-              )}
+        {wfRows.map((row) => {
+          const clickable = !!(row.txs && row.txs.length > 0)
+          const isActive = selectedId === row.id
+          return (
+            <div key={row.id} className={`flex items-center gap-2.5${row.isResult ? ' mt-1 pt-2 border-t border-warm-100' : ''}`}>
+              <span className={`text-xs w-28 text-right flex-shrink-0 ${row.isResult ? 'font-semibold text-gray-700' : 'text-gray-400'}`}>
+                {row.label}
+              </span>
+              <button
+                type="button"
+                disabled={!clickable}
+                onClick={() => clickable && setSelectedId(isActive ? null : row.id)}
+                className={`flex-1 relative h-7 bg-gray-50 rounded-md overflow-hidden text-left transition-shadow ${clickable ? 'cursor-pointer hover:ring-2 hover:ring-gray-200' : 'cursor-default'} ${isActive ? 'ring-2 ring-gray-400' : ''}`}
+                title={clickable ? `Visa ${row.txs!.length} transaktioner` : undefined}
+              >
+                <div
+                  className="absolute h-full rounded-md transition-all duration-300"
+                  style={{
+                    left: `${row.leftPct}%`,
+                    width: `${Math.min(row.widthPct, 100 - row.leftPct)}%`,
+                    backgroundColor: row.color,
+                    opacity: row.isResult ? 1 : 0.85,
+                  }}
+                />
+                {row.widthPct > 15 && (
+                  <span
+                    className="absolute top-1/2 -translate-y-1/2 text-white text-xs font-medium px-1.5 pointer-events-none"
+                    style={{ left: `calc(${row.leftPct}% + 4px)` }}
+                  >
+                    {formatCurrency(row.value)}
+                  </span>
+                )}
+              </button>
+              <span className={`text-xs w-24 text-right flex-shrink-0 tabular-nums ${row.isResult ? 'font-semibold text-gray-700' : 'text-gray-600'}`}>
+                {row.sign}{formatCurrency(row.value)}
+              </span>
             </div>
-            <span className={`text-xs w-24 text-right flex-shrink-0 tabular-nums ${row.isResult ? 'font-semibold text-gray-700' : 'text-gray-600'}`}>
-              {row.sign}{formatCurrency(row.value)}
-            </span>
-          </div>
-        ))}
+          )
+        })}
       </div>
+
+      {selected && (
+        <div className="mt-4 border border-warm-200 rounded-lg overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 bg-warm-50 border-b border-warm-200">
+            <span className="text-xs font-semibold text-gray-700 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: selected.color }} />
+              {selected.label}
+              <span className="text-gray-400 font-normal">{selectedTxs.length} transaktioner</span>
+            </span>
+            <button onClick={() => setSelectedId(null)} className="text-gray-400 hover:text-gray-700 transition-colors" aria-label="Stäng">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="max-h-72 overflow-y-auto divide-y divide-warm-100">
+            {selectedTxs.map((tx, i) => (
+              <div key={txKey(tx) + i} className="flex items-center gap-3 px-3 py-2">
+                <span className="text-xs text-gray-400 tabular-nums w-20 shrink-0">{tx.date}</span>
+                <span className="flex-1 truncate text-sm text-gray-700" title={tx.description || undefined}>{tx.description || '—'}</span>
+                <span className={`text-xs tabular-nums shrink-0 ${tx.amount < 0 ? 'text-gray-700' : 'text-emerald-600'}`}>{formatCurrency(tx.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </Card>
   )
 }
