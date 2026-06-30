@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Trash2, Settings as SettingsIcon, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react'
+import { Select } from '@/components/ui/Select'
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend,
 } from 'recharts'
@@ -329,10 +330,12 @@ export function PlanView() {
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Typ</label>
-                  <select value={form.type ?? 'expense'} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as LiquidityEntry['type'] }))}
-                    className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
-                    {Object.entries(TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                  </select>
+                  <Select
+                    className="w-full"
+                    value={form.type ?? 'expense'}
+                    onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as LiquidityEntry['type'] }))}
+                    options={Object.entries(TYPE_LABELS).map(([v, l]) => ({ value: v, label: l }))}
+                  />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Belopp (kr)</label>
