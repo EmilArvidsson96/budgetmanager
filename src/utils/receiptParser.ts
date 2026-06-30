@@ -223,8 +223,8 @@ export async function parseReceiptText(
 export function findMatchingTransaction(
   receiptDate: string,
   receiptTotal: number,
-  transactions: Array<{ date: string; amount: number; description?: string }>
-): { date: string; description: string; amount: number } | undefined {
+  transactions: Array<{ date: string; amount: number; description?: string; account_number?: string }>
+): { date: string; description: string; amount: number; transactionId?: string } | undefined {
   // Allow ±1 day for timezone/end-of-day receipt timing
   const receiptMs = new Date(receiptDate).getTime()
   const oneDayMs = 86_400_000
@@ -239,6 +239,8 @@ export function findMatchingTransaction(
         date: tx.date,
         description: tx.description ?? '',
         amount: tx.amount,
+        // Mirror transferReconciliation.txKey so the receipt links to a stable id.
+        transactionId: `${tx.date}|${tx.amount}|${tx.description ?? ''}|${tx.account_number ?? ''}`,
       }
     }
   }

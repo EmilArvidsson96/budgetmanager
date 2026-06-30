@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, Search, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search, X, Pencil, RotateCcw } from 'lucide-react'
 import {
   PieChart, Pie, Cell,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -8,6 +8,7 @@ import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
+import { Button } from '@/components/ui/Button'
 import {
   MONTH_NAMES_LONG,
   MONTH_NAMES_SHORT,
@@ -16,10 +17,15 @@ import {
 } from '@/utils/budgetHelpers'
 import { getMonthIdForDate } from '@/utils/periodUtils'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
+import { txKey } from '@/utils/transferReconciliation'
+import { GROCERY_CATEGORY_LABELS } from '@/types'
 import type {
   CategoryDef,
   ZlantarTransaction,
   ZlantarCategoryRule,
+  TxOverride,
+  GroceryReceipt,
+  GroceryCategory,
 } from '@/types'
 
 type RuleTarget = { appCategoryId: string; appSubcategoryId?: string }
@@ -39,8 +45,12 @@ function resolveCategory(
   rawCat: string,
   rawSub: string,
   catIds: Set<string>,
-  ruleMap: Map<string, RuleTarget>
+  ruleMap: Map<string, RuleTarget>,
+  override?: TxOverride
 ): { catId: string; subId: string } {
+  // A user override always wins — this is how per-transaction re-categorization takes effect.
+  if (override) return { catId: override.categoryId, subId: override.subcategoryId ?? '' }
+
   if (!rawCat) return { catId: 'other', subId: '' }
 
   const exactMatch = rawSub ? ruleMap.get(`${rawCat}|||${rawSub}`) : undefined
@@ -104,8 +114,9 @@ export function TransactionsView() {
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set())
   const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
+  const [view, setView] = useState<'categories' | 'transfers'>('categories')
 
-  const { settings, allTransactions } = useAppStore()
+  const { settings, allTransactions, transactionOverrides, groceryReceipts } = useAppStore()
   const { categories, zlantarCategoryRules, monthStartDay, monthStartBusinessDay } = settings
 
   const monthId = makeMonthId(year, month)
@@ -137,7 +148,8 @@ export function TransactionsView() {
         tx.category ?? '',
         tx.subcategory ?? '',
         catIds,
-        ruleMap
+        ruleMap,
+        transactionOverrides[txKey(tx)]
       )
       monthTxs.push({ tx, catId, subId })
     }
@@ -177,7 +189,25 @@ export function TransactionsView() {
         }
       })
       .filter((g) => g.count > 0)
-  }, [allTransactions, categories, zlantarCategoryRules, monthId, monthStartDay, monthStartBusinessDay, search])
+  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, monthId, monthStartDay, monthStartBusinessDay, search])
+
+  // Transfers for the selected month (own-account transfers — excluded from budget
+  // totals; surfaced here so you can see what was moved).
+  const transfers = useMemo(() => {
+    const searchLower = search.trim().toLowerCase()
+    return allTransactions
+      .filter((tx) => {
+        if (tx.transaction_type !== 'transfer' || !tx.date) return false
+        if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) return false
+        if (searchLower) {
+          const hay = `${tx.description ?? ''} ${tx.account_name ?? ''}`.toLowerCase()
+          if (!hay.includes(searchLower)) return false
+        }
+        return true
+      })
+      .sort((a, b) => b.date.localeCompare(a.date))
+  }, [allTransactions, monthId, monthStartDay, monthStartBusinessDay, search])
+  const transferTotal = transfers.reduce((s, t) => s + t.amount, 0)
 
   const grandTotal = groups.reduce((s, g) => s + g.total, 0)
   const grandCount = groups.reduce((s, g) => s + g.count, 0)
@@ -229,7 +259,8 @@ export function TransactionsView() {
         tx.category ?? '',
         tx.subcategory ?? '',
         catIds,
-        ruleMap
+        ruleMap,
+        transactionOverrides[txKey(tx)]
       )
       if (!expenseIds.has(catId)) continue
       buckets[mid][catId] = (buckets[mid][catId] ?? 0) + Math.abs(tx.amount)
@@ -248,7 +279,7 @@ export function TransactionsView() {
       }
       return row
     })
-  }, [allTransactions, categories, zlantarCategoryRules, year, month, monthStartDay, monthStartBusinessDay, search])
+  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, year, month, monthStartDay, monthStartBusinessDay, search])
 
   const expenseCategories = useMemo(
     () => categories.filter((c) => c.type === 'expense'),
@@ -324,56 +355,112 @@ export function TransactionsView() {
         )}
       </div>
 
-      {/* Charts */}
-      {(donutData.length > 0 || trendHasData) && (
-        <div className="grid md:grid-cols-2 gap-4 mb-6">
-          {donutData.length > 0 && (
-            <Card padding={false} className="p-3 md:p-5">
-              <CardHeader
-                title="Utgifter per kategori"
-                subtitle={`${MONTH_NAMES_LONG[month - 1]} ${year}`}
-              />
-              <CategoryDonut data={donutData} total={donutTotal} />
+      {/* View toggle: categories tree vs transfers */}
+      <div className="inline-flex rounded-lg border border-warm-300 bg-white p-0.5 mb-6">
+        {([['categories', 'Kategorier'], ['transfers', 'Överföringar']] as const).map(([v, label]) => (
+          <button
+            key={v}
+            onClick={() => setView(v)}
+            className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+              view === v ? 'bg-brand-500 text-white font-medium' : 'text-gray-500 hover:text-gray-800'
+            }`}
+          >
+            {label}
+            {v === 'transfers' && transfers.length > 0 && (
+              <span className={`ml-1.5 text-xs ${view === v ? 'text-white/80' : 'text-gray-400'}`}>{transfers.length}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {view === 'categories' && (
+        <>
+          {/* Charts */}
+          {(donutData.length > 0 || trendHasData) && (
+            <div className="grid md:grid-cols-2 gap-4 mb-6">
+              {donutData.length > 0 && (
+                <Card padding={false} className="p-3 md:p-5">
+                  <CardHeader
+                    title="Utgifter per kategori"
+                    subtitle={`${MONTH_NAMES_LONG[month - 1]} ${year}`}
+                  />
+                  <CategoryDonut data={donutData} total={donutTotal} />
+                </Card>
+              )}
+              {trendHasData && (
+                <Card padding={false} className="p-3 md:p-5">
+                  <CardHeader title="Utgifter senaste 6 månaderna" subtitle="Stapel per månad, färg per kategori" />
+                  <CategoryTrendBar data={trendData} categories={expenseCategories} />
+                </Card>
+              )}
+            </div>
+          )}
+
+          {/* Summary */}
+          {grandCount > 0 && (
+            <div className="flex items-center justify-between mb-4 text-xs text-gray-500 px-1">
+              <span>{grandCount} transaktioner</span>
+              <span className="tabular-nums font-medium text-gray-700">
+                {formatCurrency(grandTotal)} netto
+              </span>
+            </div>
+          )}
+
+          {groups.length === 0 ? (
+            <Card className="text-center py-16">
+              <p className="text-gray-400 text-sm">
+                Inga transaktioner för {MONTH_NAMES_LONG[month - 1]} {year}.
+              </p>
+            </Card>
+          ) : (
+            <Card padding={false} className="overflow-hidden">
+              {groups.map((g) => (
+                <CategoryBranch
+                  key={g.cat.id}
+                  group={g}
+                  categories={categories}
+                  receipts={groceryReceipts}
+                  expanded={expandedCats.has(g.cat.id)}
+                  onToggle={() => toggleCat(g.cat.id)}
+                  expandedSubs={expandedSubs}
+                  onToggleSub={toggleSub}
+                />
+              ))}
             </Card>
           )}
-          {trendHasData && (
-            <Card padding={false} className="p-3 md:p-5">
-              <CardHeader title="Utgifter senaste 6 månaderna" subtitle="Stapel per månad, färg per kategori" />
-              <CategoryTrendBar data={trendData} categories={expenseCategories} />
-            </Card>
-          )}
-        </div>
+        </>
       )}
 
-      {/* Summary */}
-      {grandCount > 0 && (
-        <div className="flex items-center justify-between mb-4 text-xs text-gray-500 px-1">
-          <span>{grandCount} transaktioner</span>
-          <span className="tabular-nums font-medium text-gray-700">
-            {formatCurrency(grandTotal)} netto
-          </span>
-        </div>
-      )}
-
-      {groups.length === 0 ? (
-        <Card className="text-center py-16">
-          <p className="text-gray-400 text-sm">
-            Inga transaktioner för {MONTH_NAMES_LONG[month - 1]} {year}.
-          </p>
-        </Card>
-      ) : (
-        <Card padding={false} className="overflow-hidden">
-          {groups.map((g) => (
-            <CategoryBranch
-              key={g.cat.id}
-              group={g}
-              expanded={expandedCats.has(g.cat.id)}
-              onToggle={() => toggleCat(g.cat.id)}
-              expandedSubs={expandedSubs}
-              onToggleSub={toggleSub}
-            />
-          ))}
-        </Card>
+      {view === 'transfers' && (
+        transfers.length === 0 ? (
+          <Card className="text-center py-16">
+            <p className="text-gray-400 text-sm">
+              Inga överföringar för {MONTH_NAMES_LONG[month - 1]} {year}.
+            </p>
+          </Card>
+        ) : (
+          <Card padding={false} className="overflow-hidden">
+            <div className="flex items-center justify-between px-3 md:px-5 py-3 bg-warm-50 border-b border-warm-200 text-xs text-gray-500">
+              <span>{transfers.length} överföringar · räknas inte in i budgeten</span>
+              <span className="tabular-nums font-medium text-gray-700">netto {formatCurrency(transferTotal)}</span>
+            </div>
+            {transfers.map((tx) => (
+              <div key={txKey(tx)} className="flex items-start gap-2 px-3 md:px-5 py-2.5 border-b border-warm-100 last:border-0">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-gray-700 truncate" title={tx.description ?? ''}>{tx.description || '—'}</div>
+                  <div className="text-[11px] text-gray-400 truncate">
+                    <span className="tabular-nums">{tx.date.slice(0, 10)}</span>
+                    <span className="px-1 text-gray-300">·</span>
+                    <span>{tx.account_name}</span>
+                  </div>
+                </div>
+                <div className={`text-right tabular-nums font-medium text-sm shrink-0 ml-2 ${tx.amount < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                  {formatCurrency(tx.amount)}
+                </div>
+              </div>
+            ))}
+          </Card>
+        )
       )}
     </Layout>
   )
@@ -383,12 +470,16 @@ export function TransactionsView() {
 
 function CategoryBranch({
   group,
+  categories,
+  receipts,
   expanded,
   onToggle,
   expandedSubs,
   onToggleSub,
 }: {
   group: CatGroup
+  categories: CategoryDef[]
+  receipts: GroceryReceipt[]
   expanded: boolean
   onToggle: () => void
   expandedSubs: Set<string>
@@ -433,6 +524,10 @@ function CategoryBranch({
                 subName={sg.subName}
                 total={sg.total}
                 transactions={sg.transactions}
+                categories={categories}
+                receipts={receipts}
+                catId={cat.id}
+                subId={sg.subId}
                 expanded={isOpen}
                 onToggle={() => onToggleSub(key)}
               />
@@ -443,6 +538,10 @@ function CategoryBranch({
               subName="Utan underkategori"
               total={uncategorized.reduce((s, t) => s + t.tx.amount, 0)}
               transactions={uncategorized}
+              categories={categories}
+              receipts={receipts}
+              catId={cat.id}
+              subId={undefined}
               expanded={expandedSubs.has(`${cat.id}|__none__`)}
               onToggle={() => onToggleSub(`${cat.id}|__none__`)}
               italic
@@ -460,6 +559,10 @@ function SubcategoryBranch({
   subName,
   total,
   transactions,
+  categories,
+  receipts,
+  catId,
+  subId,
   expanded,
   onToggle,
   italic,
@@ -467,10 +570,19 @@ function SubcategoryBranch({
   subName: string
   total: number
   transactions: ResolvedTx[]
+  categories: CategoryDef[]
+  receipts: GroceryReceipt[]
+  catId: string
+  subId?: string
   expanded: boolean
   onToggle: () => void
   italic?: boolean
 }) {
+  // Level-3 breakdown for Matvaror, derived from linked grocery receipts (item grain).
+  const groceryBreakdown = (catId === 'food' && subId === 'groceries')
+    ? buildGroceryBreakdown(receipts, transactions.map((t) => t.tx))
+    : null
+
   return (
     <div className="border-t border-warm-200/60">
       <div
@@ -497,39 +609,162 @@ function SubcategoryBranch({
 
       {expanded && (
         <div className="bg-white border-t border-warm-200/60">
+          {groceryBreakdown && groceryBreakdown.length > 0 && (
+            <div className="pl-10 md:pl-16 pr-3 md:pr-5 py-2.5 border-b border-warm-100 bg-warm-50/40">
+              <div className="text-[10px] font-semibold text-warm-500 uppercase tracking-widest mb-1.5">Fördelning från kvitton</div>
+              <div className="flex flex-wrap gap-1.5">
+                {groceryBreakdown.map((b) => (
+                  <span key={b.category} className="text-xs bg-white border border-warm-200 rounded-full px-2.5 py-1 text-gray-600">
+                    {GROCERY_CATEGORY_LABELS[b.category]} <span className="tabular-nums text-gray-400">{formatCurrency(b.amount)}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
           {[...transactions]
             .sort((a, b) => b.tx.date.localeCompare(a.tx.date))
-            .map((t, i) => (
-              <div
-                key={i}
-                className="flex items-start gap-2 pl-10 md:pl-16 pr-3 md:pr-5 py-2 border-b border-warm-100 last:border-0"
-              >
-                <div className="flex-1 min-w-0">
-                  <div
-                    className="text-sm text-gray-700 truncate"
-                    title={t.tx.description ?? ''}
-                  >
-                    {t.tx.description ?? '—'}
-                  </div>
-                  <div
-                    className="text-[11px] text-gray-400 truncate"
-                    title={t.tx.account_name}
-                  >
-                    <span className="tabular-nums">{t.tx.date}</span>
-                    <span className="px-1 text-gray-300">·</span>
-                    <span>{t.tx.account_name}</span>
-                  </div>
-                </div>
-                <div
-                  className={`text-right tabular-nums font-medium text-sm shrink-0 ml-2 ${
-                    t.tx.amount < 0 ? 'text-red-500' : 'text-emerald-600'
-                  }`}
-                >
-                  {formatCurrency(t.tx.amount)}
-                </div>
-              </div>
+            .map((t) => (
+              <TransactionRow key={txKey(t.tx)} tx={t.tx} categories={categories} catId={catId} subId={subId} />
             ))}
         </div>
+      )}
+    </div>
+  )
+}
+
+// Aggregate linked receipts' items by grocery category for the given transactions.
+function buildGroceryBreakdown(
+  receipts: GroceryReceipt[],
+  transactions: ZlantarTransaction[],
+): { category: GroceryCategory; amount: number }[] {
+  const keys = new Set(transactions.map((t) => txKey(t)))
+  const sums = new Map<GroceryCategory, number>()
+  for (const r of receipts) {
+    const m = r.matchedTransaction
+    if (!m) continue
+    const linked = m.transactionId
+      ? keys.has(m.transactionId)
+      : transactions.some((t) => t.date === m.date && t.amount === m.amount)
+    if (!linked) continue
+    for (const item of r.items) sums.set(item.category, (sums.get(item.category) ?? 0) + item.amount)
+  }
+  return [...sums.entries()]
+    .map(([category, amount]) => ({ category, amount }))
+    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
+}
+
+// ─── Transaction row (with inline re-categorization) ──────────────────────────
+
+function TransactionRow({
+  tx, categories, catId, subId,
+}: {
+  tx: ZlantarTransaction
+  categories: CategoryDef[]
+  catId: string
+  subId?: string
+}) {
+  const store = useAppStore()
+  const [editing, setEditing] = useState(false)
+  const key = txKey(tx)
+  const override = store.transactionOverrides[key]
+  const cat = categories.find((c) => c.id === catId)
+  const level3Name = override?.level3Id ? cat?.level3?.find((l) => l.id === override.level3Id)?.name : undefined
+
+  return (
+    <div className="border-b border-warm-100 last:border-0">
+      <div className="flex items-start gap-2 pl-10 md:pl-16 pr-3 md:pr-5 py-2">
+        <div className="flex-1 min-w-0">
+          <div className="text-sm text-gray-700 truncate flex items-center gap-1.5" title={tx.description ?? ''}>
+            {tx.description ?? '—'}
+            {override && <span title="Omkategoriserad" className="w-1.5 h-1.5 rounded-full bg-brand-500 shrink-0" />}
+            {level3Name && <span className="text-[10px] bg-warm-100 text-warm-600 rounded-full px-1.5 py-0.5 shrink-0">{level3Name}</span>}
+          </div>
+          <div className="text-[11px] text-gray-400 truncate" title={tx.account_name}>
+            <span className="tabular-nums">{tx.date.slice(0, 10)}</span>
+            <span className="px-1 text-gray-300">·</span>
+            <span>{tx.account_name}</span>
+          </div>
+        </div>
+        <div className={`text-right tabular-nums font-medium text-sm shrink-0 ml-2 ${tx.amount < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+          {formatCurrency(tx.amount)}
+        </div>
+        <button
+          onClick={() => setEditing((v) => !v)}
+          className="text-gray-300 hover:text-brand-600 transition-colors shrink-0 mt-0.5"
+          title="Byt kategori"
+        >
+          <Pencil className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      {editing && (
+        <CategoryPicker
+          categories={categories}
+          currentCatId={catId}
+          currentSubId={subId}
+          currentLevel3Id={override?.level3Id}
+          canReset={!!override}
+          onPick={(c, s, l3) => { store.setTransactionOverride(key, { categoryId: c, subcategoryId: s, level3Id: l3 }); setEditing(false) }}
+          onReset={() => { store.clearTransactionOverride(key); setEditing(false) }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── Category picker (re-categorize a single transaction) ─────────────────────
+
+function CategoryPicker({
+  categories, currentCatId, currentSubId, currentLevel3Id, canReset, onPick, onReset,
+}: {
+  categories: CategoryDef[]
+  currentCatId: string
+  currentSubId?: string
+  currentLevel3Id?: string
+  canReset: boolean
+  onPick: (catId: string, subId?: string, level3Id?: string) => void
+  onReset: () => void
+}) {
+  const [catId, setCatId] = useState(currentCatId)
+  const [subId, setSubId] = useState(currentSubId ?? '')
+  const [level3Id, setLevel3Id] = useState(currentLevel3Id ?? '')
+  const selectedCat = categories.find((c) => c.id === catId)
+  const level3Options = (selectedCat?.level3 ?? []).filter((l) => l.parentSubId === subId)
+
+  return (
+    <div className="ml-10 md:ml-16 mb-2 flex flex-wrap items-center gap-2 bg-warm-50 border border-warm-200 rounded-lg p-2">
+      <select
+        className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+        value={catId}
+        onChange={(e) => { setCatId(e.target.value); setSubId(''); setLevel3Id('') }}
+      >
+        {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+      </select>
+      {selectedCat && selectedCat.subcategories.length > 0 && (
+        <select
+          className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+          value={subId}
+          onChange={(e) => { setSubId(e.target.value); setLevel3Id('') }}
+        >
+          <option value="">(ingen)</option>
+          {selectedCat.subcategories.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      )}
+      {level3Options.length > 0 && (
+        <select
+          className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+          value={level3Id}
+          onChange={(e) => setLevel3Id(e.target.value)}
+          title="Nivå 3"
+        >
+          <option value="">(ingen nivå 3)</option>
+          {level3Options.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+        </select>
+      )}
+      <Button size="sm" onClick={() => onPick(catId, subId || undefined, level3Id || undefined)}>Spara</Button>
+      {canReset && (
+        <Button size="sm" variant="secondary" onClick={onReset}>
+          <RotateCcw className="w-3.5 h-3.5" /> Återställ
+        </Button>
       )}
     </div>
   )

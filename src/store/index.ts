@@ -8,7 +8,6 @@ import type {
   MonthlyActuals,
   LiquidityPlan,
   ZlantarImport,
-  ZlantarTransaction,
   CategoryDef,
   Account,
   RecurringItem,
@@ -23,10 +22,12 @@ import type {
   AccountBalance,
   AccountType,
   ReconciliationRecord,
+  TxOverride,
 } from '@/types'
-import { extractOwner } from '@/utils/zlantarParser'
-import { txKey } from '@/utils/transferReconciliation'
-import { DEFAULT_CATEGORIES, DEFAULT_ZLANTAR_RULES } from './defaultCategories'
+import { extractOwner, buildMonthEntries } from '@/utils/zlantarParser'
+import { txKey, reconciledKeysFromRecords } from '@/utils/transferReconciliation'
+import { getMonthIdForDate } from '@/utils/periodUtils'
+import { DEFAULT_CATEGORIES, DEFAULT_ZLANTAR_RULES, GROCERY_LEVEL3 } from './defaultCategories'
 
 // ─── Store migration ──────────────────────────────────────────────────────────
 
@@ -229,6 +230,39 @@ function migrateV1(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, monthlyBudgets, yearlyBudgets }
 }
 
+// v5 → v6: introduce transactionOverrides (per-transaction re-categorization) and
+// seed the grocery level-3 onto an existing 'food' category that predates it, so
+// upgrading users get the same defaults as a fresh install.
+function migrateV5(raw: Record<string, unknown>): Record<string, unknown> {
+  const transactionOverrides = (raw.transactionOverrides as Record<string, TxOverride>) ?? {}
+  const settings = (raw.settings ?? {}) as AppSettings
+  const categories = (settings.categories ?? DEFAULT_CATEGORIES).map((c) =>
+    c.id === 'food' && !(c.level3 && c.level3.length) ? { ...c, level3: GROCERY_LEVEL3 } : c
+  )
+  return { ...raw, transactionOverrides, settings: { ...settings, categories } }
+}
+
+// Rebuild one already-imported month's actuals from allTransactions + overrides,
+// preserving the snapshot's accountBalances / importedAt. Runs after every
+// re-categorization so aggregated budget totals stay in sync with the transactions.
+// Months that were never imported (no existing actuals) are left untouched —
+// re-categorization still shows live in the Transactions view.
+function recomputeMonth(
+  state: AppState,
+  monthId: string,
+  overrides: Record<string, TxOverride>
+): Record<string, MonthlyActuals> {
+  const existing = state.actuals[monthId]
+  if (!existing) return state.actuals
+  const { settings } = state
+  const reconciled = reconciledKeysFromRecords(state.reconciliations)
+  const entries = buildMonthEntries(
+    state.allTransactions, monthId, settings.categories, settings.zlantarCategoryRules,
+    overrides, reconciled, settings.monthStartDay, settings.monthStartBusinessDay
+  )
+  return { ...state.actuals, [monthId]: { ...existing, entries } }
+}
+
 const DEFAULT_SETTINGS: AppSettings = {
   currency: 'SEK',
   defaultView: 'monthly',
@@ -275,6 +309,10 @@ interface AppStore extends AppState {
   // Zlantar import
   setZlantarImport: (imp: ZlantarImport) => void
 
+  // Per-transaction category overrides (keyed by txKey)
+  setTransactionOverride: (txId: string, override: TxOverride) => void
+  clearTransactionOverride: (txId: string) => void
+
   // Transfer reconciliation (between owners)
   addReconciliationRecord: (record: ReconciliationRecord) => void
   removeReconciliationRecord: (id: string) => void
@@ -296,6 +334,7 @@ export const useAppStore = create<AppStore>()(
       liquidityPlans: {},
       groceryReceipts: [],
       allTransactions: [],
+      transactionOverrides: {},
       lastZlantarImport: undefined,
       importSnapshots: [],
       reconciliations: [],
@@ -468,6 +507,24 @@ export const useAppStore = create<AppStore>()(
           }
         }),
 
+      setTransactionOverride: (txId, override) =>
+        set((state) => {
+          const transactionOverrides = { ...state.transactionOverrides, [txId]: override }
+          const tx = state.allTransactions.find((t) => txKey(t) === txId)
+          if (!tx?.date) return { transactionOverrides }
+          const monthId = getMonthIdForDate(tx.date, state.settings.monthStartDay, state.settings.monthStartBusinessDay)
+          return { transactionOverrides, actuals: recomputeMonth(state, monthId, transactionOverrides) }
+        }),
+
+      clearTransactionOverride: (txId) =>
+        set((state) => {
+          const { [txId]: _removed, ...transactionOverrides } = state.transactionOverrides
+          const tx = state.allTransactions.find((t) => txKey(t) === txId)
+          if (!tx?.date) return { transactionOverrides }
+          const monthId = getMonthIdForDate(tx.date, state.settings.monthStartDay, state.settings.monthStartBusinessDay)
+          return { transactionOverrides, actuals: recomputeMonth(state, monthId, transactionOverrides) }
+        }),
+
       addReconciliationRecord: (record) =>
         set((state) => {
           const filtered = state.reconciliations.filter((r) => r.id !== record.id)
@@ -505,7 +562,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 5,
+      version: 6,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
@@ -513,6 +570,7 @@ export const useAppStore = create<AppStore>()(
         if (version < 3) state = migrateV2(state)
         if (version < 4) state = migrateV3(state)
         if (version < 5) state = migrateV4(state)
+        if (version < 6) state = migrateV5(state)
         return state
       },
     }

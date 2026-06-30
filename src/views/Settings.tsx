@@ -6,7 +6,8 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { RECEIPT_MODELS, DEFAULT_RECEIPT_MODEL } from '@/utils/receiptModels'
-import type { Account, RecurringItem, AccountType, ZlantarCategoryRule, CategoryDef } from '@/types'
+import { slugify } from '@/utils/slug'
+import type { Account, RecurringItem, AccountType, ZlantarCategoryRule, CategoryDef, Level3Def } from '@/types'
 
 function newId() { return `id-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
 
@@ -491,14 +492,6 @@ function isZlantarLinked(catId: string, subId: string): boolean {
   return ZLANTAR_DIRECT_CAT_IDS.has(catId)
 }
 
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/å/g, 'a').replace(/ä/g, 'a').replace(/ö/g, 'o')
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_|_$/g, '')
-}
-
 function CategoriesTab() {
   const store = useAppStore()
   const { categories } = store.settings
@@ -633,21 +626,169 @@ function CategoriesTab() {
               </div>
               {cat.subcategories.length > 0 && (
                 <div className="ml-5 space-y-0.5 mb-1">
-                  {cat.subcategories.map((sub) => (
-                    <div key={sub.id} className="text-xs text-gray-500 py-0.5 pl-3 border-l border-gray-100 flex items-center gap-1.5">
-                      {sub.name}
-                      {isZlantarLinked(cat.id, sub.id) && (
-                        <Badge variant="blue" size="sm">Zlantar</Badge>
-                      )}
-                    </div>
-                  ))}
+                  {cat.subcategories.map((sub) => {
+                    const level3 = (cat.level3 ?? []).filter((l) => l.parentSubId === sub.id)
+                    return (
+                      <div key={sub.id}>
+                        <div className="text-xs text-gray-500 py-0.5 pl-3 border-l border-gray-100 flex items-center gap-1.5">
+                          {sub.name}
+                          {isZlantarLinked(cat.id, sub.id) && (
+                            <Badge variant="blue" size="sm">Zlantar</Badge>
+                          )}
+                        </div>
+                        {level3.length > 0 && (
+                          <div className="ml-3 pl-3 border-l border-gray-100">
+                            {level3.map((l) => (
+                              <div key={l.id} className="text-[11px] text-gray-400 py-0.5">— {l.name}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
           ))}
         </div>
       </Card>
+
+      {/* Level-3 (under-under) management */}
+      <Level3Manager />
     </div>
+  )
+}
+
+// ─── Level-3 (under-under-kategorier) management ──────────────────────────────
+
+function Level3Manager() {
+  const store = useAppStore()
+  const { categories } = store.settings
+
+  const [catId, setCatId] = useState(categories[0]?.id ?? '')
+  const [subId, setSubId] = useState('')
+  const [addName, setAddName] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+
+  const cat = categories.find((c) => c.id === catId)
+  const subs = cat?.subcategories ?? []
+  const effectiveSubId = subs.find((s) => s.id === subId) ? subId : (subs[0]?.id ?? '')
+  const level3 = (cat?.level3 ?? []).filter((l) => l.parentSubId === effectiveSubId)
+
+  const updateCatLevel3 = (fn: (current: Level3Def[]) => Level3Def[]) => {
+    if (!cat) return
+    store.setCategories(
+      categories.map((c) => (c.id === cat.id ? { ...c, level3: fn(c.level3 ?? []) } : c))
+    )
+  }
+
+  const makeId = (name: string): string => {
+    const base = `${effectiveSubId}__${slugify(name) || 'niva3'}`
+    const taken = new Set((cat?.level3 ?? []).map((l) => l.id))
+    if (!taken.has(base)) return base
+    let i = 2
+    while (taken.has(`${base}_${i}`)) i++
+    return `${base}_${i}`
+  }
+
+  const addLevel3 = () => {
+    const name = addName.trim()
+    if (!name || !effectiveSubId) return
+    updateCatLevel3((current) => [...current, { id: makeId(name), name, parentSubId: effectiveSubId }])
+    setAddName('')
+  }
+
+  const saveEdit = () => {
+    if (!editName.trim() || !editingId) return
+    updateCatLevel3((current) => current.map((l) => (l.id === editingId ? { ...l, name: editName.trim() } : l)))
+    setEditingId(null)
+  }
+
+  const deleteLevel3 = (id: string) => {
+    updateCatLevel3((current) => current.filter((l) => l.id !== id))
+  }
+
+  return (
+    <Card>
+      <CardHeader
+        title="Under-underkategorier (nivå 3)"
+        subtitle="Skapa egna nivå-3-kategorier, t.ex. under Matvaror. Används för uppföljning — för Matvaror fylls de i automatiskt från dina kvitton."
+      />
+
+      <div className="flex flex-wrap gap-2 mb-4">
+        <select
+          className="border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+          value={catId}
+          onChange={(e) => { setCatId(e.target.value); setSubId('') }}
+        >
+          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <select
+          className="border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50"
+          value={effectiveSubId}
+          onChange={(e) => setSubId(e.target.value)}
+          disabled={subs.length === 0}
+        >
+          {subs.length === 0 && <option value="">Inga underkategorier</option>}
+          {subs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      </div>
+
+      {effectiveSubId && (
+        <>
+          <div className="space-y-1 mb-3">
+            {level3.length === 0 && (
+              <p className="text-sm text-gray-400 py-2">Inga nivå-3-kategorier ännu.</p>
+            )}
+            {level3.map((l) => (
+              <div key={l.id} className="flex items-center gap-2 py-1.5 px-2 rounded-lg group hover:bg-gray-50">
+                {editingId === l.id ? (
+                  <>
+                    <input
+                      autoFocus
+                      className="flex-1 border border-brand-300 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') setEditingId(null) }}
+                    />
+                    <button onClick={saveEdit} className="text-green-600 hover:text-green-700 p-1"><Check className="w-3.5 h-3.5" /></button>
+                    <button onClick={() => setEditingId(null)} className="text-gray-400 hover:text-gray-600 p-1"><X className="w-3.5 h-3.5" /></button>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex-1 text-sm text-gray-700">{l.name}</span>
+                    <button
+                      onClick={() => { setEditingId(l.id); setEditName(l.name) }}
+                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => deleteLevel3(l.id)}
+                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex gap-2 items-end">
+            <input
+              className="flex-1 border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+              value={addName}
+              onChange={(e) => setAddName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') addLevel3() }}
+              placeholder="t.ex. Frukt & grönt, Kött & chark…"
+            />
+            <Button size="sm" onClick={addLevel3} disabled={!addName.trim()}><Plus className="w-4 h-4" />Lägg till</Button>
+          </div>
+        </>
+      )}
+    </Card>
   )
 }
 
@@ -746,7 +887,9 @@ function ZlantarMappingTab() {
     return { catName: cat?.name ?? zCat, subName: sub?.name ?? zSub, ruleType: 'auto' }
   }
 
-  const FormRow = ({ isNew }: { isNew: boolean }) => (
+  // Render function (not a component) — it closes over this tab's form state, so
+  // declaring it as a component would reset that state on every render.
+  const renderForm = (isNew: boolean) => (
     <div className="p-4 bg-brand-50 rounded-xl border border-brand-100 space-y-3">
       <h4 className="text-sm font-medium text-gray-800">{isNew ? 'Ny regel' : 'Redigera regel'}</h4>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
@@ -819,7 +962,7 @@ function ZlantarMappingTab() {
             }
           />
 
-          {showAdd && <div className="mb-4"><FormRow isNew /></div>}
+          {showAdd && <div className="mb-4">{renderForm(true)}</div>}
 
           {zlantarCategoryRules.length === 0 && !showAdd ? (
             <p className="text-sm text-gray-400 text-center py-6">Inga regler konfigurerade. Allt matchas automatiskt.</p>
@@ -829,7 +972,7 @@ function ZlantarMappingTab() {
                 const appCat = categories.find((c) => c.id === rule.appCategoryId)
                 const appSub = appCat?.subcategories.find((s) => s.id === rule.appSubcategoryId)
                 return editingId === rule.id ? (
-                  <div key={rule.id} className="mb-2"><FormRow isNew={false} /></div>
+                  <div key={rule.id} className="mb-2">{renderForm(false)}</div>
                 ) : (
                   <div key={rule.id} className="flex items-center gap-2 py-2 px-2 rounded-lg group hover:bg-gray-50">
                     <div className="flex-1 flex items-center gap-1.5 flex-wrap min-w-0">

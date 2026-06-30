@@ -10,6 +10,7 @@ import type {
   RecurringItem,
   CategoryDef,
   ZlantarCategoryRule,
+  TxOverride,
 } from '@/types'
 import { AGREEMENT_CATEGORY_MAP, DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import { getMonthIdForDate } from '@/utils/periodUtils'
@@ -146,8 +147,12 @@ function resolveCategory(
   rawCat: string,
   rawSub: string,
   catIds: Set<string>,
-  ruleMap: Map<string, RuleTarget>
+  ruleMap: Map<string, RuleTarget>,
+  override?: TxOverride
 ): { catId: string; subId: string } {
+  // A user override always wins — this is how re-categorization takes effect.
+  if (override) return { catId: override.categoryId, subId: override.subcategoryId ?? '' }
+
   if (!rawCat) return { catId: 'other', subId: '' }
 
   // Exact match: category + subcategory
@@ -176,70 +181,87 @@ function resolveCategory(
 
 // ─── Build monthly actuals grouped by YYYY-MM ────────────────────────────────
 
+// Aggregate one month's transactions into ActualEntry[]. Shared by the import
+// build and the per-month recompute that runs after re-categorization, so totals
+// and drill-down can never diverge. Transfers and reconciled-out keys are excluded;
+// per-transaction overrides (keyed by txKey) take precedence over rule mapping.
+export function buildMonthEntries(
+  transactions: ZlantarTransaction[],
+  monthId: string,
+  categories: CategoryDef[],
+  rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES,
+  overrides: Record<string, TxOverride> = {},
+  excludeKeys?: Set<string>,
+  monthStartDay = 1,
+  monthStartBusinessDay = false
+): ActualEntry[] {
+  const catIds = new Set(categories.map((c) => c.id))
+  const ruleMap = buildRuleLookup(rules)
+  const aggMap: Record<string, ActualEntry> = {}
+
+  for (const tx of transactions) {
+    if (!tx.date) continue
+    if (tx.transaction_type === 'transfer') continue
+    if (excludeKeys && excludeKeys.has(makeTxKey(tx))) continue
+    if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) continue
+
+    const { catId, subId } = resolveCategory(
+      tx.category ?? '',
+      tx.subcategory ?? '',
+      catIds,
+      ruleMap,
+      overrides[makeTxKey(tx)]
+    )
+    const key = `${catId}|||${subId}`
+
+    if (!aggMap[key]) {
+      const catDef = categories.find((c) => c.id === catId)
+      const subDef = catDef?.subcategories.find((s) => s.id === subId)
+      aggMap[key] = {
+        categoryId: catId,
+        categoryName: catDef?.name ?? catId,
+        subcategoryId: subId || undefined,
+        subcategoryName: subDef?.name ?? (subId || undefined),
+        totalAmount: 0,
+        transactionCount: 0,
+      }
+    }
+    aggMap[key].totalAmount += tx.amount
+    aggMap[key].transactionCount += 1
+  }
+
+  return Object.values(aggMap)
+}
+
 export function buildMonthlyActuals(
   imp: ZlantarImport,
   categories: CategoryDef[],
   rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES,
   monthStartDay = 1,
   monthStartBusinessDay = false,
-  excludeKeys?: Set<string>
+  excludeKeys?: Set<string>,
+  overrides: Record<string, TxOverride> = {}
 ): Record<string, MonthlyActuals> {
   const { transactions, data } = imp
 
-  const catIds = new Set(categories.map((c) => c.id))
-  const ruleMap = buildRuleLookup(rules)
-
-  // Group by period key (YYYY-MM), skipping transfers (no category) and any
-  // transactions reconciled out (e.g. swish/bank transfers between owners).
-  const byMonth: Record<string, ZlantarTransaction[]> = {}
+  // Collect the months present (transfers + reconciled keys excluded)
+  const months = new Set<string>()
   for (const tx of transactions) {
-    if (!tx.date) continue
-    if (tx.transaction_type === 'transfer') continue  // internal account transfers, skip
+    if (!tx.date || tx.transaction_type === 'transfer') continue
     if (excludeKeys && excludeKeys.has(makeTxKey(tx))) continue
-    const key = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay)
-    if (!byMonth[key]) byMonth[key] = []
-    byMonth[key].push(tx)
+    months.add(getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay))
   }
 
   const accountBalances = buildAccountBalances(data)
   const result: Record<string, MonthlyActuals> = {}
 
-  for (const [ym, txs] of Object.entries(byMonth)) {
+  for (const ym of months) {
     const [yearStr, monthStr] = ym.split('-')
-
-    // Aggregate by category + subcategory (direct key lookup — no fuzzy matching needed)
-    const aggMap: Record<string, ActualEntry> = {}
-
-    for (const tx of txs) {
-      const { catId, subId } = resolveCategory(
-        tx.category ?? '',
-        tx.subcategory ?? '',
-        catIds,
-        ruleMap
-      )
-      const key = `${catId}|||${subId}`
-
-      if (!aggMap[key]) {
-        const catDef = categories.find((c) => c.id === catId)
-        const subDef = catDef?.subcategories.find((s) => s.id === subId)
-        aggMap[key] = {
-          categoryId: catId,
-          categoryName: catDef?.name ?? catId,
-          subcategoryId: subId || undefined,
-          subcategoryName: subDef?.name ?? (subId || undefined),
-          totalAmount: 0,
-          transactionCount: 0,
-        }
-      }
-      aggMap[key].totalAmount += tx.amount
-      aggMap[key].transactionCount += 1
-    }
-
     result[ym] = {
       id: ym,
       year: parseInt(yearStr),
       month: parseInt(monthStr),
-      entries: Object.values(aggMap),
+      entries: buildMonthEntries(transactions, ym, categories, rules, overrides, excludeKeys, monthStartDay, monthStartBusinessDay),
       accountBalances,
       importedAt: imp.importedAt,
     }
@@ -289,6 +311,29 @@ export interface UnknownCategory {
   rawSubcategory?: string
   count: number
   totalAmount: number
+  suggestedName: string                       // proposed Swedish name for a new category
+  suggestedType: CategoryDef['type']
+}
+
+// Curated Swedish names for known raw Zlantar values that have no app category.
+// Keeps suggestions proper Swedish (no Swenglish) instead of echoing the raw id.
+const RAW_CATEGORY_SUGGESTIONS: Record<string, { name: string; type: CategoryDef['type'] }> = {
+  subsidy:  { name: 'Bidrag & stöd',      type: 'income' },
+  account:  { name: 'Kontosparande',      type: 'savings' },
+  salary:   { name: 'Lön',                type: 'income' },
+  interest: { name: 'Räntor & utdelning', type: 'income' },
+  refund:   { name: 'Återbetalningar',    type: 'income' },
+  sale:     { name: 'Försäljning',        type: 'income' },
+}
+
+function prettifyRaw(raw: string): string {
+  const cleaned = raw.replace(/[_\-/]+/g, ' ').trim()
+  if (!cleaned) return 'Ny kategori'
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1)
+}
+
+export function suggestCategoryName(rawCat: string): { name: string; type: CategoryDef['type'] } {
+  return RAW_CATEGORY_SUGGESTIONS[rawCat] ?? { name: prettifyRaw(rawCat), type: 'expense' }
 }
 
 export function findUnknownCategories(
@@ -309,7 +354,15 @@ export function findUnknownCategories(
     if (!catIds.has(rawCat) && !coveredByRule) {
       const key = `${rawCat}|||${rawSub}`
       if (!result[key]) {
-        result[key] = { rawCategory: rawCat, rawSubcategory: tx.subcategory, count: 0, totalAmount: 0 }
+        const suggestion = suggestCategoryName(rawCat)
+        result[key] = {
+          rawCategory: rawCat,
+          rawSubcategory: tx.subcategory,
+          count: 0,
+          totalAmount: 0,
+          suggestedName: suggestion.name,
+          suggestedType: suggestion.type,
+        }
       }
       result[key].count++
       result[key].totalAmount += tx.amount
@@ -330,7 +383,8 @@ export function getTransactionsForCategory(
   rules: ZlantarCategoryRule[] = DEFAULT_ZLANTAR_RULES,
   monthStartDay = 1,
   monthStartBusinessDay = false,
-  excludeKeys?: Set<string>
+  excludeKeys?: Set<string>,
+  overrides: Record<string, TxOverride> = {}
 ): ZlantarTransaction[] {
   const catIds = new Set(categories.map((c) => c.id))
   const ruleMap = buildRuleLookup(rules)
@@ -343,7 +397,8 @@ export function getTransactionsForCategory(
       tx.category ?? '',
       tx.subcategory ?? '',
       catIds,
-      ruleMap
+      ruleMap,
+      overrides[makeTxKey(tx)]
     )
     if (resolvedCat !== catId) return false
     if (subId !== undefined && resolvedSub !== subId) return false

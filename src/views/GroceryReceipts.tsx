@@ -19,6 +19,7 @@ import {
 } from '@/utils/receiptParser'
 import { DEFAULT_RECEIPT_MODEL } from '@/utils/receiptModels'
 import { formatCurrency } from '@/utils/budgetHelpers'
+import { txKey } from '@/utils/transferReconciliation'
 import {
   GROCERY_CATEGORY_LABELS,
   type GroceryReceipt,
@@ -382,6 +383,7 @@ function TransactionBadge({
                     date: tx.date,
                     description: tx.description ?? '',
                     amount: tx.amount,
+                    transactionId: txKey(tx),
                   })
                   setOpen(false)
                 }}

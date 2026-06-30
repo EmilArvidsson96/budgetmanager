@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef } from 'react'
-import { Upload, CheckCircle, AlertTriangle, Info, ChevronDown, ChevronRight, Trash2, ArrowLeftRight } from 'lucide-react'
+import { Upload, CheckCircle, AlertTriangle, Info, ChevronDown, ChevronRight, Trash2, ArrowLeftRight, Plus } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
@@ -8,7 +8,8 @@ import { Badge } from '@/components/ui/Badge'
 import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories, actualsEquivalent } from '@/utils/zlantarParser'
 import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
 import { formatCurrency } from '@/utils/budgetHelpers'
-import type { MonthlyActuals, RecurringItem, ReconciliationRecord, TransferMatch, ZlantarImport, ZlantarTransaction } from '@/types'
+import { uniqueSlug } from '@/utils/slug'
+import type { MonthlyActuals, RecurringItem, ReconciliationRecord, TransferMatch, ZlantarImport, ZlantarTransaction, CategoryDef } from '@/types'
 
 type Step = 'upload' | 'preview' | 'done'
 
@@ -17,7 +18,6 @@ export function ImportView() {
   const [dataFile, setDataFile] = useState<File | null>(null)
   const [txFile, setTxFile] = useState<File | null>(null)
   const [parsedImport, setParsedImport] = useState<ZlantarImport | null>(null)
-  const [unknownCats, setUnknownCats] = useState<ReturnType<typeof findUnknownCategories>>([])
   const [newAccounts, setNewAccounts] = useState<ReturnType<typeof deriveAccounts>>([])
   const [newRecurring, setNewRecurring] = useState<RecurringItem[]>([])
   const [importing, setImporting] = useState(false)
@@ -68,11 +68,6 @@ export function ImportView() {
         alreadyReconciledKeys: previouslyReconciled,
       })
 
-      // Identify transactions not yet in the store, so warnings only reflect what's new
-      const existingTxKeys = new Set(store.allTransactions.map(txKey))
-      const newTxs = imp.transactions.filter((tx) => !existingTxKeys.has(txKey(tx)))
-
-      const unknown = findUnknownCategories(newTxs, store.settings.categories, store.settings.zlantarCategoryRules)
       const accounts = deriveAccounts(imp.data)
       const recurring = deriveRecurringItems(imp.data)
 
@@ -82,7 +77,6 @@ export function ImportView() {
       const newRec = recurring.filter((r) => !existingRecurringIds.has(r.id))
 
       setParsedImport(imp)
-      setUnknownCats(unknown)
       setNewAccounts(newAccs)
       setNewRecurring(newRec)
       setSelectedAccountIds(new Set(newAccs.map((a) => a.id)))
@@ -159,6 +153,36 @@ export function ImportView() {
     return { preview: filtered, unchangedMonthCount: unchanged }
   }, [parsedImport, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay, acceptedKeys, store.actuals])
 
+  // Unmapped categories among the new transactions, grouped by raw category, with a
+  // suggested Swedish name. Recomputes as the user creates/maps categories below.
+  const unknownByCategory = useMemo(() => {
+    if (!parsedImport) return []
+    const existingKeys = new Set(store.allTransactions.map(txKey))
+    const newTxs = parsedImport.transactions.filter((tx) => !existingKeys.has(txKey(tx)))
+    const unknown = findUnknownCategories(newTxs, store.settings.categories, store.settings.zlantarCategoryRules)
+    const m = new Map<string, { rawCategory: string; suggestedName: string; suggestedType: CategoryDef['type']; count: number; totalAmount: number; subs: string[] }>()
+    for (const u of unknown) {
+      const g = m.get(u.rawCategory) ?? { rawCategory: u.rawCategory, suggestedName: u.suggestedName, suggestedType: u.suggestedType, count: 0, totalAmount: 0, subs: [] }
+      g.count += u.count
+      g.totalAmount += u.totalAmount
+      if (u.rawSubcategory && !g.subs.includes(u.rawSubcategory)) g.subs.push(u.rawSubcategory)
+      m.set(u.rawCategory, g)
+    }
+    return [...m.values()]
+  }, [parsedImport, store.allTransactions, store.settings.categories, store.settings.zlantarCategoryRules])
+
+  const handleCreateCategory = (rawCategory: string, name: string, type: CategoryDef['type']) => {
+    const taken = new Set(store.settings.categories.map((c) => c.id))
+    const id = uniqueSlug(name, taken)
+    const newCat: CategoryDef = { id, name, type, subcategories: [], color: '#94a3b8', icon: 'MoreHorizontal' }
+    store.setCategories([...store.settings.categories, newCat])
+    store.upsertZlantarRule({ id: `z_${rawCategory}_${id}`, zlantarCategory: rawCategory, appCategoryId: id })
+  }
+
+  const handleMapCategory = (rawCategory: string, appCategoryId: string, appSubcategoryId?: string) => {
+    store.upsertZlantarRule({ id: `z_${rawCategory}_${appCategoryId}`, zlantarCategory: rawCategory, appCategoryId, appSubcategoryId: appSubcategoryId || undefined })
+  }
+
   const confirmImport = () => {
     if (!preview || !parsedImport) return
     store.setZlantarImport(parsedImport)
@@ -196,7 +220,6 @@ export function ImportView() {
     setDataFile(null)
     setTxFile(null)
     setParsedImport(null)
-    setUnknownCats([])
     setNewAccounts([])
     setNewRecurring([])
     setSelectedMonths(new Set())
@@ -406,28 +429,36 @@ export function ImportView() {
             }
           />
 
-          {/* Unknown categories warning */}
-          {unknownCats.length > 0 && (
+          {/* Unknown categories — suggest a Swedish name, create or map */}
+          {unknownByCategory.length > 0 && (
             <Card>
-              <div className="flex items-start gap-3">
+              <div className="flex items-start gap-3 mb-4">
                 <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
                 <div>
                   <h3 className="font-semibold text-gray-800 mb-1">
-                    {unknownCats.length} okända kategorier
+                    {unknownByCategory.length} omappade {unknownByCategory.length === 1 ? 'kategori' : 'kategorier'}
                   </h3>
-                  <p className="text-sm text-gray-500 mb-3">
-                    Följande kategorier från Zlantar matchade inte exakt mot dina inställningar.
-                    De importeras under närmast matchande kategori, eller "Övrigt".
+                  <p className="text-sm text-gray-500">
+                    Dessa kategorier från Zlantar saknar mappning. Skapa en ny kategori med föreslaget
+                    namn, eller mappa till en befintlig. Tills dess hamnar de under "Övrigt".
                   </p>
-                  <div className="flex flex-wrap gap-2">
-                    {unknownCats.slice(0, 15).map((c) => (
-                      <span key={`${c.rawCategory}|${c.rawSubcategory}`}
-                        className="text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-full px-2.5 py-1">
-                        {c.rawCategory}{c.rawSubcategory ? ` / ${c.rawSubcategory}` : ''} ({c.count} st)
-                      </span>
-                    ))}
-                  </div>
                 </div>
+              </div>
+              <div className="space-y-2">
+                {unknownByCategory.map((u) => (
+                  <UnknownCategoryRow
+                    key={u.rawCategory}
+                    rawCategory={u.rawCategory}
+                    suggestedName={u.suggestedName}
+                    suggestedType={u.suggestedType}
+                    count={u.count}
+                    totalAmount={u.totalAmount}
+                    subs={u.subs}
+                    categories={store.settings.categories}
+                    onCreate={() => handleCreateCategory(u.rawCategory, u.suggestedName, u.suggestedType)}
+                    onMap={(catId, subId) => handleMapCategory(u.rawCategory, catId, subId)}
+                  />
+                ))}
               </div>
             </Card>
           )}
@@ -634,6 +665,65 @@ export function ImportView() {
         </Card>
       )}
     </Layout>
+  )
+}
+
+// ─── Unknown category row (suggest / create / map) ────────────────────────────
+
+function UnknownCategoryRow({
+  rawCategory, suggestedName, suggestedType, count, totalAmount, subs, categories, onCreate, onMap,
+}: {
+  rawCategory: string
+  suggestedName: string
+  suggestedType: CategoryDef['type']
+  count: number
+  totalAmount: number
+  subs: string[]
+  categories: CategoryDef[]
+  onCreate: () => void
+  onMap: (catId: string, subId?: string) => void
+}) {
+  const [mapCatId, setMapCatId] = useState('')
+  const [mapSubId, setMapSubId] = useState('')
+  const selectedCat = categories.find((c) => c.id === mapCatId)
+  const typeLabel = suggestedType === 'income' ? 'Inkomst' : suggestedType === 'savings' ? 'Sparande' : suggestedType === 'transfer' ? 'Överföring' : 'Utgift'
+
+  return (
+    <div className="border border-amber-200 bg-amber-50/40 rounded-xl p-3">
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <code className="text-xs bg-white border border-amber-200 px-1.5 py-0.5 rounded text-gray-700">{rawCategory}</code>
+        {subs.length > 0 && <span className="text-xs text-gray-400 truncate">{subs.join(', ')}</span>}
+        <span className="text-xs text-gray-400">· {count} st · {formatCurrency(totalAmount)}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" onClick={onCreate}>
+          <Plus className="w-4 h-4" /> Skapa "{suggestedName}"
+        </Button>
+        <Badge variant={suggestedType === 'income' ? 'green' : suggestedType === 'savings' ? 'blue' : 'gray'}>{typeLabel}</Badge>
+        <span className="text-xs text-gray-400">eller mappa till</span>
+        <select
+          className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+          value={mapCatId}
+          onChange={(e) => { setMapCatId(e.target.value); setMapSubId('') }}
+        >
+          <option value="">Välj kategori…</option>
+          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        {selectedCat && selectedCat.subcategories.length > 0 && (
+          <select
+            className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+            value={mapSubId}
+            onChange={(e) => setMapSubId(e.target.value)}
+          >
+            <option value="">(ingen underkategori)</option>
+            {selectedCat.subcategories.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        )}
+        <Button size="sm" variant="secondary" disabled={!mapCatId} onClick={() => onMap(mapCatId, mapSubId || undefined)}>
+          Mappa
+        </Button>
+      </div>
+    </div>
   )
 }
 

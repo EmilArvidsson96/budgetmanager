@@ -69,6 +69,7 @@ export interface CategoryDef {
   name: string           // Swedish display name
   type: 'income' | 'expense' | 'transfer' | 'savings'
   subcategories: SubcategoryDef[]
+  level3?: Level3Def[]   // optional third level — reporting/tagging only, not budgeted
   color?: string
   icon?: string
 }
@@ -77,6 +78,14 @@ export interface SubcategoryDef {
   id: string
   name: string
   parentId: string
+}
+
+// Third-level category (e.g. under Matvaror). Reporting/tagging only — never part
+// of the budget model. May be auto-derived from grocery receipts.
+export interface Level3Def {
+  id: string
+  name: string
+  parentSubId: string    // id of the SubcategoryDef this belongs to
 }
 
 export interface Account {
@@ -295,6 +304,7 @@ export interface MatchedTransaction {
   date: string
   description: string
   amount: number
+  transactionId?: string   // txKey of the linked transaction (see transferReconciliation.txKey)
 }
 
 export interface GroceryReceipt {
@@ -326,6 +336,14 @@ export interface AppSettings {
   partnerName?: string
 }
 
+// Per-transaction category override, keyed by txKey (date|amount|description|
+// account_number). Takes precedence over the Zlantar rule/direct mapping.
+export interface TxOverride {
+  categoryId: string
+  subcategoryId?: string
+  level3Id?: string
+}
+
 // ─── Complete app state ───────────────────────────────────────────────────────
 
 export interface AppState {
@@ -336,6 +354,7 @@ export interface AppState {
   liquidityPlans: Record<string, LiquidityPlan>    // key: 'YYYY'
   groceryReceipts: GroceryReceipt[]
   allTransactions: ZlantarTransaction[]
+  transactionOverrides: Record<string, TxOverride> // key: txKey
   lastZlantarImport?: ZlantarImport
   importSnapshots: ImportSnapshot[]
   reconciliations: ReconciliationRecord[]

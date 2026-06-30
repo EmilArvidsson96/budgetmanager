@@ -1,7 +1,25 @@
-import type { CategoryDef, ZlantarCategoryRule } from '@/types'
+import type { CategoryDef, ZlantarCategoryRule, Level3Def, GroceryCategory } from '@/types'
+import { GROCERY_CATEGORY_LABELS } from '@/types'
 
 // Category IDs and subcategory IDs match Zlantar's exact category/subcategory values
 // so the parser can do a direct lookup without fuzzy matching.
+
+// ─── Grocery level-3 (under Matvaror) ─────────────────────────────────────────
+// Level-3 ids are namespaced under their parent subcategory ('groceries') so they
+// never collide with hand-created level-3 ids elsewhere. Names reuse the existing
+// grocery taxonomy in GROCERY_CATEGORY_LABELS — single source of truth.
+
+export function groceryLevel3Id(cat: GroceryCategory): string {
+  return `groceries__${cat}`
+}
+
+export const GROCERY_LEVEL3: Level3Def[] = (
+  Object.keys(GROCERY_CATEGORY_LABELS) as GroceryCategory[]
+).map((cat) => ({
+  id: groceryLevel3Id(cat),
+  name: GROCERY_CATEGORY_LABELS[cat],
+  parentSubId: 'groceries',
+}))
 
 export const DEFAULT_CATEGORIES: CategoryDef[] = [
   // ─── Income ───────────────────────────────────────────────────────────────
@@ -48,6 +66,7 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
       { id: 'alcohol',    name: 'Alkohol',             parentId: 'food' },
       { id: 'other',      name: 'Övrigt mat',         parentId: 'food' },
     ],
+    level3: GROCERY_LEVEL3,
   },
   {
     id: 'household',
@@ -149,6 +168,10 @@ export const DEFAULT_ZLANTAR_RULES: ZlantarCategoryRule[] = [
   { id: 'z_interest', zlantarCategory: 'interest', appCategoryId: 'income', appSubcategoryId: 'interest' },
   { id: 'z_refund',   zlantarCategory: 'refund',   appCategoryId: 'income', appSubcategoryId: 'refund' },
   { id: 'z_sale',     zlantarCategory: 'sale',     appCategoryId: 'income', appSubcategoryId: 'sale' },
+  // Bidrag/stöd (ELSTÖD, BARNBDR, FKASSA) — income, lands under "Övriga bidrag".
+  { id: 'z_subsidy',  zlantarCategory: 'subsidy',  appCategoryId: 'income', appSubcategoryId: 'other_bidrag' },
+  // Buffert-/kontosparande ("Reformering buffert") — savings.
+  { id: 'z_account',  zlantarCategory: 'account',  appCategoryId: 'stocks' },
 ]
 
 // Agreement type → category/subcategory mapping for auto-converting Zlantar agreements to recurring items
