@@ -56,8 +56,10 @@ export function deriveAccounts(data: ZlantarData): Account[] {
   const result: Account[] = []
   for (const bank of data.banks ?? []) {
     for (const acc of bank.accounts ?? []) {
+      const id = acc.account_number || [acc.name, owner].filter(Boolean).join('_')
+      if (!id) continue
       result.push({
-        id: acc.account_number,
+        id,
         name: acc.name,
         type: normalizeAccountType(acc.type),
         bankName: formatBankName(bank.name),
@@ -276,8 +278,10 @@ function buildAccountBalances(data: ZlantarData): AccountBalance[] {
   const result: AccountBalance[] = []
   for (const bank of data.banks ?? []) {
     for (const acc of bank.accounts ?? []) {
+      const accountId = acc.account_number || acc.name
+      if (!accountId) continue
       result.push({
-        accountId: acc.account_number,
+        accountId,
         accountName: acc.name,
         accountType: normalizeAccountType(acc.type),
         balance: acc.balance,

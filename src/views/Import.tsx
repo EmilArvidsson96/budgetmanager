@@ -37,7 +37,7 @@ export function ImportView() {
   const store = useAppStore()
 
   const parseFiles = async () => {
-    if (!txFile) return
+    if (!txFile && !dataFile) return
     setImporting(true)
     try {
       let dataJson: unknown = {}
@@ -45,8 +45,11 @@ export function ImportView() {
         const text = await dataFile.text()
         dataJson = JSON.parse(text)
       }
-      const txText = await txFile.text()
-      const txJson = JSON.parse(txText)
+      let txJson: unknown = []
+      if (txFile) {
+        const txText = await txFile.text()
+        txJson = JSON.parse(txText)
+      }
 
       const imp = parseZlantarFiles(dataJson, txJson)
 
@@ -309,16 +312,15 @@ export function ImportView() {
             <div className="bg-brand-50 border border-brand-100 rounded-lg p-3 flex gap-2 mb-5">
               <Info className="w-4 h-4 text-brand-600 mt-0.5 shrink-0" />
               <p className="text-sm text-brand-800">
-                Du behöver <strong>transactions.json</strong> (krävs) och <strong>data.json</strong> (valfritt, för kontoinformation).
-                Båda finns i ZIP-filen från Zlantar.
+                Ladda upp <strong>transactions.json</strong> för transaktionsdata och/eller <strong>data.json</strong> för kontoinformation.
+                Minst en av filerna krävs. Båda finns i ZIP-filen från Zlantar.
               </p>
             </div>
 
             <div className="grid md:grid-cols-2 gap-4">
               <FileDropZone
                 label="transactions.json"
-                description="Transaktionsdata (krävs)"
-                required
+                description="Transaktionsdata"
                 file={txFile}
                 accept=".json"
                 inputRef={txRef}
@@ -326,7 +328,7 @@ export function ImportView() {
               />
               <FileDropZone
                 label="data.json"
-                description="Kontoinformation (valfritt)"
+                description="Kontoinformation"
                 file={dataFile}
                 accept=".json"
                 inputRef={dataRef}
@@ -336,7 +338,7 @@ export function ImportView() {
           </Card>
 
           <div className="flex justify-end">
-            <Button onClick={parseFiles} disabled={!txFile} loading={importing}>
+            <Button onClick={parseFiles} disabled={!txFile && !dataFile} loading={importing}>
               Granska import
             </Button>
           </div>

@@ -140,9 +140,9 @@ function GeneralTab() {
           </div>
 
           {monthStartDay !== 1 && (
-            <div className="p-3 bg-amber-50 border border-amber-100 rounded-lg text-xs text-amber-700">
+            <div className="p-3 bg-brand-50 border border-brand-100 rounded-lg text-xs text-brand-700">
               Inställningen påverkar hur transaktioner från Zlantar grupperas i perioder.
-              Importera om dina Zlantar-filer för att tillämpa den nya perioden på historisk data.
+              Befintliga utfall räknas om automatiskt.
             </div>
           )}
         </div>

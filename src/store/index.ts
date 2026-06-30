@@ -269,6 +269,56 @@ function recomputeMonth(
   return { ...state.actuals, [monthId]: { ...existing, entries } }
 }
 
+// Rebuild all imported actuals from allTransactions using new settings.
+// Used when category rules, categories, or period boundaries change so the user
+// never has to re-import just to see the effect of a settings change.
+// Period changes can shift transactions between months, so we union old and new
+// month IDs and drop any that end up with no entries.
+function recomputeAllActuals(
+  state: AppState,
+  newSettings: AppSettings,
+): Record<string, MonthlyActuals> {
+  if (state.allTransactions.length === 0) return state.actuals
+
+  const reconciled = reconciledKeysFromRecords(state.reconciliations)
+
+  // Months that will have transactions under the new period settings
+  const newMonthIds = new Set<string>()
+  for (const tx of state.allTransactions) {
+    if (!tx.date || tx.transaction_type === 'transfer') continue
+    newMonthIds.add(getMonthIdForDate(tx.date, newSettings.monthStartDay, newSettings.monthStartBusinessDay))
+  }
+
+  // Union old + new month IDs so a period shift doesn't silently drop data
+  const allMonthIds = new Set([...Object.keys(state.actuals), ...newMonthIds])
+
+  // Fallback account balances: use the most recently imported snapshot
+  const existingList = Object.values(state.actuals)
+  const latestSnapshot = existingList.length > 0
+    ? existingList.reduce((a, b) => (a.importedAt > b.importedAt ? a : b))
+    : null
+
+  const result: Record<string, MonthlyActuals> = {}
+  for (const monthId of allMonthIds) {
+    const existing = state.actuals[monthId]
+    const entries = buildMonthEntries(
+      state.allTransactions, monthId, newSettings.categories, newSettings.zlantarCategoryRules,
+      state.transactionOverrides, reconciled, newSettings.monthStartDay, newSettings.monthStartBusinessDay
+    )
+    if (entries.length === 0) continue
+    const [yearStr, monthStr] = monthId.split('-')
+    result[monthId] = {
+      id: monthId,
+      year: parseInt(yearStr),
+      month: parseInt(monthStr),
+      entries,
+      accountBalances: existing?.accountBalances ?? latestSnapshot?.accountBalances ?? [],
+      importedAt: existing?.importedAt ?? latestSnapshot?.importedAt ?? new Date().toISOString(),
+    }
+  }
+  return result
+}
+
 const DEFAULT_SETTINGS: AppSettings = {
   currency: 'SEK',
   defaultView: 'monthly',
@@ -351,10 +401,22 @@ export const useAppStore = create<AppStore>()(
       monthCloses: {},
 
       updateSettings: (s) =>
-        set((state) => ({ settings: { ...state.settings, ...s } })),
+        set((state) => {
+          const newSettings = { ...state.settings, ...s }
+          const periodChanged =
+            (s.monthStartDay !== undefined && s.monthStartDay !== state.settings.monthStartDay) ||
+            (s.monthStartBusinessDay !== undefined && s.monthStartBusinessDay !== state.settings.monthStartBusinessDay)
+          if (periodChanged) {
+            return { settings: newSettings, actuals: recomputeAllActuals(state, newSettings) }
+          }
+          return { settings: newSettings }
+        }),
 
       setCategories: (cats) =>
-        set((state) => ({ settings: { ...state.settings, categories: cats } })),
+        set((state) => {
+          const newSettings = { ...state.settings, categories: cats }
+          return { settings: newSettings, actuals: recomputeAllActuals(state, newSettings) }
+        }),
 
       upsertAccount: (account) =>
         set((state) => {
@@ -415,9 +477,27 @@ export const useAppStore = create<AppStore>()(
         }),
 
       upsertActuals: (actuals) =>
-        set((state) => ({
-          actuals: { ...state.actuals, [actuals.id]: actuals },
-        })),
+        set((state) => {
+          const existing = state.actuals[actuals.id]
+          if (!existing || actuals.accountBalances.length === 0) {
+            return { actuals: { ...state.actuals, [actuals.id]: actuals } }
+          }
+          // Merge accountBalances: new values win for accounts present in the new import,
+          // but preserve balances for accounts that belong to a different partner's import
+          // and are absent from this one — so re-importing one partner's data never wipes
+          // the other partner's account balances from the snapshot.
+          const newIds = new Set(actuals.accountBalances.map((ab) => ab.accountId))
+          const mergedBalances = [
+            ...actuals.accountBalances,
+            ...existing.accountBalances.filter((ab) => !newIds.has(ab.accountId)),
+          ]
+          return {
+            actuals: {
+              ...state.actuals,
+              [actuals.id]: { ...actuals, accountBalances: mergedBalances },
+            },
+          }
+        }),
 
       removeActuals: (id) =>
         set((state) => {
@@ -461,16 +541,18 @@ export const useAppStore = create<AppStore>()(
       upsertZlantarRule: (rule) =>
         set((state) => {
           const rules = state.settings.zlantarCategoryRules.filter((r) => r.id !== rule.id)
-          return { settings: { ...state.settings, zlantarCategoryRules: [...rules, rule] } }
+          const newSettings = { ...state.settings, zlantarCategoryRules: [...rules, rule] }
+          return { settings: newSettings, actuals: recomputeAllActuals(state, newSettings) }
         }),
 
       removeZlantarRule: (id) =>
-        set((state) => ({
-          settings: {
+        set((state) => {
+          const newSettings = {
             ...state.settings,
             zlantarCategoryRules: state.settings.zlantarCategoryRules.filter((r) => r.id !== id),
-          },
-        })),
+          }
+          return { settings: newSettings, actuals: recomputeAllActuals(state, newSettings) }
+        }),
 
       setZlantarImport: (imp) =>
         set((state) => {
