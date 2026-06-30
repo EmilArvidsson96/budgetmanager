@@ -221,9 +221,19 @@ export function ImportView() {
   const handleCreateCategory = (rawCategory: string, name: string, type: CategoryDef['type']) => {
     const taken = new Set(store.settings.categories.map((c) => c.id))
     const id = uniqueSlug(name, taken)
-    const newCat: CategoryDef = { id, name, type, subcategories: [], color: '#94a3b8', icon: 'MoreHorizontal' }
-    store.setCategories([...store.settings.categories, newCat])
-    store.upsertZlantarRule({ id: `z_${rawCategory}_${id}`, zlantarCategory: rawCategory, appCategoryId: id })
+    // Income items belong as subcategories under the canonical 'income' category, not as new top-level categories.
+    const incomeParent = type === 'income' ? store.settings.categories.find((c) => c.id === 'income') : undefined
+    if (incomeParent) {
+      const updated = store.settings.categories.map((c) =>
+        c.id === 'income' ? { ...c, subcategories: [...c.subcategories, { id, name, parentId: 'income' }] } : c
+      )
+      store.setCategories(updated)
+      store.upsertZlantarRule({ id: `z_${rawCategory}_income_${id}`, zlantarCategory: rawCategory, appCategoryId: 'income', appSubcategoryId: id })
+    } else {
+      const newCat: CategoryDef = { id, name, type, subcategories: [], color: '#94a3b8', icon: 'MoreHorizontal' }
+      store.setCategories([...store.settings.categories, newCat])
+      store.upsertZlantarRule({ id: `z_${rawCategory}_${id}`, zlantarCategory: rawCategory, appCategoryId: id })
+    }
   }
 
   const handleMapCategory = (rawCategory: string, appCategoryId: string, appSubcategoryId?: string) => {
