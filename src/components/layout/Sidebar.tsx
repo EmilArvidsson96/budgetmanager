@@ -9,6 +9,7 @@ import {
   Receipt,
   ListTree,
   List,
+  FileText,
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -16,6 +17,7 @@ const NAV_ITEMS = [
   { to: '/floede',         icon: ListTree,      label: 'Flöde',          short: 'Flöde' },
   { to: '/transaktioner',  icon: List,          label: 'Transaktioner',  short: 'Trans.' },
   { to: '/avstamning',     icon: CheckCircle2,  label: 'Avstämning',     short: 'Avst.' },
+  { to: '/rapport',        icon: FileText,      label: 'Rapport',        short: 'Rapport' },
   { to: '/kvitton',        icon: Receipt,       label: 'Matkvitton',     short: 'Kvitto' },
   { to: '/installningar',  icon: Settings,      label: 'Inställningar',  short: 'Inst.' },
   { to: '/hjalp',          icon: HelpCircle,    label: 'Hjälp',          short: 'Hjälp' },

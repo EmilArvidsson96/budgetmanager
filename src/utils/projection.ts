@@ -112,9 +112,11 @@ export function baselineTarget(state: AppState, categoryId: string): number | un
 // most specific first, so per-month tweaks and history win over the rolling base:
 //   1. explicit per-month override (budgetOverrides)
 //   2. legacy per-month budget table (preserves closed-month history)
-//   3. rolling baseline target ("normalmånad")
-//   4. legacy yearly allocation (monthly → custom → ÷12), carried forward
-//   5. legacy carry-forward of the nearest monthly budget
+//   3. frozen elapsed-month snapshot (budgetHistory) — locks past months to their
+//      latest adjustment so editing the baseline never rewrites history
+//   4. rolling baseline target ("normalmånad")
+//   5. legacy yearly allocation (monthly → custom → ÷12), carried forward
+//   6. legacy carry-forward of the nearest monthly budget
 // Signed throughout (expenses negative). Exported for plan-vs-actual comparisons.
 export function budgetedAmount(state: AppState, monthId: string, categoryId: string): number {
   const year = parseInt(monthId.slice(0, 4))
@@ -131,11 +133,15 @@ export function budgetedAmount(state: AppState, monthId: string, categoryId: str
     if (cat) return cat.amount
   }
 
-  // 3. Rolling baseline.
+  // 3. Frozen elapsed-month snapshot.
+  const frozen = state.budgetHistory?.[monthId]?.[categoryId]
+  if (frozen !== undefined) return frozen
+
+  // 4. Rolling baseline.
   const base = baselineTarget(state, categoryId)
   if (base !== undefined) return base
 
-  // 4. Legacy yearly allocation (with carry-forward).
+  // 5. Legacy yearly allocation (with carry-forward).
   const yb = resolveYearlyBudget(state, year)
   if (yb) {
     const yc = yb.categories.find((c) => c.categoryId === categoryId)
@@ -148,12 +154,56 @@ export function budgetedAmount(state: AppState, monthId: string, categoryId: str
     return 0
   }
 
-  // 5. No yearly budgets anywhere → carry forward the nearest monthly budget.
+  // 6. No yearly budgets anywhere → carry forward the nearest monthly budget.
   const cmb = resolveCarryMonthly(state, monthId)
   if (cmb) {
     return cmb.categories.find((c) => c.categoryId === categoryId)?.amount ?? 0
   }
   return 0
+}
+
+// ─── Elapsed-budget freezing ──────────────────────────────────────────────────
+//
+// Once a period rolls into the past, its effective per-category plan is snapshotted
+// into budgetHistory so later baseline edits never rewrite history. This is what
+// makes "the latest adjustment to a budget is always saved" hold WITHOUT a
+// month-close ritual: while a month is current its budget is live; the moment it
+// elapses, whatever the plan is at that point is locked in.
+
+// Period id for "today" under the current period settings + salary anchors.
+export function currentMonthId(state: AppState): string {
+  const t = new Date()
+  const iso = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
+  const { anchors } = getSalaryAnchors(state)
+  return getMonthIdForDate(iso, state.settings.monthStartDay, state.settings.monthStartBusinessDay, anchors)
+}
+
+// The effective budget for one month: one signed amount per income/expense/savings
+// category (transfers are never budgeted). Resolves through budgetedAmount, so it
+// captures overrides, legacy tables, already-frozen values and the baseline alike.
+export function snapshotMonthBudget(state: AppState, monthId: string): Record<string, number> {
+  const snap: Record<string, number> = {}
+  for (const cat of state.settings.categories) {
+    if (cat.type === 'transfer') continue
+    snap[cat.id] = budgetedAmount(state, monthId, cat.id)
+  }
+  return snap
+}
+
+// Freeze every elapsed month that has actuals and isn't frozen yet. Returns a new
+// budgetHistory map, or null when nothing changed so callers can skip the set().
+// Already-frozen months are left untouched — their captured adjustment is final.
+export function computeFrozenElapsed(state: AppState): Record<string, Record<string, number>> | null {
+  const cur = currentMonthId(state)
+  const next = { ...state.budgetHistory }
+  let changed = false
+  for (const monthId of Object.keys(state.actuals)) {
+    if (monthId >= cur) continue   // only elapsed periods get frozen
+    if (next[monthId]) continue    // keep the adjustment captured when it elapsed
+    next[monthId] = snapshotMonthBudget(state, monthId)
+    changed = true
+  }
+  return changed ? next : null
 }
 
 // Planned income and operating-expense magnitudes for one period.

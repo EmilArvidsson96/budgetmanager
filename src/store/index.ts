@@ -38,6 +38,7 @@ import {
 import { txKey, reconciledKeysFromRecords } from '@/utils/transferReconciliation'
 import { getMonthIdForDate } from '@/utils/periodUtils'
 import { getSalaryAnchors } from '@/utils/salaryDetection'
+import { computeFrozenElapsed, currentMonthId, snapshotMonthBudget } from '@/utils/projection'
 import { DEFAULT_CATEGORIES, DEFAULT_ZLANTAR_RULES, GROCERY_LEVEL3 } from './defaultCategories'
 
 // ─── Store migration ──────────────────────────────────────────────────────────
@@ -448,6 +449,13 @@ function migrateV10(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, monthlyBudgets: cleaned }
 }
 
+// v11 → v12: add budgetHistory — the frozen per-month plan for elapsed periods.
+// Starts empty; freezeElapsedBudgets (run on hydration) backfills past months from
+// their current effective budget on first load.
+function migrateV11(raw: Record<string, unknown>): Record<string, unknown> {
+  return { ...raw, budgetHistory: (raw.budgetHistory as Record<string, Record<string, number>>) ?? {} }
+}
+
 // Rebuild one already-imported month's actuals from allTransactions + overrides,
 // preserving the snapshot's accountBalances / importedAt. Runs after every
 // re-categorization so aggregated budget totals stay in sync with the transactions.
@@ -566,6 +574,8 @@ interface AppStore extends AppState {
   // Rolling budget baseline ("normalmånad") + per-month overrides
   upsertBaselineCategory: (cat: BaselineCategory) => void
   setMonthOverride: (monthId: string, categoryId: string, amount: number | null) => void
+  // Freeze the plan of every elapsed month into budgetHistory (run on hydration).
+  freezeElapsedBudgets: () => void
   // Plan grid layout (visible rows/columns). null resets to the rolling default.
   setPlanGrid: (config: PlanGridConfig | null) => void
 
@@ -613,6 +623,7 @@ export const useAppStore = create<AppStore>()(
       settings: DEFAULT_SETTINGS,
       budgetBaseline: { categories: [] },
       budgetOverrides: {},
+      budgetHistory: {},
       planGrid: undefined,
       monthlyBudgets: {},
       yearlyBudgets: {},
@@ -720,7 +731,20 @@ export const useAppStore = create<AppStore>()(
           const next = { ...state.budgetOverrides }
           if (Object.keys(month).length === 0) delete next[monthId]
           else next[monthId] = month
+          // Editing an already-elapsed month is a deliberate adjustment to its plan —
+          // re-freeze it so the latest value is what history shows (and survives a
+          // later baseline edit). Current/future months stay live until they elapse.
+          if (monthId < currentMonthId(state)) {
+            const snap = snapshotMonthBudget({ ...state, budgetOverrides: next }, monthId)
+            return { budgetOverrides: next, budgetHistory: { ...state.budgetHistory, [monthId]: snap } }
+          }
           return { budgetOverrides: next }
+        }),
+
+      freezeElapsedBudgets: () =>
+        set((state) => {
+          const frozen = computeFrozenElapsed(state)
+          return frozen ? { budgetHistory: frozen } : {}
         }),
 
       setPlanGrid: (config) => set(() => ({ planGrid: config ?? undefined })),
@@ -728,24 +752,24 @@ export const useAppStore = create<AppStore>()(
       upsertActuals: (actuals) =>
         set((state) => {
           const existing = state.actuals[actuals.id]
+          let nextActuals: Record<string, MonthlyActuals>
           if (!existing || actuals.accountBalances.length === 0) {
-            return { actuals: { ...state.actuals, [actuals.id]: actuals } }
+            nextActuals = { ...state.actuals, [actuals.id]: actuals }
+          } else {
+            // Merge accountBalances: new values win for accounts present in the new import,
+            // but preserve balances for accounts that belong to a different partner's import
+            // and are absent from this one — so re-importing one partner's data never wipes
+            // the other partner's account balances from the snapshot.
+            const newIds = new Set(actuals.accountBalances.map((ab) => ab.accountId))
+            const mergedBalances = [
+              ...actuals.accountBalances,
+              ...existing.accountBalances.filter((ab) => !newIds.has(ab.accountId)),
+            ]
+            nextActuals = { ...state.actuals, [actuals.id]: { ...actuals, accountBalances: mergedBalances } }
           }
-          // Merge accountBalances: new values win for accounts present in the new import,
-          // but preserve balances for accounts that belong to a different partner's import
-          // and are absent from this one — so re-importing one partner's data never wipes
-          // the other partner's account balances from the snapshot.
-          const newIds = new Set(actuals.accountBalances.map((ab) => ab.accountId))
-          const mergedBalances = [
-            ...actuals.accountBalances,
-            ...existing.accountBalances.filter((ab) => !newIds.has(ab.accountId)),
-          ]
-          return {
-            actuals: {
-              ...state.actuals,
-              [actuals.id]: { ...actuals, accountBalances: mergedBalances },
-            },
-          }
+          // A freshly imported month that has already elapsed gets its plan frozen now.
+          const frozen = computeFrozenElapsed({ ...state, actuals: nextActuals })
+          return frozen ? { actuals: nextActuals, budgetHistory: frozen } : { actuals: nextActuals }
         }),
 
       removeActuals: (id) =>
@@ -911,7 +935,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 11,
+      version: 12,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
@@ -925,7 +949,13 @@ export const useAppStore = create<AppStore>()(
         if (version < 9) state = migrateV8(state)
         if (version < 10) state = migrateV9(state)
         if (version < 11) state = migrateV10(state)
+        if (version < 12) state = migrateV11(state)
         return state
+      },
+      // On load, lock in the plan for any month that has already elapsed so later
+      // baseline edits can't rewrite history. Idempotent — only adds missing months.
+      onRehydrateStorage: () => (state) => {
+        state?.freezeElapsedBudgets()
       },
     }
   )

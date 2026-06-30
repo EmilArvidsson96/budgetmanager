@@ -25,3 +25,44 @@
     font-feature-settings: "tnum" 1;
   }
 }
+
+/* ─── Report → PDF printing ───────────────────────────────────────────────────
+   "Ladda ner PDF" in /rapport calls window.print(). These rules isolate the
+   report (#manadsrapport) onto the page and drop the app chrome, so the browser's
+   "Spara som PDF" produces a clean, shareable document. */
+#manadsrapport {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+@media print {
+  body {
+    background: #fff;
+  }
+  /* Hide everything, then reveal only the report subtree. */
+  body * {
+    visibility: hidden;
+  }
+  #manadsrapport,
+  #manadsrapport * {
+    visibility: visible;
+  }
+  #manadsrapport {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 0;
+  }
+  .no-print {
+    display: none !important;
+  }
+  /* Keep cards from splitting awkwardly across pages. */
+  #manadsrapport > div {
+    break-inside: avoid;
+  }
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+}

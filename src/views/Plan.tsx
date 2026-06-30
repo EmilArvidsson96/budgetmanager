@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Trash2, Settings as SettingsIcon, TrendingUp, TrendingDown, AlertTriangle, Download } from 'lucide-react'
+import { Plus, Trash2, Settings as SettingsIcon, TrendingUp, TrendingDown, AlertTriangle, Download, Sparkles, Copy, Check } from 'lucide-react'
 import { Select } from '@/components/ui/Select'
 import {
   ComposedChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot,
@@ -14,9 +14,11 @@ import { getMonthIdForDate } from '@/utils/periodUtils'
 import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { buildProjection } from '@/utils/projection'
 import { exportToExcel } from '@/utils/excelExport'
+import { buildAiBriefing } from '@/utils/aiExport'
 import { BaselineEditor } from '@/components/budget/BaselineEditor'
 import { PlanGrid } from '@/components/budget/PlanGrid'
 import { BudgetCharts } from '@/components/budget/BudgetCharts'
+import { HistoryCharts } from '@/components/budget/HistoryCharts'
 import type { LiquidityEntry, LiquidityPlan } from '@/types'
 
 const HORIZONS = [12, 24, 36] as const
@@ -26,6 +28,7 @@ const VIEWS = [
   { id: 'wealth', label: 'Förmögenhet' },
   { id: 'liquidity', label: 'Likviditet' },
   { id: 'budget', label: 'Månadsbudget' },
+  { id: 'history', label: 'Historik' },
 ] as const
 type PlanViewMode = (typeof VIEWS)[number]['id']
 
@@ -211,6 +214,7 @@ export function PlanView() {
   const [view, setView] = useState<PlanViewMode>('wealth')
   const [showForm, setShowForm] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [copied, setCopied] = useState(false)
   const store = useAppStore()
   const { settings } = store
   const { anchors } = useSalaryAnchors()
@@ -221,6 +225,33 @@ export function PlanView() {
       await exportToExcel({ ...store }, new Date().getFullYear())
     } finally {
       setExporting(false)
+    }
+  }
+
+  const stampToday = () => {
+    const t = new Date()
+    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
+  }
+
+  const handleAiExport = () => {
+    const md = buildAiBriefing({ ...store })
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `ekonomi_brief_${stampToday()}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleAiCopy = async () => {
+    const md = buildAiBriefing({ ...store })
+    try {
+      await navigator.clipboard.writeText(md)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard unavailable (e.g. insecure context) — the download button remains.
     }
   }
 
@@ -413,6 +444,12 @@ export function PlanView() {
             <Button variant="secondary" size="sm" onClick={handleExport} loading={exporting}>
               <Download className="w-4 h-4" /> Exportera
             </Button>
+            <Button variant="secondary" size="sm" onClick={handleAiExport} title="Ladda ner ett självförklarande underlag för en AI-assistent (Markdown)">
+              <Sparkles className="w-4 h-4" /> AI-underlag
+            </Button>
+            <Button variant="secondary" size="sm" onClick={handleAiCopy} title="Kopiera AI-underlaget till urklipp">
+              {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />} {copied ? 'Kopierad' : 'Kopiera'}
+            </Button>
             <div className="flex rounded-lg border border-warm-300 overflow-hidden text-sm">
               {VIEWS.map((v) => (
                 <button
@@ -426,25 +463,32 @@ export function PlanView() {
                 </button>
               ))}
             </div>
-            <div className="flex rounded-lg border border-warm-300 overflow-hidden text-sm">
-              {HORIZONS.map((h) => (
-                <button
-                  key={h}
-                  onClick={() => setHorizon(h)}
-                  className={`px-3 py-1.5 font-medium transition-colors ${h !== HORIZONS[0] ? 'border-l border-warm-300' : ''} ${
-                    horizon === h ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-warm-50'
-                  }`}
-                >
-                  {h} mån
-                </button>
-              ))}
-            </div>
+            {view !== 'history' && (
+              <div className="flex rounded-lg border border-warm-300 overflow-hidden text-sm">
+                {HORIZONS.map((h) => (
+                  <button
+                    key={h}
+                    onClick={() => setHorizon(h)}
+                    className={`px-3 py-1.5 font-medium transition-colors ${h !== HORIZONS[0] ? 'border-l border-warm-300' : ''} ${
+                      horizon === h ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-warm-50'
+                    }`}
+                  >
+                    {h} mån
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         }
       />
 
       <div className="space-y-5">
-        {/* KPI cards */}
+        {/* Backward-looking history — its own KPIs + window control, no projection */}
+        {view === 'history' && <HistoryCharts />}
+
+        {/* KPI cards (forward projection) */}
+        {view !== 'history' && (
+        <>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Card>
             <p className="text-xs text-gray-400 mb-1">Nettoförmögenhet idag</p>
@@ -476,6 +520,8 @@ export function PlanView() {
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
             <span>Likviditeten går under noll i {trough.label} ({formatCurrency(trough.liquidity)}). Justera planerade poster eller insättningar.</span>
           </div>
+        )}
+        </>
         )}
 
         {/* Net worth composition */}

@@ -445,6 +445,12 @@ export interface AppState {
   // Rolling budget model (current source of truth, edited in Plan + Flöde).
   budgetBaseline: BudgetBaseline
   budgetOverrides: Record<string, Record<string, number>>  // monthId → categoryId → signed amount
+  // Frozen per-category budget for ELAPSED months — monthId → categoryId → signed amount.
+  // Once a period rolls into the past its effective plan is snapshotted here, so later
+  // baseline edits never rewrite history. Captures the latest adjustment automatically;
+  // no month-close ritual is required. budgetedAmount reads this after overrides/legacy
+  // monthly but before the rolling baseline. See store: freezeElapsedBudgets.
+  budgetHistory: Record<string, Record<string, number>>
   planGrid?: PlanGridConfig                                // visible rows/columns of the Plan grid
   // Legacy budget tables — kept for history/Excel fallback; no longer edited in the UI.
   monthlyBudgets: Record<string, MonthlyBudget>    // key: 'YYYY-MM'
