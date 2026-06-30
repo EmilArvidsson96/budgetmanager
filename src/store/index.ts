@@ -424,6 +424,30 @@ function migrateV9(raw: Record<string, unknown>): Record<string, unknown> {
   }
 }
 
+// v10 → v11: the rolling baseline is the single source of truth for open
+// (current + future) months. Legacy per-month budgets were only ever kept as a
+// fallback for closed-month history, but budgetedAmount reads monthlyBudgets
+// *before* the baseline — so a stale entry on a future month silently won and
+// inflated that month's net without showing in any plan-grid cell (e.g. an old
+// July vacation-pay row). Drop legacy monthly budgets from the current month
+// onward; past/closed months keep their plan untouched.
+function migrateV10(raw: Record<string, unknown>): Record<string, unknown> {
+  const monthly = raw.monthlyBudgets as Record<string, MonthlyBudget> | undefined
+  if (!monthly) return raw
+
+  const settings = (raw.settings ?? {}) as AppSettings
+  const today = new Date()
+  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const currentMonthId = getMonthIdForDate(iso, settings.monthStartDay, settings.monthStartBusinessDay)
+
+  // monthId is 'YYYY-MM', so lexical comparison orders months correctly.
+  const cleaned: Record<string, MonthlyBudget> = {}
+  for (const [monthId, budget] of Object.entries(monthly)) {
+    if (monthId < currentMonthId) cleaned[monthId] = budget
+  }
+  return { ...raw, monthlyBudgets: cleaned }
+}
+
 // Rebuild one already-imported month's actuals from allTransactions + overrides,
 // preserving the snapshot's accountBalances / importedAt. Runs after every
 // re-categorization so aggregated budget totals stay in sync with the transactions.
@@ -887,7 +911,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 10,
+      version: 11,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
@@ -900,6 +924,7 @@ export const useAppStore = create<AppStore>()(
         if (version < 8) state = migrateV7(state)
         if (version < 9) state = migrateV8(state)
         if (version < 10) state = migrateV9(state)
+        if (version < 11) state = migrateV10(state)
         return state
       },
     }
