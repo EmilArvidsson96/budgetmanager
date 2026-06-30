@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, CheckCircle2, AlertTriangle, Lock, Unlock, Tag, ArrowLeftRight, X } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
@@ -57,8 +57,14 @@ export function ReconcileView() {
   const actual = actuals[monthId]
   const close = monthCloses[monthId]
 
-  const [note, setNote] = useState('')
-  useEffect(() => { setNote(close?.note ?? '') }, [monthId, close?.note])
+  // Note follows the selected month — reset during render when the month changes
+  // (React's recommended alternative to a setState-in-effect).
+  const [note, setNote] = useState(close?.note ?? '')
+  const [noteMonth, setNoteMonth] = useState(monthId)
+  if (noteMonth !== monthId) {
+    setNoteMonth(monthId)
+    setNote(close?.note ?? '')
+  }
 
   const prevMonth = () => { if (month === 1) { setMonth(12); setYear((y) => y - 1) } else setMonth((m) => m - 1) }
   const nextMonth = () => { if (month === 12) { setMonth(1); setYear((y) => y + 1) } else setMonth((m) => m + 1) }

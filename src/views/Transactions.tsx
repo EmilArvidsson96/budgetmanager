@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ElementType, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Search, X, Pencil, RotateCcw, Upload, Tag, ArrowLeftRight, AlertTriangle, Banknote, CheckCircle2, TrendingUp } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search, X, Pencil, RotateCcw, Upload, Tag, ArrowLeftRight, AlertTriangle, Banknote, CheckCircle2, TrendingUp, Sparkles, SlidersHorizontal } from 'lucide-react'
 import {
   PieChart, Pie, Cell,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -11,13 +11,15 @@ import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
+import { AmountInput } from '@/components/ui/AmountInput'
 import {
   MONTH_NAMES_LONG,
   MONTH_NAMES_SHORT,
   makeMonthId,
   formatCurrency,
 } from '@/utils/budgetHelpers'
-import { budgetedAmount } from '@/utils/projection'
+import { budgetedAmount, baselineTarget } from '@/utils/projection'
+import { suggestForCategory, seasonalHint } from '@/utils/budgetSuggestions'
 import { getMonthIdForDate } from '@/utils/periodUtils'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import { txKey, reconciledKeysFromRecords, reconcileTransfers } from '@/utils/transferReconciliation'
@@ -154,6 +156,7 @@ export function FlowView() {
   const { categories, zlantarCategoryRules, monthStartDay, monthStartBusinessDay } = settings
 
   const monthId = makeMonthId(year, month)
+  const seasonHint = seasonalHint(month)
 
   const reconciledKeys = useMemo(() => reconciledKeysFromRecords(reconciliations), [reconciliations])
 
@@ -610,30 +613,27 @@ export function FlowView() {
         </InboxRow>
       </Card>
 
-      {/* This month vs plan */}
+      {/* This month vs plan — editable per-month overrides */}
       {planRows.length > 0 && (
         <Card className="mb-5">
-          <CardHeader title="Denna månad mot plan" subtitle={`${MONTH_NAMES_LONG[month - 1]} ${year}`} />
-          <div className="space-y-2.5">
-            {planRows.map((r) => {
-              const pct = r.budget > 0 ? Math.min((r.actual / r.budget) * 100, 100) : 0
-              const over = r.cat.type === 'expense' && r.budget > 0 && r.actual > r.budget
-              const barColor = over ? '#dc2626' : (r.cat.color ?? '#94a3b8')
-              return (
-                <div key={r.cat.id}>
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="text-gray-700">{r.cat.name}</span>
-                    <span className="tabular-nums text-gray-400">
-                      {formatCurrency(r.actual)}{r.budget > 0 ? ` / ${formatCurrency(r.budget)}` : ' (ingen plan)'}
-                    </span>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-warm-100 overflow-hidden">
-                    <div className="h-full rounded-full transition-all" style={{ width: `${r.budget > 0 ? pct : 0}%`, backgroundColor: barColor }} />
-                  </div>
-                </div>
-              )
-            })}
+          <CardHeader
+            title="Denna månad mot plan"
+            subtitle={`${MONTH_NAMES_LONG[month - 1]} ${year} · justera målet för just den här månaden`}
+          />
+          {seasonHint && (
+            <div className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 mb-3">
+              <Sparkles className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>{seasonHint}</span>
+            </div>
+          )}
+          <div className="space-y-1">
+            {planRows.map((r) => (
+              <MonthPlanRow key={r.cat.id} cat={r.cat} actual={r.actual} monthId={monthId} />
+            ))}
           </div>
+          <Link to="/plan" className="text-xs text-brand-600 hover:underline inline-flex items-center gap-1 mt-3">
+            <SlidersHorizontal className="w-3 h-3" /> Redigera normalmånaden i Plan
+          </Link>
         </Card>
       )}
 
@@ -774,6 +774,77 @@ export function FlowView() {
         )
       )}
     </Layout>
+  )
+}
+
+// ─── Month-vs-plan row (editable per-month override) ──────────────────────────
+
+function MonthPlanRow({ cat, actual, monthId }: { cat: CategoryDef; actual: number; monthId: string }) {
+  const store = useAppStore()
+  const [editing, setEditing] = useState(false)
+
+  const signedBudget = budgetedAmount(store, monthId, cat.id)
+  const budget = Math.abs(signedBudget)
+  const overridden = store.budgetOverrides[monthId]?.[cat.id] !== undefined
+  const isIncome = cat.type === 'income'
+  const pct = budget > 0 ? Math.min((actual / budget) * 100, 100) : 0
+  const over = cat.type === 'expense' && budget > 0 && actual > budget
+  const barColor = over ? '#dc2626' : (cat.color ?? '#94a3b8')
+
+  const base = baselineTarget(store, cat.id)
+  const suggestions = useMemo(
+    () => suggestForCategory(store, monthId, cat.id),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [store.actuals, store.settings.recurringItems, monthId, cat.id]
+  )
+
+  const chips: { label: string; value: number }[] = []
+  if (base !== undefined && base !== 0) chips.push({ label: 'bas', value: Math.round(base) })
+  if (suggestions.sameMonthLastYear !== undefined && suggestions.sameMonthLastYear !== 0) chips.push({ label: 'ifjol', value: Math.round(suggestions.sameMonthLastYear) })
+  if (suggestions.lastMonth !== undefined && suggestions.lastMonth !== 0) chips.push({ label: 'förra mån', value: Math.round(suggestions.lastMonth) })
+
+  const setOv = (v: number) => store.setMonthOverride(monthId, cat.id, v)
+  const reset = () => { store.setMonthOverride(monthId, cat.id, null); setEditing(false) }
+
+  return (
+    <div className="py-1.5">
+      <div className="flex items-center justify-between text-xs mb-1">
+        <span className="text-gray-700 flex items-center gap-1.5 min-w-0">
+          <span className="truncate">{cat.name}</span>
+          {overridden && <span className="text-[10px] bg-brand-50 text-brand-700 rounded-full px-1.5 py-0.5 shrink-0">justerad</span>}
+        </span>
+        <span className="flex items-center gap-2 shrink-0">
+          <span className="tabular-nums text-gray-400">
+            {formatCurrency(actual)}{budget > 0 ? ` / ${formatCurrency(budget)}` : ' (ingen plan)'}
+          </span>
+          <button onClick={() => setEditing((v) => !v)} className="text-gray-300 hover:text-brand-600 transition-colors" title="Justera mål">
+            <Pencil className="w-3 h-3" />
+          </button>
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-warm-100 overflow-hidden">
+        <div className="h-full rounded-full transition-all" style={{ width: `${budget > 0 ? pct : 0}%`, backgroundColor: barColor }} />
+      </div>
+      {editing && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 bg-warm-50 border border-warm-200 rounded-lg p-2">
+          <div className="w-28 shrink-0"><AmountInput value={signedBudget} onChange={setOv} defaultNegative={!isIncome} /></div>
+          {chips.map((c) => (
+            <button
+              key={c.label}
+              onClick={() => setOv(c.value)}
+              className="text-[11px] rounded-full border border-warm-200 bg-white px-2 py-0.5 text-gray-500 hover:border-brand-300 hover:text-brand-700 transition-colors tabular-nums"
+            >
+              {c.label} {formatCurrency(c.value)}
+            </button>
+          ))}
+          {overridden && (
+            <button onClick={reset} className="text-[11px] rounded-full border border-warm-200 bg-white px-2 py-0.5 text-gray-500 hover:text-red-600 transition-colors inline-flex items-center gap-1">
+              <RotateCcw className="w-3 h-3" /> Återställ till bas
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 

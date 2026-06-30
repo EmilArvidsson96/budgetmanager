@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Trash2, Settings as SettingsIcon, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react'
+import { Plus, Trash2, Settings as SettingsIcon, TrendingUp, TrendingDown, AlertTriangle, Download } from 'lucide-react'
 import { Select } from '@/components/ui/Select'
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend,
@@ -12,6 +12,8 @@ import { Button } from '@/components/ui/Button'
 import { formatCurrency } from '@/utils/budgetHelpers'
 import { getMonthIdForDate } from '@/utils/periodUtils'
 import { buildProjection } from '@/utils/projection'
+import { exportToExcel } from '@/utils/excelExport'
+import { BaselineEditor } from '@/components/budget/BaselineEditor'
 import type { LiquidityEntry, LiquidityPlan } from '@/types'
 
 const HORIZONS = [12, 24, 36] as const
@@ -42,8 +44,18 @@ function newId() {
 export function PlanView() {
   const [horizon, setHorizon] = useState<Horizon>(12)
   const [showForm, setShowForm] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const store = useAppStore()
   const { settings } = store
+
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      await exportToExcel({ ...store }, new Date().getFullYear())
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const today = new Date()
   const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
@@ -144,18 +156,23 @@ export function PlanView() {
         title="Plan"
         subtitle="Likviditet & förmögenhet framåt"
         actions={
-          <div className="flex rounded-lg border border-warm-300 overflow-hidden text-sm shrink-0">
-            {HORIZONS.map((h) => (
-              <button
-                key={h}
-                onClick={() => setHorizon(h)}
-                className={`px-3 py-1.5 font-medium transition-colors ${h !== HORIZONS[0] ? 'border-l border-warm-300' : ''} ${
-                  horizon === h ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-warm-50'
-                }`}
-              >
-                {h} mån
-              </button>
-            ))}
+          <div className="flex items-center gap-2 shrink-0">
+            <Button variant="secondary" size="sm" onClick={handleExport} loading={exporting}>
+              <Download className="w-4 h-4" /> Exportera
+            </Button>
+            <div className="flex rounded-lg border border-warm-300 overflow-hidden text-sm">
+              {HORIZONS.map((h) => (
+                <button
+                  key={h}
+                  onClick={() => setHorizon(h)}
+                  className={`px-3 py-1.5 font-medium transition-colors ${h !== HORIZONS[0] ? 'border-l border-warm-300' : ''} ${
+                    horizon === h ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-warm-50'
+                  }`}
+                >
+                  {h} mån
+                </button>
+              ))}
+            </div>
           </div>
         }
       />
@@ -244,6 +261,15 @@ export function PlanView() {
               Från {lastBudgetYear! + 1} rullas {lastBudgetYear} års budget framåt — lägg in en budget för senare år för en mer exakt prognos.
             </p>
           )}
+        </Card>
+
+        {/* Budget baseline — the editable plan that drives the projection above */}
+        <Card>
+          <CardHeader
+            title="Budgetbas — din normalmånad"
+            subtitle="Sätt målbeloppen som driver prognosen. Justera enskilda månader i Flöde."
+          />
+          <BaselineEditor />
         </Card>
 
         {/* Holdings / assumptions */}

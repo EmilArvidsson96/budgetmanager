@@ -5,6 +5,8 @@ import type {
   AppSettings,
   MonthlyBudget,
   YearlyBudget,
+  BudgetBaseline,
+  BaselineCategory,
   MonthlyActuals,
   LiquidityPlan,
   ZlantarImport,
@@ -254,6 +256,38 @@ function migrateV7(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, importConflicts: [] }
 }
 
+// v8 → v9: introduce the rolling budget baseline + per-month overrides — the new
+// editable budget model. Seed the baseline from the most recent yearly budget
+// (annual ÷ 12) or, failing that, the most recent monthly budget, so existing
+// plans carry over. The legacy monthly/yearly tables are kept untouched as a
+// fallback (see budgetedAmount) so closed-month history survives.
+function migrateV8(raw: Record<string, unknown>): Record<string, unknown> {
+  if (raw.budgetBaseline && raw.budgetOverrides) return raw
+
+  const yearly = (raw.yearlyBudgets as Record<string, YearlyBudget>) ?? {}
+  const monthly = (raw.monthlyBudgets as Record<string, MonthlyBudget>) ?? {}
+
+  let categories: BaselineCategory[] = []
+  const yearKeys = Object.keys(yearly).sort()
+  const monthKeys = Object.keys(monthly).sort()
+  if (yearKeys.length > 0) {
+    const yb = yearly[yearKeys[yearKeys.length - 1]]
+    categories = yb.categories.map((c) => ({
+      categoryId: c.categoryId,
+      target: Math.round(c.annualAmount / 12),
+    }))
+  } else if (monthKeys.length > 0) {
+    const mb = monthly[monthKeys[monthKeys.length - 1]]
+    categories = mb.categories.map((c) => ({ categoryId: c.categoryId, target: c.amount }))
+  }
+
+  return {
+    ...raw,
+    budgetBaseline: (raw.budgetBaseline as BudgetBaseline) ?? { categories },
+    budgetOverrides: (raw.budgetOverrides as Record<string, Record<string, number>>) ?? {},
+  }
+}
+
 // Rebuild one already-imported month's actuals from allTransactions + overrides,
 // preserving the snapshot's accountBalances / importedAt. Runs after every
 // re-categorization so aggregated budget totals stay in sync with the transactions.
@@ -355,6 +389,10 @@ interface AppStore extends AppState {
   upsertYearlyBudget: (budget: YearlyBudget) => void
   removeYearlyBudget: (id: string) => void
 
+  // Rolling budget baseline ("normalmånad") + per-month overrides
+  upsertBaselineCategory: (cat: BaselineCategory) => void
+  setMonthOverride: (monthId: string, categoryId: string, amount: number | null) => void
+
   // Actuals
   upsertActuals: (actuals: MonthlyActuals) => void
   removeActuals: (id: string) => void
@@ -397,6 +435,8 @@ export const useAppStore = create<AppStore>()(
   persist(
     (set) => ({
       settings: DEFAULT_SETTINGS,
+      budgetBaseline: { categories: [] },
+      budgetOverrides: {},
       monthlyBudgets: {},
       yearlyBudgets: {},
       actuals: {},
@@ -484,6 +524,23 @@ export const useAppStore = create<AppStore>()(
         set((state) => {
           const { [id]: _, ...rest } = state.yearlyBudgets
           return { yearlyBudgets: rest }
+        }),
+
+      upsertBaselineCategory: (cat) =>
+        set((state) => {
+          const others = state.budgetBaseline.categories.filter((c) => c.categoryId !== cat.categoryId)
+          return { budgetBaseline: { categories: [...others, cat], updatedAt: new Date().toISOString() } }
+        }),
+
+      setMonthOverride: (monthId, categoryId, amount) =>
+        set((state) => {
+          const month = { ...(state.budgetOverrides[monthId] ?? {}) }
+          if (amount === null) delete month[categoryId]
+          else month[categoryId] = amount
+          const next = { ...state.budgetOverrides }
+          if (Object.keys(month).length === 0) delete next[monthId]
+          else next[monthId] = month
+          return { budgetOverrides: next }
         }),
 
       upsertActuals: (actuals) =>
@@ -677,7 +734,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 8,
+      version: 9,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
@@ -688,6 +745,7 @@ export const useAppStore = create<AppStore>()(
         if (version < 6) state = migrateV5(state)
         if (version < 7) state = migrateV6(state)
         if (version < 8) state = migrateV7(state)
+        if (version < 9) state = migrateV8(state)
         return state
       },
     }

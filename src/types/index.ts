@@ -185,6 +185,30 @@ export interface YearlySubcategoryBudget {
   annualAmount: number
 }
 
+// ─── Rolling budget baseline ("normalmånad") ──────────────────────────────────
+//
+// A single standing plan that represents a normal month. It drives the forward
+// projection (Plan) and the month-vs-plan follow-up (Flöde). Per-month deviations
+// (julklappar, semester, …) live in budgetOverrides, keyed monthId → categoryId.
+// Replaces the old monthly+yearly budget tables as the editable source of truth.
+
+export interface BaselineSubTarget {
+  subcategoryId: string
+  target: number          // signed monthly target
+}
+
+export interface BaselineCategory {
+  categoryId: string
+  target: number          // signed monthly target (income +, expense/savings −)
+  bySub?: boolean         // when true, target is built from — and equals the sum of — subTargets
+  subTargets?: BaselineSubTarget[]
+}
+
+export interface BudgetBaseline {
+  categories: BaselineCategory[]
+  updatedAt?: string
+}
+
 // ─── Actuals (from Zlantar import) ───────────────────────────────────────────
 
 export interface ActualEntry {
@@ -395,6 +419,10 @@ export interface TxConflict {
 
 export interface AppState {
   settings: AppSettings
+  // Rolling budget model (current source of truth, edited in Plan + Flöde).
+  budgetBaseline: BudgetBaseline
+  budgetOverrides: Record<string, Record<string, number>>  // monthId → categoryId → signed amount
+  // Legacy budget tables — kept for history/Excel fallback; no longer edited in the UI.
   monthlyBudgets: Record<string, MonthlyBudget>    // key: 'YYYY-MM'
   yearlyBudgets: Record<string, YearlyBudget>       // key: 'YYYY'
   actuals: Record<string, MonthlyActuals>           // key: 'YYYY-MM'

@@ -95,19 +95,46 @@ function resolveCarryMonthly(state: AppState, monthId: string) {
   return state.monthlyBudgets[pick]
 }
 
-// Budgeted amount for one category in one period, mirroring the fallback in
-// budgetHelpers.getYearlyMonthData (monthly budget → custom month → equal split),
-// extended with carry-forward so future months without a budget reuse the latest
-// known one. Unlike that helper we divide regardless of sign so expenses (stored
-// negative) are included in the forecast. Exported for plan-vs-actual comparisons.
+// The standing baseline ("normalmånad") target for a category, or undefined if the
+// baseline has no entry for it. When bySub is set the target equals the sum of its
+// subcategory targets. Exported so the editors can show/seed the raw baseline.
+export function baselineTarget(state: AppState, categoryId: string): number | undefined {
+  const bc = state.budgetBaseline?.categories.find((c) => c.categoryId === categoryId)
+  if (!bc) return undefined
+  if (bc.bySub) {
+    return (bc.subTargets ?? []).reduce((s, t) => s + t.target, 0)
+  }
+  return bc.target
+}
+
+// Budgeted (planned) amount for one category in one period. Resolution order —
+// most specific first, so per-month tweaks and history win over the rolling base:
+//   1. explicit per-month override (budgetOverrides)
+//   2. legacy per-month budget table (preserves closed-month history)
+//   3. rolling baseline target ("normalmånad")
+//   4. legacy yearly allocation (monthly → custom → ÷12), carried forward
+//   5. legacy carry-forward of the nearest monthly budget
+// Signed throughout (expenses negative). Exported for plan-vs-actual comparisons.
 export function budgetedAmount(state: AppState, monthId: string, categoryId: string): number {
   const year = parseInt(monthId.slice(0, 4))
   const month = parseInt(monthId.slice(5, 7))
 
+  // 1. Per-month override.
+  const ov = state.budgetOverrides?.[monthId]?.[categoryId]
+  if (ov !== undefined) return ov
+
+  // 2. Legacy per-month budget (kept so already-closed months keep their plan).
   const mb = state.monthlyBudgets[monthId]
   if (mb) {
-    return mb.categories.find((c) => c.categoryId === categoryId)?.amount ?? 0
+    const cat = mb.categories.find((c) => c.categoryId === categoryId)
+    if (cat) return cat.amount
   }
+
+  // 3. Rolling baseline.
+  const base = baselineTarget(state, categoryId)
+  if (base !== undefined) return base
+
+  // 4. Legacy yearly allocation (with carry-forward).
   const yb = resolveYearlyBudget(state, year)
   if (yb) {
     const yc = yb.categories.find((c) => c.categoryId === categoryId)
@@ -119,7 +146,8 @@ export function budgetedAmount(state: AppState, monthId: string, categoryId: str
     }
     return 0
   }
-  // No yearly budgets anywhere → carry forward the nearest monthly budget.
+
+  // 5. No yearly budgets anywhere → carry forward the nearest monthly budget.
   const cmb = resolveCarryMonthly(state, monthId)
   if (cmb) {
     return cmb.categories.find((c) => c.categoryId === categoryId)?.amount ?? 0

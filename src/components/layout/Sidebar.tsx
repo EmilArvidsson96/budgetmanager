@@ -1,8 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import {
   LineChart,
-  CalendarDays,
-  CalendarRange,
   CheckCircle2,
   Settings,
   TrendingUp,
@@ -15,8 +13,6 @@ const NAV_ITEMS = [
   { to: '/plan',           icon: LineChart,     label: 'Plan',          short: 'Plan' },
   { to: '/floede',         icon: ListTree,      label: 'Flöde',         short: 'Flöde' },
   { to: '/avstamning',     icon: CheckCircle2,  label: 'Avstämning',    short: 'Avst.' },
-  { to: '/manad',          icon: CalendarDays,  label: 'Månadsbudget',  short: 'Månad' },
-  { to: '/ar',             icon: CalendarRange, label: 'Årsbudget',     short: 'År' },
   { to: '/kvitton',        icon: Receipt,       label: 'Matkvitton',    short: 'Kvitto' },
   { to: '/installningar',  icon: Settings,      label: 'Inställningar', short: 'Inst.' },
   { to: '/hjalp',          icon: HelpCircle,    label: 'Hjälp',         short: 'Hjälp' },

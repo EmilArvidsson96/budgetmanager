@@ -7,6 +7,7 @@ import type {
   MonthlyActuals,
   CategoryDef,
 } from '@/types'
+import { budgetedAmount } from './projection'
 
 const MONTH_NAMES = [
   'Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
@@ -374,6 +375,53 @@ function addSettingsSheet(wb: ExcelJS.Workbook, categories: CategoryDef[]) {
   }
 }
 
+// ─── Synthesise legacy-shaped budget objects from the rolling model ───────────
+// The sheet builders predate the baseline/override model; rather than rewrite
+// them, we resolve plan numbers through budgetedAmount (override → baseline →
+// legacy) so the export always reflects what the app currently shows.
+
+function monthIdOf(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, '0')}`
+}
+
+function synthMonthlyBudget(state: AppState, year: number, month: number): MonthlyBudget {
+  const id = monthIdOf(year, month)
+  return {
+    id,
+    year,
+    month,
+    isDetailed: true,
+    categories: state.settings.categories.map((cat) => ({
+      categoryId: cat.id,
+      amount: Math.round(budgetedAmount(state, id, cat.id)),
+      subcategories: [],
+    })),
+  }
+}
+
+function synthYearlyBudget(state: AppState, year: number): YearlyBudget {
+  return {
+    id: String(year),
+    year,
+    categories: state.settings.categories.map((cat) => {
+      const customMonthAmounts: Record<number, number> = {}
+      let annual = 0
+      for (let m = 1; m <= 12; m++) {
+        const v = Math.round(budgetedAmount(state, monthIdOf(year, m), cat.id))
+        customMonthAmounts[m] = v
+        annual += v
+      }
+      return {
+        categoryId: cat.id,
+        annualAmount: annual,
+        monthlyAllocation: 'custom' as const,
+        customMonthAmounts,
+        subcategories: [],
+      }
+    }),
+  }
+}
+
 // ─── Main export function ─────────────────────────────────────────────────────
 
 export async function exportToExcel(state: AppState, year: number): Promise<void> {
@@ -382,27 +430,23 @@ export async function exportToExcel(state: AppState, year: number): Promise<void
   wb.created = new Date()
   wb.title = `Budget ${year}`
 
-  const { settings, monthlyBudgets, yearlyBudgets, actuals, liquidityPlans } = state
+  const { settings, actuals, liquidityPlans } = state
   const categories = settings.categories
 
   // Settings sheet first (AI-navigable reference)
   addSettingsSheet(wb, categories)
 
-  // Yearly budget
-  const yb = yearlyBudgets[String(year)]
-  if (yb) {
-    addYearlySheet(wb, yb, monthlyBudgets, actuals, categories)
+  // Yearly budget — resolved through the rolling model (per-month custom amounts).
+  addYearlySheet(wb, synthYearlyBudget(state, year), {}, actuals, categories)
+
+  // Monthly sheets for months that have imported actuals or a per-month override.
+  const monthsWithData: number[] = []
+  for (let m = 1; m <= 12; m++) {
+    const id = monthIdOf(year, m)
+    if (actuals[id] || state.budgetOverrides[id]) monthsWithData.push(m)
   }
-
-  // Monthly budgets for this year
-  const yearMonths = Object.keys(monthlyBudgets)
-    .filter((k) => k.startsWith(String(year)))
-    .sort()
-
-  for (const ym of yearMonths) {
-    const mb = monthlyBudgets[ym]
-    const act = actuals[ym]
-    addMonthlySheet(wb, mb, act, categories)
+  for (const m of monthsWithData) {
+    addMonthlySheet(wb, synthMonthlyBudget(state, year, m), actuals[monthIdOf(year, m)], categories)
   }
 
   // Liquidity
