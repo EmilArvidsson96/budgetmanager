@@ -542,7 +542,7 @@ function WaterfallCard({ data }: { data: CashflowData }) {
               <span className="text-gray-400 font-normal">
                 {selected.balances
                   ? `${selected.balances.length} ${selected.balances.length === 1 ? 'konto' : 'konton'} · ingående → utgående`
-                  : `${selectedTxs.length} transaktioner`}
+                  : `${selectedTxs.length} ${selectedTxs.length === 1 ? 'transaktion' : 'transaktioner'}`}
               </span>
             </span>
             <button onClick={() => setSelectedId(null)} className="text-gray-400 hover:text-gray-700 transition-colors" aria-label="Stäng">
