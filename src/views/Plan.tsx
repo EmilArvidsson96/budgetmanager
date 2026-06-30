@@ -21,10 +21,10 @@ const HORIZONS = [12, 24, 36] as const
 type Horizon = (typeof HORIZONS)[number]
 
 // Cohesive palette (light-mode app, hardcoded like the existing charts).
-const LIQUID_COLOR = '#0e90e3'
-const ASSET_COLORS = ['#C96332', '#059669', '#d9920a', '#7c3aed', '#0d9488', '#db2777', '#2563eb', '#65a30d']
-const NETWORTH_COLOR = '#1f2937'
-const DEBT_COLOR = '#dc2626'
+const LIQUID_COLOR = '#2563eb'
+const ASSET_COLORS = ['#059669', '#0891b2', '#16a34a', '#0d9488', '#7c3aed', '#65a30d', '#0284c7']
+const LIABILITY_COLORS = ['#dc2626', '#ea580c', '#d97706', '#b45309']
+const NETWORTH_COLOR = '#111827'
 
 const TYPE_LABELS: Record<LiquidityEntry['type'], string> = {
   income: 'Inkomst',
@@ -134,6 +134,10 @@ export function PlanView() {
 
   const liquidityData = months.map((m) => ({ label: m.label, Likviditet: Math.round(m.liquidity) }))
   const liquidityGoesNegative = trough && trough.liquidity < 0
+
+  const minLiabilityValue = liabilityAccounts.length > 0
+    ? Math.min(...months.map(m => liabilityAccounts.reduce((s, l) => s + (m.values[l.id] ?? 0), 0)))
+    : 0
 
   const netWorthDelta = end.netWorth - now.netWorth
 
@@ -255,39 +259,52 @@ export function PlanView() {
 
         {/* Net worth composition */}
         <Card>
-          <CardHeader title="Förmögenhet över tid" subtitle="Tillgångar (ovan noll) och skulder (under noll) staplat per konto — nettoförmögenhet som linje" />
-          <ResponsiveContainer width="100%" height={320}>
-            <ComposedChart data={chartData} barCategoryGap="20%">
+          <CardHeader title="Förmögenhet över tid" subtitle="Tillgångar ovan noll, skulder under noll — nettoförmögenhet som linje" />
+          <ResponsiveContainer width="100%" height={340}>
+            <ComposedChart data={chartData} barSize={28} barGap={-28} barCategoryGap="20%">
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
-              <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} />
+              <YAxis
+                domain={[minLiabilityValue > 0 ? 0 : minLiabilityValue * 1.15, 'auto']}
+                tickFormatter={tickFmt}
+                tick={{ fontSize: 11 }}
+              />
               <Tooltip
                 formatter={(v, name) => [formatCurrency(Number(v ?? 0)), name]}
                 labelStyle={{ fontWeight: 600 }}
               />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <ReferenceLine y={0} stroke="#9ca3af" strokeWidth={1} />
-              {/* All bars share one stackId — Recharts renders positives above zero, negatives below */}
-              <Bar dataKey="Likvida medel" stackId="wealth" fill={LIQUID_COLOR} fillOpacity={0.85} />
+              <ReferenceLine y={0} stroke="#6b7280" strokeWidth={1} />
+              {/* Positive stack — assets above zero (stackId="pos") */}
+              <Bar
+                dataKey="Likvida medel"
+                stackId="pos"
+                fill={LIQUID_COLOR}
+                fillOpacity={0.9}
+                radius={assetAccounts.length === 0 ? [4, 4, 0, 0] : undefined}
+              />
               {assetAccounts.map((a, i) => (
                 <Bar
                   key={a.id}
                   dataKey={a.name}
-                  stackId="wealth"
+                  stackId="pos"
                   fill={ASSET_COLORS[i % ASSET_COLORS.length]}
-                  fillOpacity={0.85}
+                  fillOpacity={0.9}
+                  radius={i === assetAccounts.length - 1 ? [4, 4, 0, 0] : undefined}
                 />
               ))}
+              {/* Negative stack — liabilities below zero (stackId="neg", same x via barGap=-barSize) */}
               {liabilityAccounts.map((l, i) => (
                 <Bar
                   key={l.id}
                   dataKey={l.name}
-                  stackId="wealth"
-                  fill={DEBT_COLOR}
-                  fillOpacity={0.7 + i * 0.1}
+                  stackId="neg"
+                  fill={LIABILITY_COLORS[i % LIABILITY_COLORS.length]}
+                  fillOpacity={0.85}
+                  radius={i === liabilityAccounts.length - 1 ? [0, 0, 4, 4] : undefined}
                 />
               ))}
-              {/* Net worth line floating across both stacks */}
+              {/* Net worth line */}
               <Line type="monotone" dataKey="Nettoförmögenhet" stroke={NETWORTH_COLOR} strokeWidth={2.5} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
