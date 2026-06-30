@@ -51,7 +51,7 @@ export function ReconcileView() {
   const [month, setMonth] = useState(today.getMonth() + 1)
   const store = useAppStore()
   const { settings, actuals, monthCloses, reconciliations, allTransactions, transactionOverrides } = store
-  const { categories, accounts, monthStartDay, monthStartBusinessDay, zlantarCategoryRules } = settings
+  const { categories, monthStartDay, monthStartBusinessDay, zlantarCategoryRules } = settings
 
   const monthId = makeMonthId(year, month)
   const actual = actuals[monthId]
@@ -106,36 +106,33 @@ export function ReconcileView() {
     return { income, expense, savings, net: income - expense - savings }
   }, [rows])
 
-  // Cashflow data for waterfall. Derived from the raw transactions (not the
-  // aggregated actuals) so each bar can list the exact transactions behind it.
+  // Cashflow data for the waterfall.
+  //
+  // Income and expenses come from the raw transactions (so each bar can list
+  // the exact transactions behind it). Transfers are NEVER counted as income
+  // or expense.
+  //
+  // Savings is measured as the balance change of the savings-type accounts
+  // over the month — closing minus opening balance — NOT from transfer
+  // transactions. Money is always routed through a spender account first, so
+  // the transfers in/out would massively double-count; the net balance change
+  // is the true amount set aside (or drawn from the buffer). The closing
+  // balance is the latest value imported for this month; the opening balance
+  // is the previous month's closing balance.
+  const prevMonthId = makeMonthId(month === 1 ? year - 1 : year, month === 1 ? 12 : month - 1)
   const cashflowData = useMemo(() => {
     if (!actual) return null
-    const savingsAccountIds = new Set(
-      accounts
-        .filter((a) => ['savings', 'isk', 'investment'].includes(a.type))
-        .map((a) => a.id)
-    )
     const catIds = new Set(categories.map((c) => c.id))
     const ruleMap = buildRuleLookup(zlantarCategoryRules ?? DEFAULT_ZLANTAR_RULES)
 
     let income = 0
     const incomeTxs: ZlantarTransaction[] = []
-    const savingsTxs: ZlantarTransaction[] = []
-    let savingsIn = 0, savingsOut = 0
     const expenseByCat: Record<string, { total: number; txs: ZlantarTransaction[] }> = {}
 
     for (const tx of allTransactions) {
       if (!tx.date) continue
       if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) continue
-
-      if (tx.transaction_type === 'transfer') {
-        if (savingsAccountIds.has(tx.account_number)) {
-          if (tx.amount > 0) savingsIn += tx.amount
-          else savingsOut += tx.amount
-          savingsTxs.push(tx)
-        }
-        continue
-      }
+      if (tx.transaction_type === 'transfer') continue   // never counted
 
       const { catId } = resolveCategory(
         tx.category ?? '', tx.subcategory ?? '',
@@ -152,7 +149,28 @@ export function ReconcileView() {
       }
     }
 
-    const netSavings = savingsIn + savingsOut
+    // Savings from balance change of savings-type accounts.
+    const savingsTypes = new Set<string>(['savings', 'isk', 'investment'])
+    const openingMap = new Map(
+      (actuals[prevMonthId]?.accountBalances ?? []).map((ab) => [ab.accountId, ab.balance])
+    )
+    const savingsAccounts = actual.accountBalances
+      .filter((ab) => savingsTypes.has(ab.accountType))
+      .map((ab) => {
+        const opening = openingMap.get(ab.accountId)
+        const closing = ab.balance
+        return {
+          accountId: ab.accountId,
+          accountName: ab.accountName,
+          opening: opening ?? closing,
+          closing,
+          delta: opening === undefined ? 0 : closing - opening,
+          known: opening !== undefined,
+        }
+      })
+      .filter((a) => a.delta !== 0)
+    const netSavings = savingsAccounts.reduce((s, a) => s + a.delta, 0)
+
     const expenseGroups = categories
       .filter((c) => c.type === 'expense' && expenseByCat[c.id])
       .map((c) => ({
@@ -164,8 +182,8 @@ export function ReconcileView() {
       }))
     const totalExpenses = expenseGroups.reduce((s, g) => s + g.total, 0)
 
-    return { income, incomeTxs, netSavings, savingsTxs, totalExpenses, expenseGroups }
-  }, [actual, allTransactions, accounts, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, monthId])
+    return { income, incomeTxs, netSavings, savingsAccounts, totalExpenses, expenseGroups }
+  }, [actual, actuals, prevMonthId, allTransactions, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, monthId])
 
   // Checklist signals.
   const uncategorizedCount = actual?.entries.find((e) => e.categoryId === 'other')?.transactionCount ?? 0
@@ -363,6 +381,15 @@ export function ReconcileView() {
 
 // ─── Kassaflöde waterfall ──────────────────────────────────────────────────────
 
+interface SavingsAccountDelta {
+  accountId: string
+  accountName: string
+  opening: number
+  closing: number
+  delta: number
+  known: boolean
+}
+
 interface WFRow {
   id: string
   label: string
@@ -373,6 +400,7 @@ interface WFRow {
   isResult?: boolean
   sign: '+' | '−'
   txs?: ZlantarTransaction[]
+  balances?: SavingsAccountDelta[]
 }
 
 interface CashflowExpenseGroup {
@@ -387,13 +415,13 @@ interface CashflowData {
   income: number
   incomeTxs: ZlantarTransaction[]
   netSavings: number
-  savingsTxs: ZlantarTransaction[]
+  savingsAccounts: SavingsAccountDelta[]
   totalExpenses: number
   expenseGroups: CashflowExpenseGroup[]
 }
 
 function WaterfallCard({ data }: { data: CashflowData }) {
-  const { income, incomeTxs, netSavings, savingsTxs, expenseGroups } = data
+  const { income, incomeTxs, netSavings, savingsAccounts, expenseGroups } = data
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const bufferAmt = netSavings < 0 ? Math.abs(netSavings) : 0
@@ -409,10 +437,10 @@ function WaterfallCard({ data }: { data: CashflowData }) {
   wfRows.push({ id: 'income', label: 'Inkomst', value: income, leftPct: 0, widthPct: toPct(income), color: '#6479b3', sign: '+', txs: incomeTxs })
 
   if (bufferAmt > 0) {
-    wfRows.push({ id: 'buffer', label: 'Från buffert', value: bufferAmt, leftPct: toPct(income), widthPct: toPct(bufferAmt), color: '#94a3b8', sign: '+', txs: savingsTxs })
+    wfRows.push({ id: 'buffer', label: 'Från buffert', value: bufferAmt, leftPct: toPct(income), widthPct: toPct(bufferAmt), color: '#94a3b8', sign: '+', balances: savingsAccounts })
   } else if (savingsAmt > 0) {
     remaining -= savingsAmt
-    wfRows.push({ id: 'savings', label: 'Sparande', value: savingsAmt, leftPct: toPct(remaining), widthPct: toPct(savingsAmt), color: '#52a871', sign: '−', txs: savingsTxs })
+    wfRows.push({ id: 'savings', label: 'Sparande', value: savingsAmt, leftPct: toPct(remaining), widthPct: toPct(savingsAmt), color: '#52a871', sign: '−', balances: savingsAccounts })
   }
 
   for (const g of expenseGroups) {
@@ -432,7 +460,8 @@ function WaterfallCard({ data }: { data: CashflowData }) {
     isResult: true,
   })
 
-  const selected = wfRows.find((r) => r.id === selectedId && r.txs && r.txs.length > 0) ?? null
+  const detailCount = (row: WFRow) => row.txs?.length ?? row.balances?.length ?? 0
+  const selected = wfRows.find((r) => r.id === selectedId && detailCount(r) > 0) ?? null
   const selectedTxs = selected?.txs
     ? [...selected.txs].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
     : []
@@ -442,7 +471,7 @@ function WaterfallCard({ data }: { data: CashflowData }) {
       <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4">Kassaflöde</div>
       <div className="space-y-2">
         {wfRows.map((row) => {
-          const clickable = !!(row.txs && row.txs.length > 0)
+          const clickable = detailCount(row) > 0
           const isActive = selectedId === row.id
           return (
             <div key={row.id} className={`flex items-center gap-2.5${row.isResult ? ' mt-1 pt-2 border-t border-warm-100' : ''}`}>
@@ -454,7 +483,7 @@ function WaterfallCard({ data }: { data: CashflowData }) {
                 disabled={!clickable}
                 onClick={() => clickable && setSelectedId(isActive ? null : row.id)}
                 className={`flex-1 relative h-7 bg-gray-50 rounded-md overflow-hidden text-left transition-shadow ${clickable ? 'cursor-pointer hover:ring-2 hover:ring-gray-200' : 'cursor-default'} ${isActive ? 'ring-2 ring-gray-400' : ''}`}
-                title={clickable ? `Visa ${row.txs!.length} transaktioner` : undefined}
+                title={clickable ? 'Visa detaljer' : undefined}
               >
                 <div
                   className="absolute h-full rounded-md transition-all duration-300"
@@ -467,7 +496,7 @@ function WaterfallCard({ data }: { data: CashflowData }) {
                 />
                 {row.widthPct > 15 && (
                   <span
-                    className="absolute top-1/2 -translate-y-1/2 text-white text-xs font-medium px-1.5 pointer-events-none"
+                    className="absolute top-1/2 -translate-y-1/2 text-white text-xs font-medium px-1.5 leading-none whitespace-nowrap pointer-events-none"
                     style={{ left: `calc(${row.leftPct}% + 4px)` }}
                   >
                     {formatCurrency(row.value)}
@@ -488,20 +517,32 @@ function WaterfallCard({ data }: { data: CashflowData }) {
             <span className="text-xs font-semibold text-gray-700 flex items-center gap-2">
               <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: selected.color }} />
               {selected.label}
-              <span className="text-gray-400 font-normal">{selectedTxs.length} transaktioner</span>
+              <span className="text-gray-400 font-normal">
+                {selected.balances
+                  ? `${selected.balances.length} ${selected.balances.length === 1 ? 'konto' : 'konton'} · ingående → utgående`
+                  : `${selectedTxs.length} transaktioner`}
+              </span>
             </span>
             <button onClick={() => setSelectedId(null)} className="text-gray-400 hover:text-gray-700 transition-colors" aria-label="Stäng">
               <X className="w-4 h-4" />
             </button>
           </div>
           <div className="max-h-72 overflow-y-auto divide-y divide-warm-100">
-            {selectedTxs.map((tx, i) => (
-              <div key={txKey(tx) + i} className="flex items-center gap-3 px-3 py-2">
-                <span className="text-xs text-gray-400 tabular-nums w-20 shrink-0">{tx.date}</span>
-                <span className="flex-1 truncate text-sm text-gray-700" title={tx.description || undefined}>{tx.description || '—'}</span>
-                <span className={`text-xs tabular-nums shrink-0 ${tx.amount < 0 ? 'text-gray-700' : 'text-emerald-600'}`}>{formatCurrency(tx.amount)}</span>
-              </div>
-            ))}
+            {selected.balances
+              ? selected.balances.map((b) => (
+                  <div key={b.accountId} className="flex items-center gap-3 px-3 py-2">
+                    <span className="flex-1 truncate text-sm text-gray-700" title={b.accountName}>{b.accountName}</span>
+                    <span className="text-xs text-gray-400 tabular-nums shrink-0">{formatCurrency(b.opening)} → {formatCurrency(b.closing)}</span>
+                    <span className={`text-xs tabular-nums shrink-0 w-24 text-right font-medium ${b.delta < 0 ? 'text-gray-700' : 'text-emerald-600'}`}>{formatCurrency(b.delta, true)}</span>
+                  </div>
+                ))
+              : selectedTxs.map((tx, i) => (
+                  <div key={txKey(tx) + i} className="flex items-center gap-3 px-3 py-2">
+                    <span className="text-xs text-gray-400 tabular-nums w-20 shrink-0">{tx.date}</span>
+                    <span className="flex-1 truncate text-sm text-gray-700" title={tx.description || undefined}>{tx.description || '—'}</span>
+                    <span className={`text-xs tabular-nums shrink-0 ${tx.amount < 0 ? 'text-gray-700' : 'text-emerald-600'}`}>{formatCurrency(tx.amount)}</span>
+                  </div>
+                ))}
           </div>
         </div>
       )}
