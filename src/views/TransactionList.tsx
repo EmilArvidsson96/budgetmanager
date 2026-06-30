@@ -105,7 +105,9 @@ function CategoryPicker({
   const [level3Id, setLevel3Id] = useState(currentLevel3Id ?? '')
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
+  const [openUpward, setOpenUpward] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   const options = useMemo<CategoryOption[]>(() => {
     const result: CategoryOption[] = []
@@ -147,18 +149,29 @@ function CategoryPicker({
     setQuery('')
   }
 
+  function handleOpen() {
+    if (inputRef.current) {
+      const rect = inputRef.current.getBoundingClientRect()
+      // Flip upward if there isn't room for the dropdown below the input.
+      setOpenUpward(window.innerHeight - rect.bottom < 280)
+    }
+    setOpen(true)
+    setQuery('')
+  }
+
   return (
     <div className="col-span-full px-4 pb-3 pt-1 flex flex-wrap items-center gap-2 bg-warm-50 border-b border-warm-200">
       <div ref={containerRef} className="relative">
         <input
+          ref={inputRef}
           className="border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 w-64"
           value={open ? query : currentLabel}
           placeholder="Sök kategori…"
-          onFocus={() => { setOpen(true); setQuery('') }}
+          onFocus={handleOpen}
           onChange={(e) => { setQuery(e.target.value); setOpen(true) }}
         />
         {open && filtered.length > 0 && (
-          <div className="absolute z-50 top-full mt-1 left-0 w-80 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-xl">
+          <div className={`absolute z-50 left-0 w-80 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-xl ${openUpward ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
             {filtered.map((opt, i) => (
               <button
                 key={i}
@@ -191,9 +204,16 @@ function CategoryPicker({
 
 // ─── Transaction row ──────────────────────────────────────────────────────────
 
-function TxRow({ item, categories }: { item: ResolvedTx; categories: CategoryDef[] }) {
+function TxRow({
+  item, categories, editing, onToggle, onClose,
+}: {
+  item: ResolvedTx
+  categories: CategoryDef[]
+  editing: boolean
+  onToggle: () => void
+  onClose: () => void
+}) {
   const store = useAppStore()
-  const [editing, setEditing] = useState(false)
   const { tx, catId, subId } = item
   const key = txKey(tx)
   const override = store.transactionOverrides[key]
@@ -243,7 +263,7 @@ function TxRow({ item, categories }: { item: ResolvedTx; categories: CategoryDef
 
         {/* Edit button */}
         <button
-          onClick={() => setEditing((v) => !v)}
+          onClick={onToggle}
           title="Ändra kategori"
           className={`flex items-center justify-center w-6 h-6 rounded transition-colors
             ${editing ? 'text-brand-600 bg-brand-50' : 'text-gray-300 hover:text-brand-500 hover:bg-gray-100'}`}
@@ -254,21 +274,20 @@ function TxRow({ item, categories }: { item: ResolvedTx; categories: CategoryDef
 
       {/* Inline picker */}
       {editing && (
-        <div className="grid grid-cols-1 divide-y-0">
-          <CategoryPicker
-            categories={categories}
-            currentCatId={catId}
-            currentSubId={subId}
-            currentLevel3Id={override?.level3Id}
-            canReset={!!override}
-            onPick={(c, s, l3) => {
-              store.setTransactionOverride(key, { categoryId: c, subcategoryId: s, level3Id: l3 })
-              setEditing(false)
-            }}
-            onReset={() => { store.clearTransactionOverride(key); setEditing(false) }}
-            onCancel={() => setEditing(false)}
-          />
-        </div>
+        <CategoryPicker
+          key={key}
+          categories={categories}
+          currentCatId={catId}
+          currentSubId={subId}
+          currentLevel3Id={override?.level3Id}
+          canReset={!!override}
+          onPick={(c, s, l3) => {
+            store.setTransactionOverride(key, { categoryId: c, subcategoryId: s, level3Id: l3 })
+            onClose()
+          }}
+          onReset={() => { store.clearTransactionOverride(key); onClose() }}
+          onCancel={onClose}
+        />
       )}
     </>
   )
@@ -291,6 +310,16 @@ export function TransactionListView() {
   const [sortField, setSortField] = useState<SortField>('date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [showAdvanced, setShowAdvanced] = useState(false)
+
+  // txKey of the row currently being re-categorized — only one open at a time.
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+
+  // Close the open editor whenever the list reorders (sort) or its contents
+  // change (filter/search), so the picker can't stay attached to a row that
+  // has moved or been filtered out.
+  useEffect(() => {
+    setEditingKey(null)
+  }, [search, accountFilter, txTypeFilter, categoryFilter, minAmt, maxAmt, dateFrom, dateTo, sortField, sortDir])
 
   const ruleMap = useMemo(
     () => buildRuleLookup(zlantarCategoryRules ?? DEFAULT_ZLANTAR_RULES),
@@ -485,9 +514,9 @@ export function TransactionListView() {
           {allTransactions.length === 0 ? 'Inga transaktioner importerade ännu.' : 'Inga transaktioner matchar filtret.'}
         </div>
       ) : (
-        <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+        <div className="bg-white border border-gray-200 rounded-2xl">
           {/* Column headers — 6 cols matching TxRow */}
-          <div className="grid grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-4 px-4 py-2.5 border-b border-gray-100 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wide">
+          <div className="grid grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-4 px-4 py-2.5 border-b border-gray-100 bg-gray-50 rounded-t-2xl text-xs font-medium text-gray-500 uppercase tracking-wide">
             <button onClick={() => toggleSort('date')} className="flex items-center text-left hover:text-gray-700 transition-colors whitespace-nowrap">
               Datum <SortIcon field="date" />
             </button>
@@ -517,7 +546,17 @@ export function TransactionListView() {
                   </div>
                 )
               }
-              return <TxRow key={txKey(row.item.tx)} item={row.item} categories={categories} />
+              const rowKey = txKey(row.item.tx)
+              return (
+                <TxRow
+                  key={rowKey}
+                  item={row.item}
+                  categories={categories}
+                  editing={editingKey === rowKey}
+                  onToggle={() => setEditingKey((k) => (k === rowKey ? null : rowKey))}
+                  onClose={() => setEditingKey(null)}
+                />
+              )
             })}
           </div>
         </div>
