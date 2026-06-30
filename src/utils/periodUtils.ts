@@ -26,6 +26,27 @@ export function getActualPeriodStartDate(
   return nom
 }
 
+// Fraction [0,1] of the given period that has elapsed as of `today`, plus
+// whether the period is in the past, current, or future. Used to judge
+// spending pace against how much of the month has gone by.
+export function getPeriodProgress(
+  monthId: string,
+  monthStartDay: number,
+  monthStartBusinessDay: boolean,
+  today: Date
+): { elapsed: number; state: 'past' | 'current' | 'future' } {
+  const year = parseInt(monthId.slice(0, 4))
+  const month = parseInt(monthId.slice(5, 7))
+  const start = getActualPeriodStartDate(year, month, monthStartDay, monthStartBusinessDay)
+  const nextYear = month === 12 ? year + 1 : year
+  const nextMonth = month === 12 ? 1 : month + 1
+  const end = getActualPeriodStartDate(nextYear, nextMonth, monthStartDay, monthStartBusinessDay)
+  const t = today.getTime()
+  if (t < start.getTime()) return { elapsed: 0, state: 'future' }
+  if (t >= end.getTime()) return { elapsed: 1, state: 'past' }
+  return { elapsed: (t - start.getTime()) / (end.getTime() - start.getTime()), state: 'current' }
+}
+
 // Returns the YYYY-MM period label a transaction date belongs to.
 // dateStr must be ISO format "YYYY-MM-DD".
 export function getMonthIdForDate(

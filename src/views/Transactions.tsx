@@ -20,7 +20,7 @@ import {
 } from '@/utils/budgetHelpers'
 import { budgetedAmount, baselineTarget } from '@/utils/projection'
 import { suggestForCategory, seasonalHint } from '@/utils/budgetSuggestions'
-import { getMonthIdForDate } from '@/utils/periodUtils'
+import { getMonthIdForDate, getPeriodProgress } from '@/utils/periodUtils'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import { txKey, reconciledKeysFromRecords, reconcileTransfers } from '@/utils/transferReconciliation'
 import { GROCERY_CATEGORY_LABELS } from '@/types'
@@ -336,6 +336,15 @@ export function FlowView() {
       .filter((r) => r.budget > 0 || r.actual > 0)
   }, [groups, categories, store, monthId])
 
+  // Total budgeted income for the month — the scale that expense/savings bars
+  // are sized against (each category's bar = its share of income).
+  const budgetedIncome = useMemo(
+    () => categories
+      .filter((c) => c.type === 'income')
+      .reduce((s, c) => s + Math.abs(budgetedAmount(store, monthId, c.id)), 0),
+    [categories, store, monthId]
+  )
+
   const inboxTotal = uncategorizedTxs.length + pendingMatches.length + overBudget.length + largeTxs.length
 
   const confirmMatch = (m: TransferMatch) => {
@@ -642,7 +651,7 @@ export function FlowView() {
           )}
           <div className="space-y-1">
             {planRows.map((r) => (
-              <MonthPlanRow key={r.cat.id} cat={r.cat} actual={r.actual} monthId={monthId} />
+              <MonthPlanRow key={r.cat.id} cat={r.cat} actual={r.actual} monthId={monthId} incomeBase={budgetedIncome} />
             ))}
           </div>
           <Link to="/plan" className="text-xs text-brand-600 hover:underline inline-flex items-center gap-1 mt-3">
@@ -793,17 +802,58 @@ export function FlowView() {
 
 // ─── Month-vs-plan row (editable per-month override) ──────────────────────────
 
-function MonthPlanRow({ cat, actual, monthId }: { cat: CategoryDef; actual: number; monthId: string }) {
+// Colour for the plan bar based on pace — how far spending leads the elapsed
+// fraction of the month. diff = (actual/budget) − elapsed: ≤0 is on/under pace
+// (green); once spending leads by ~30 points it's fully red. Mid-month (40%
+// elapsed) this puts 40% spent at green and 70% spent at red.
+function paceColor(diff: number): string {
+  const t = Math.max(0, Math.min(1, diff / 0.3))
+  const hue = Math.round(140 - 140 * t) // 140 green → 0 red
+  return `hsl(${hue}, 72%, 42%)`
+}
+
+function MonthPlanRow({ cat, actual, monthId, incomeBase }: { cat: CategoryDef; actual: number; monthId: string; incomeBase: number }) {
   const store = useAppStore()
   const [editing, setEditing] = useState(false)
+  const { monthStartDay, monthStartBusinessDay } = store.settings
 
   const signedBudget = budgetedAmount(store, monthId, cat.id)
   const budget = Math.abs(signedBudget)
   const overridden = store.budgetOverrides[monthId]?.[cat.id] !== undefined
   const isIncome = cat.type === 'income'
-  const pct = budget > 0 ? Math.min((actual / budget) * 100, 100) : 0
-  const over = cat.type === 'expense' && budget > 0 && actual > budget
-  const barColor = over ? '#dc2626' : (cat.color ?? '#94a3b8')
+  const isExpenseLike = cat.type === 'expense' || cat.type === 'savings'
+
+  // How far through the month we are — drives the pace colour.
+  const today = useMemo(() => new Date(), [])
+  const { elapsed, state } = getPeriodProgress(monthId, monthStartDay, monthStartBusinessDay, today)
+  // Salary lands late, so income is only "due" once we're past the 25th (or the
+  // period has closed). Before that, a missing income shouldn't flag red.
+  const incomeDue = state === 'past' || (state === 'current' && today.getDate() >= 26)
+
+  // Bar geometry. Expense/savings bars are scaled to budgeted income so each
+  // category occupies its real share of the month's income; income bars keep
+  // the category's own budget as the full track.
+  const scaleToIncome = isExpenseLike && incomeBase > 0
+  const budgetWidth = scaleToIncome
+    ? Math.min(100, (budget / incomeBase) * 100)
+    : (budget > 0 ? 100 : 0)
+  const actualWidth = scaleToIncome
+    ? Math.min(100, (actual / incomeBase) * 100)
+    : (budget > 0 ? Math.min(100, (actual / budget) * 100) : (actual > 0 ? 100 : 0))
+
+  // Fill colour by pace, per category type.
+  let barColor: string
+  if (state === 'future' || budget <= 0) {
+    barColor = budget <= 0 && actual > 0 ? paceColor(1) : (cat.color ?? '#94a3b8')
+  } else if (isIncome) {
+    const ratio = actual / budget
+    barColor = ratio >= 0.98 || !incomeDue ? paceColor(-1) : paceColor(1 - ratio)
+  } else if (cat.type === 'savings') {
+    // Saving ahead of schedule is good — behind pace trends red, never over.
+    barColor = paceColor(elapsed - actual / budget)
+  } else {
+    barColor = actual > budget ? paceColor(1) : paceColor(actual / budget - elapsed)
+  }
 
   const base = baselineTarget(store, cat.id)
   const suggestions = useMemo(
@@ -830,14 +880,26 @@ function MonthPlanRow({ cat, actual, monthId }: { cat: CategoryDef; actual: numb
         <span className="flex items-center gap-2 shrink-0">
           <span className="tabular-nums text-gray-400">
             {formatCurrency(actual)}{budget > 0 ? ` / ${formatCurrency(budget)}` : ' (ingen plan)'}
+            {scaleToIncome && budget > 0 && (
+              <span className="text-gray-300"> · {Math.round((budget / incomeBase) * 100)}% av ink.</span>
+            )}
           </span>
           <button onClick={() => setEditing((v) => !v)} className="text-gray-300 hover:text-brand-600 transition-colors" title="Justera mål">
             <Pencil className="w-3 h-3" />
           </button>
         </span>
       </div>
-      <div className="h-1.5 rounded-full bg-warm-100 overflow-hidden">
-        <div className="h-full rounded-full transition-all" style={{ width: `${budget > 0 ? pct : 0}%`, backgroundColor: barColor }} />
+      <div className="relative h-2 rounded-full bg-warm-100 overflow-hidden">
+        {/* Planned share of income (ghost) */}
+        {budgetWidth > 0 && (
+          <div className="absolute inset-y-0 left-0 bg-warm-200/80" style={{ width: `${budgetWidth}%` }} />
+        )}
+        {/* Actual fill, coloured by pace */}
+        <div className="absolute inset-y-0 left-0 rounded-full transition-all" style={{ width: `${actualWidth}%`, backgroundColor: barColor }} />
+        {/* Budget marker — where the plan sits when scaled to income */}
+        {scaleToIncome && budgetWidth > 0 && budgetWidth < 100 && (
+          <div className="absolute inset-y-0 w-px bg-gray-500/50" style={{ left: `${budgetWidth}%` }} />
+        )}
       </div>
       {editing && (
         <div className="mt-2 flex flex-wrap items-center gap-2 bg-warm-50 border border-warm-200 rounded-lg p-2">
