@@ -13,6 +13,10 @@ import type { ZlantarTransaction, ZlantarCategoryRule, TxOverride } from '@/type
 
 type RuleTarget = { appCategoryId: string; appSubcategoryId?: string }
 
+// Catch-all subcategories of 'other' (Övrigt) that don't count as a real
+// categorization — see Transactions.tsx for the matching logic.
+const UNCATEGORIZED_OTHER_SUBS = new Set(['uncategorized', 'other'])
+
 function buildRuleLookup(rules: ZlantarCategoryRule[]): Map<string, RuleTarget> {
   const map = new Map<string, RuleTarget>()
   for (const r of rules) {
@@ -186,7 +190,22 @@ export function ReconcileView() {
   }, [actual, actuals, prevMonthId, allTransactions, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, monthId])
 
   // Checklist signals.
-  const uncategorizedCount = actual?.entries.find((e) => e.categoryId === 'other')?.transactionCount ?? 0
+  // Only entries in Övrigt WITHOUT a meaningful subcategory count as
+  // uncategorized: the catch-all subs ('uncategorized', 'other') and any
+  // unmatched/empty subId. Real Övrigt subcats (Hälsa, Barn, etc.) are
+  // categorized. (Sum across all matching entries — there's one per subcategory.)
+  const uncategorizedCount = useMemo(() => {
+    const otherCat = categories.find((c) => c.id === 'other')
+    const realSubIds = new Set((otherCat?.subcategories ?? []).map((s) => s.id))
+    return (actual?.entries ?? [])
+      .filter((e) => e.categoryId === 'other')
+      .filter((e) => {
+        const sub = e.subcategoryId
+        const categorized = !!sub && realSubIds.has(sub) && !UNCATEGORIZED_OTHER_SUBS.has(sub)
+        return !categorized
+      })
+      .reduce((sum, e) => sum + e.transactionCount, 0)
+  }, [actual, categories])
   const overPlanCount = rows.filter((r) => r.cat.type === 'expense' && r.budget > 0 && r.actual > r.budget).length
   const pendingTransfers = useMemo(() => {
     if (!settings.accounts.some((a) => a.owner?.trim())) return 0
@@ -379,7 +398,7 @@ export function ReconcileView() {
   )
 }
 
-// ─── Kassaflöde waterfall ──────────────────────────────────────────────────────
+// ─── Kassaflöde ────────────────────────────────────────────────────────────────
 
 interface SavingsAccountDelta {
   accountId: string
@@ -390,14 +409,11 @@ interface SavingsAccountDelta {
   known: boolean
 }
 
-interface WFRow {
+interface CFRow {
   id: string
   label: string
   value: number
-  leftPct: number
-  widthPct: number
   color: string
-  isResult?: boolean
   sign: '+' | '−'
   txs?: ZlantarTransaction[]
   balances?: SavingsAccountDelta[]
@@ -426,89 +442,95 @@ function WaterfallCard({ data }: { data: CashflowData }) {
 
   const bufferAmt = netSavings < 0 ? Math.abs(netSavings) : 0
   const savingsAmt = netSavings > 0 ? netSavings : 0
-  const totalIncoming = income + bufferAmt
   const totalExpenses = expenseGroups.reduce((s, g) => s + g.total, 0)
-  const chartMax = Math.max(totalIncoming, totalExpenses, 1)
-  const toPct = (v: number) => Math.max(0, Math.min(100, (v / chartMax) * 100))
+  const net = income - netSavings - totalExpenses
 
-  const wfRows: WFRow[] = []
-  let remaining = totalIncoming
+  // Money coming in this month.
+  const inRows: CFRow[] = [
+    { id: 'income', label: 'Inkomst', value: income, color: '#6479b3', sign: '+', txs: incomeTxs },
+    ...(bufferAmt > 0
+      ? [{ id: 'buffer', label: 'Från buffert', value: bufferAmt, color: '#94a3b8', sign: '+' as const, balances: savingsAccounts }]
+      : []),
+  ]
+  // Where it went.
+  const outRows: CFRow[] = [
+    ...(savingsAmt > 0
+      ? [{ id: 'savings', label: 'Sparande', value: savingsAmt, color: '#52a871', sign: '−' as const, balances: savingsAccounts }]
+      : []),
+    ...expenseGroups.map((g) => ({ id: g.catId, label: g.catName, value: g.total, color: g.catColor, sign: '−' as const, txs: g.txs })),
+  ]
 
-  wfRows.push({ id: 'income', label: 'Inkomst', value: income, leftPct: 0, widthPct: toPct(income), color: '#6479b3', sign: '+', txs: incomeTxs })
+  // Scale so the largest single bar fills the track.
+  const scale = Math.max(income, bufferAmt, savingsAmt, ...expenseGroups.map((g) => g.total), Math.abs(net), 1)
+  const toPct = (v: number) => Math.max(2, Math.min(100, (v / scale) * 100))
 
-  if (bufferAmt > 0) {
-    wfRows.push({ id: 'buffer', label: 'Från buffert', value: bufferAmt, leftPct: toPct(income), widthPct: toPct(bufferAmt), color: '#94a3b8', sign: '+', balances: savingsAccounts })
-  } else if (savingsAmt > 0) {
-    remaining -= savingsAmt
-    wfRows.push({ id: 'savings', label: 'Sparande', value: savingsAmt, leftPct: toPct(remaining), widthPct: toPct(savingsAmt), color: '#52a871', sign: '−', balances: savingsAccounts })
-  }
-
-  for (const g of expenseGroups) {
-    remaining -= g.total
-    wfRows.push({ id: g.catId, label: g.catName, value: g.total, leftPct: toPct(Math.max(0, remaining)), widthPct: toPct(g.total), color: g.catColor, sign: '−', txs: g.txs })
-  }
-
-  const net = remaining
-  wfRows.push({
-    id: 'net',
-    label: net >= 0 ? 'Överskott' : 'Underskott',
-    value: Math.abs(net),
-    leftPct: 0,
-    widthPct: toPct(Math.abs(net)),
-    color: net >= 0 ? '#10b981' : '#ef4444',
-    sign: net >= 0 ? '+' : '−',
-    isResult: true,
-  })
-
-  const detailCount = (row: WFRow) => row.txs?.length ?? row.balances?.length ?? 0
-  const selected = wfRows.find((r) => r.id === selectedId && detailCount(r) > 0) ?? null
+  const detailCount = (row: CFRow) => row.txs?.length ?? row.balances?.length ?? 0
+  const allRows = [...inRows, ...outRows]
+  const selected = allRows.find((r) => r.id === selectedId && detailCount(r) > 0) ?? null
   const selectedTxs = selected?.txs
     ? [...selected.txs].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
     : []
 
+  const Row = ({ row }: { row: CFRow }) => {
+    const clickable = detailCount(row) > 0
+    const isActive = selectedId === row.id
+    return (
+      <div className="flex items-center gap-3">
+        <span className="text-xs w-24 md:w-28 text-right flex-shrink-0 text-gray-500 truncate" title={row.label}>{row.label}</span>
+        <button
+          type="button"
+          disabled={!clickable}
+          onClick={() => clickable && setSelectedId(isActive ? null : row.id)}
+          className={`flex-1 relative h-6 bg-warm-50 rounded-md overflow-hidden transition-shadow ${clickable ? 'cursor-pointer hover:ring-2 hover:ring-gray-200' : 'cursor-default'} ${isActive ? 'ring-2 ring-gray-400' : ''}`}
+          title={clickable ? 'Visa detaljer' : undefined}
+        >
+          <div
+            className="absolute inset-y-0 left-0 rounded-md transition-all duration-300"
+            style={{ width: `${toPct(row.value)}%`, backgroundColor: row.color }}
+          />
+        </button>
+        <span className="text-sm w-24 text-right flex-shrink-0 tabular-nums font-medium text-gray-800">
+          {row.sign}{formatCurrency(row.value)}
+        </span>
+      </div>
+    )
+  }
+
   return (
     <Card padding={false} className="p-4 md:p-5">
       <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4">Kassaflöde</div>
-      <div className="space-y-2">
-        {wfRows.map((row) => {
-          const clickable = detailCount(row) > 0
-          const isActive = selectedId === row.id
-          return (
-            <div key={row.id} className={`flex items-center gap-2.5${row.isResult ? ' mt-1 pt-2 border-t border-warm-100' : ''}`}>
-              <span className={`text-xs w-28 text-right flex-shrink-0 ${row.isResult ? 'font-semibold text-gray-700' : 'text-gray-400'}`}>
-                {row.label}
-              </span>
-              <button
-                type="button"
-                disabled={!clickable}
-                onClick={() => clickable && setSelectedId(isActive ? null : row.id)}
-                className={`flex-1 relative h-7 bg-gray-50 rounded-md overflow-hidden text-left transition-shadow ${clickable ? 'cursor-pointer hover:ring-2 hover:ring-gray-200' : 'cursor-default'} ${isActive ? 'ring-2 ring-gray-400' : ''}`}
-                title={clickable ? 'Visa detaljer' : undefined}
-              >
-                <div
-                  className="absolute h-full rounded-md transition-all duration-300"
-                  style={{
-                    left: `${row.leftPct}%`,
-                    width: `${Math.min(row.widthPct, 100 - row.leftPct)}%`,
-                    backgroundColor: row.color,
-                    opacity: row.isResult ? 1 : 0.85,
-                  }}
-                />
-                {row.widthPct > 15 && (
-                  <span
-                    className="absolute top-1/2 -translate-y-1/2 text-white text-xs font-medium px-1.5 leading-none whitespace-nowrap pointer-events-none"
-                    style={{ left: `calc(${row.leftPct}% + 4px)` }}
-                  >
-                    {formatCurrency(row.value)}
-                  </span>
-                )}
-              </button>
-              <span className={`text-xs w-24 text-right flex-shrink-0 tabular-nums ${row.isResult ? 'font-semibold text-gray-700' : 'text-gray-600'}`}>
-                {row.sign}{formatCurrency(row.value)}
-              </span>
-            </div>
-          )
-        })}
+
+      <div className="space-y-1.5">
+        {inRows.map((row) => <Row key={row.id} row={row} />)}
+      </div>
+
+      <div className="my-2.5 border-t border-warm-100" />
+
+      <div className="space-y-1.5">
+        {outRows.map((row) => <Row key={row.id} row={row} />)}
+      </div>
+
+      {/* Result */}
+      <div className="mt-3 pt-3 border-t border-warm-200">
+        <div className="flex items-center gap-3">
+          <span className={`text-xs w-24 md:w-28 text-right flex-shrink-0 font-semibold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+            {net < 0 ? 'Underskott' : 'Överskott'}
+          </span>
+          <div className="flex-1 relative h-6 bg-warm-50 rounded-md overflow-hidden">
+            <div
+              className="absolute inset-y-0 left-0 rounded-md"
+              style={{ width: `${toPct(Math.abs(net))}%`, backgroundColor: net < 0 ? '#ef4444' : '#10b981' }}
+            />
+          </div>
+          <span className={`text-sm w-24 text-right flex-shrink-0 tabular-nums font-bold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+            {net < 0 ? '−' : '+'}{formatCurrency(Math.abs(net))}
+          </span>
+        </div>
+        {net < 0 && (
+          <p className="text-xs text-gray-400 mt-2 ml-[6.75rem] md:ml-[7.75rem]">
+            Utgifter och sparande översteg inkomsten med {formatCurrency(Math.abs(net))} denna månad.
+          </p>
+        )}
       </div>
 
       {selected && (

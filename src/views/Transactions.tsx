@@ -79,6 +79,12 @@ function resolveCategory(
   return { catId: 'other', subId: rawSub }
 }
 
+// Subcategories of the 'other' (Övrigt) category that are NOT real
+// categorizations — they're the catch-all "don't know" buckets. A transaction
+// counts as uncategorized when it's in 'other' with one of these subs (or no
+// matching sub at all).
+const UNCATEGORIZED_OTHER_SUBS = new Set(['uncategorized', 'other'])
+
 interface ResolvedTx {
   tx: ZlantarTransaction
   catId: string
@@ -260,11 +266,19 @@ export function FlowView() {
   const grandTotal = groups.reduce((s, g) => s + g.total, 0)
   const grandCount = groups.reduce((s, g) => s + g.count, 0)
 
-  // ── Inbox signal 1: uncategorized transactions (resolved to 'other') ──────────
+  // ── Inbox signal 1: uncategorized transactions ───────────────────────────────
+  // A transaction is only "uncategorized" if it landed in Övrigt WITHOUT a
+  // meaningful subcategory: either an unmatched/empty subId (g.uncategorized) or
+  // one of the catch-all subcats ('uncategorized', 'other'). Transactions placed
+  // in a real Övrigt subcategory (Hälsa, Barn, Kontantuttag, Utlägg) are
+  // categorized and must NOT appear here.
   const uncategorizedTxs = useMemo<ResolvedTx[]>(() => {
     const g = groups.find((x) => x.cat.id === 'other')
     if (!g) return []
-    return [...g.subgroups.flatMap((s) => s.transactions), ...g.uncategorized]
+    const catchAll = g.subgroups
+      .filter((s) => UNCATEGORIZED_OTHER_SUBS.has(s.subId))
+      .flatMap((s) => s.transactions)
+    return [...catchAll, ...g.uncategorized]
       .sort((a, b) => b.tx.date.localeCompare(a.tx.date))
   }, [groups])
 
