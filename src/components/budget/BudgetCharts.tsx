@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell,
 } from 'recharts'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Select } from '@/components/ui/Select'
@@ -22,6 +21,46 @@ const INCOME_COLOR = '#111827'
 function tickFmt(v: number): string {
   if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`
   return `${Math.round(v / 1000)}k`
+}
+
+// Hand-built SVG donut (Recharts 3.8 <Pie> renders empty when mounted via a
+// conditional view-switch under React 19 — selectPieSectors returns null and
+// never recovers). This is fully deterministic and matches the WealthBarShape
+// SVG approach used elsewhere.
+function polar(cx: number, cy: number, r: number, angleDeg: number): [number, number] {
+  const a = ((angleDeg - 90) * Math.PI) / 180
+  return [cx + r * Math.cos(a), cy + r * Math.sin(a)]
+}
+
+function donutSlicePath(cx: number, cy: number, rOuter: number, rInner: number, start: number, end: number): string {
+  // Clamp a full circle just under 360° so the arc path is non-degenerate.
+  const e = end - start >= 360 ? start + 359.999 : end
+  const largeArc = e - start > 180 ? 1 : 0
+  const [x1, y1] = polar(cx, cy, rOuter, start)
+  const [x2, y2] = polar(cx, cy, rOuter, e)
+  const [x3, y3] = polar(cx, cy, rInner, e)
+  const [x4, y4] = polar(cx, cy, rInner, start)
+  return `M${x1},${y1} A${rOuter},${rOuter} 0 ${largeArc} 1 ${x2},${y2} L${x3},${y3} A${rInner},${rInner} 0 ${largeArc} 0 ${x4},${y4} Z`
+}
+
+function DonutChart({ data, total }: { data: { catId: string; name: string; value: number; color: string }[]; total: number }) {
+  const cx = 100, cy = 100, rOuter = 92, rInner = 54
+  let angle = 0
+  return (
+    <svg viewBox="0 0 200 200" width="100%" height={240} role="img" aria-label="Budgetfördelning">
+      {data.map((d) => {
+        const sweep = total > 0 ? (d.value / total) * 360 : 0
+        const start = angle
+        angle += sweep
+        const pct = total > 0 ? ((d.value / total) * 100).toFixed(0) : '0'
+        return (
+          <path key={d.catId} d={donutSlicePath(cx, cy, rOuter, rInner, start, angle)} fill={d.color} fillOpacity={0.9}>
+            <title>{`${d.name}: ${formatCurrency(d.value)} (${pct}%)`}</title>
+          </path>
+        )
+      })}
+    </svg>
+  )
 }
 
 function monthLabel(monthId: string): string {
@@ -180,25 +219,7 @@ export function BudgetCharts({ months }: { months: ProjectionMonth[] }) {
           <p className="text-center text-gray-400 py-10">Inga budgeterade utgifter för {monthLabel(selectedMonthId)}.</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr] gap-3 items-center">
-            <ResponsiveContainer width="100%" height={240}>
-              <PieChart>
-                <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius="44%" outerRadius="86%" stroke="none">
-                  {pieData.map((entry) => (
-                    <Cell key={entry.catId} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  formatter={(v, _name, item) => {
-                    const n = Number(v ?? 0)
-                    const pct = pieTotal > 0 ? ((n / pieTotal) * 100).toFixed(0) : 0
-                    const name = (item as { payload?: { name?: string } } | undefined)?.payload?.name ?? ''
-                    return [`${formatCurrency(n)} (${pct}%)`, name]
-                  }}
-                  labelStyle={{ display: 'none' }}
-                  contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e7e2d3' }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+            <DonutChart data={pieData} total={pieTotal} />
             <div className="space-y-1 max-h-60 overflow-y-auto pr-1">
               {pieData.map((entry) => (
                 <div key={entry.catId} className="flex items-center gap-2 py-0.5">
