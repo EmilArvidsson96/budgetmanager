@@ -209,6 +209,16 @@ export interface BudgetBaseline {
   updatedAt?: string
 }
 
+// Plan grid — the adjustable "coming months" table in Plan. When unset the grid
+// shows a rolling default (current period month + next 11) and all income/expense
+// categories. Once the user adds/removes a row or column, the explicit selection
+// is stored here. This only governs which rows/columns are visible; the cell
+// values themselves are ordinary budgetOverrides.
+export interface PlanGridConfig {
+  months: string[]        // explicit monthIds shown, ascending
+  categoryIds: string[]   // explicit category rows shown, in order
+}
+
 // ─── Actuals (from Zlantar import) ───────────────────────────────────────────
 
 export interface ActualEntry {
@@ -422,6 +432,7 @@ export interface AppState {
   // Rolling budget model (current source of truth, edited in Plan + Flöde).
   budgetBaseline: BudgetBaseline
   budgetOverrides: Record<string, Record<string, number>>  // monthId → categoryId → signed amount
+  planGrid?: PlanGridConfig                                // visible rows/columns of the Plan grid
   // Legacy budget tables — kept for history/Excel fallback; no longer edited in the UI.
   monthlyBudgets: Record<string, MonthlyBudget>    // key: 'YYYY-MM'
   yearlyBudgets: Record<string, YearlyBudget>       // key: 'YYYY'

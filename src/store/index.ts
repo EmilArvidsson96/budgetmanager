@@ -7,6 +7,7 @@ import type {
   YearlyBudget,
   BudgetBaseline,
   BaselineCategory,
+  PlanGridConfig,
   MonthlyActuals,
   LiquidityPlan,
   ZlantarImport,
@@ -392,6 +393,8 @@ interface AppStore extends AppState {
   // Rolling budget baseline ("normalmånad") + per-month overrides
   upsertBaselineCategory: (cat: BaselineCategory) => void
   setMonthOverride: (monthId: string, categoryId: string, amount: number | null) => void
+  // Plan grid layout (visible rows/columns). null resets to the rolling default.
+  setPlanGrid: (config: PlanGridConfig | null) => void
 
   // Actuals
   upsertActuals: (actuals: MonthlyActuals) => void
@@ -437,6 +440,7 @@ export const useAppStore = create<AppStore>()(
       settings: DEFAULT_SETTINGS,
       budgetBaseline: { categories: [] },
       budgetOverrides: {},
+      planGrid: undefined,
       monthlyBudgets: {},
       yearlyBudgets: {},
       actuals: {},
@@ -542,6 +546,8 @@ export const useAppStore = create<AppStore>()(
           else next[monthId] = month
           return { budgetOverrides: next }
         }),
+
+      setPlanGrid: (config) => set(() => ({ planGrid: config ?? undefined })),
 
       upsertActuals: (actuals) =>
         set((state) => {

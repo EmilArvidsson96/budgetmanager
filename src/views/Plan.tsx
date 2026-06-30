@@ -14,6 +14,7 @@ import { getMonthIdForDate } from '@/utils/periodUtils'
 import { buildProjection } from '@/utils/projection'
 import { exportToExcel } from '@/utils/excelExport'
 import { BaselineEditor } from '@/components/budget/BaselineEditor'
+import { PlanGrid } from '@/components/budget/PlanGrid'
 import type { LiquidityEntry, LiquidityPlan } from '@/types'
 
 const HORIZONS = [12, 24, 36] as const
@@ -271,6 +272,9 @@ export function PlanView() {
           />
           <BaselineEditor />
         </Card>
+
+        {/* Coming-months grid — adjustable rows (categories) × columns (months) */}
+        <PlanGrid />
 
         {/* Holdings / assumptions */}
         <Card padding={false}>
