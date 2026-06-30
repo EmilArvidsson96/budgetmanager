@@ -199,3 +199,134 @@ export function FlowBar({ segments }: { segments: FlowSegment[] }) {
     </div>
   )
 }
+
+// ─── Forward-looking line charts ──────────────────────────────────────────────
+
+// Maps a value series to a y in [pad, H-pad] within a shared min/max range.
+function makeScale(values: number[], H: number, pad = 8) {
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const span = max - min || Math.abs(max) || 1
+  return (v: number) => pad + (1 - (v - min) / span) * (H - 2 * pad)
+}
+
+// 2-year net-worth outlook: current projection (solid + area) with last month's
+// projection overlaid as a faint dashed line so the shift is visible.
+export function WealthOutlookChart({
+  points,
+  priorByMonth,
+  height = 132,
+  color = '#111827',
+  priorColor = '#C96332',
+}: {
+  points: { monthId: string; label: string; netWorth: number }[]
+  priorByMonth?: Record<string, number>
+  height?: number
+  color?: string
+  priorColor?: string
+}) {
+  if (points.length < 2) return null
+  const W = 100
+  const H = height
+  const xAt = (i: number) => (i / (points.length - 1)) * W
+  const priorPairs = points
+    .map((p, i) => ({ i, v: priorByMonth?.[p.monthId] }))
+    .filter((p): p is { i: number; v: number } => p.v != null)
+
+  const yScale = makeScale([...points.map((p) => p.netWorth), ...priorPairs.map((p) => p.v)], H)
+
+  const line = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(2)},${yScale(p.netWorth).toFixed(2)}`).join(' ')
+  const area = `${line} L${xAt(points.length - 1).toFixed(2)},${H} L0,${H} Z`
+  const priorLine = priorPairs.map((p, j) => `${j === 0 ? 'M' : 'L'}${xAt(p.i).toFixed(2)},${yScale(p.v).toFixed(2)}`).join(' ')
+
+  return (
+    <div>
+      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="wealthArea" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.16} />
+            <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        <path d={area} fill="url(#wealthArea)" stroke="none" />
+        {priorPairs.length > 1 && (
+          <path d={priorLine} fill="none" stroke={priorColor} strokeWidth={1.5} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
+        )}
+        <path d={line} fill="none" stroke={color} strokeWidth={2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
+      </svg>
+      <div className="flex justify-between mt-1.5 text-[10px] text-gray-400">
+        <span>{points[0].label}</span>
+        <span>{points[points.length - 1].label}</span>
+      </div>
+    </div>
+  )
+}
+
+// 12-month liquidity: actual months (solid) stitched to projected months (dashed),
+// with the largest expenses marked. Marker dots are HTML overlays so they stay
+// round despite the viewBox being stretched to the container width.
+export function LiquidityTimeline({
+  points,
+  markers,
+  height = 150,
+}: {
+  points: { monthId: string; label: string; value: number; kind: 'actual' | 'projected' }[]
+  markers: { monthId: string; kind: 'happened' | 'planned' }[]
+  height?: number
+}) {
+  if (points.length < 2) return null
+  const W = 100
+  const H = height
+  const pad = 12
+  const n = points.length
+  const min = Math.min(0, ...points.map((p) => p.value))
+  const max = Math.max(0, ...points.map((p) => p.value))
+  const span = max - min || 1
+  const xAt = (i: number) => (i / (n - 1)) * W
+  const xPct = (i: number) => (i / (n - 1)) * 100
+  const yAt = (v: number) => pad + (1 - (v - min) / span) * (H - 2 * pad)
+
+  const idx = points.map((_, i) => i)
+  const actualIdx = idx.filter((i) => points[i].kind === 'actual')
+  const projIdx = idx.filter((i) => points[i].kind === 'projected')
+  const projDraw = actualIdx.length ? [actualIdx[actualIdx.length - 1], ...projIdx] : projIdx
+  const pathOf = (idxs: number[]) =>
+    idxs.map((i, j) => `${j === 0 ? 'M' : 'L'}${xAt(i).toFixed(2)},${yAt(points[i].value).toFixed(2)}`).join(' ')
+
+  const MARK = { happened: '#dc2626', planned: '#d97706' }
+
+  return (
+    <div>
+      <div className="relative" style={{ height: H }}>
+        <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="block">
+          {min < 0 && <line x1={0} y1={yAt(0)} x2={W} y2={yAt(0)} stroke="#fca5a5" strokeWidth={1} strokeDasharray="2 2" vectorEffect="non-scaling-stroke" />}
+          {actualIdx.length > 1 && (
+            <path d={pathOf(actualIdx)} fill="none" stroke="#2563eb" strokeWidth={2.5} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
+          )}
+          {projDraw.length > 1 && (
+            <path d={pathOf(projDraw)} fill="none" stroke="#2563eb" strokeOpacity={0.55} strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
+          )}
+        </svg>
+        {/* Expense markers as round HTML dots positioned over the line. */}
+        {markers.map((m, k) => {
+          const i = points.findIndex((p) => p.monthId === m.monthId)
+          if (i < 0) return null
+          return (
+            <span
+              key={k}
+              className="absolute w-2.5 h-2.5 rounded-full border-2 border-white shadow-sm -translate-x-1/2 -translate-y-1/2"
+              style={{ left: `${xPct(i)}%`, top: yAt(points[i].value), background: MARK[m.kind] }}
+            />
+          )
+        })}
+      </div>
+      <div className="flex mt-1.5">
+        {points.map((p, i) => (
+          <div key={i} className={`flex-1 text-center text-[10px] ${p.kind === 'projected' ? 'text-gray-300' : 'text-gray-500'}`}>
+            {i % 2 === 0 ? p.label : ''}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}

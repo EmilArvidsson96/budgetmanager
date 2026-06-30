@@ -11,7 +11,10 @@
 
 import type { AppState } from '@/types'
 import { getMonthlyHistory, averageOf, type MonthHistoryPoint } from './history'
-import { MONTH_NAMES_LONG } from './budgetHelpers'
+import { MONTH_NAMES_LONG, MONTH_NAMES_SHORT } from './budgetHelpers'
+import { buildProjection, classifyAccount, currentMonthId, type ProjectionResult } from './projection'
+import { getMonthIdForDate } from './periodUtils'
+import { getSalaryAnchors } from './salaryDetection'
 
 // Cohesive palette — terracotta brand first, then the chart colours used elsewhere.
 const CAT_COLORS = [
@@ -20,6 +23,10 @@ const CAT_COLORS = [
 ]
 
 const TOP_CATEGORIES = 5
+const WEALTH_HORIZON = 24    // 2-year outlook
+const LIQ_PAST = 2          // actual months shown before now
+const LIQ_FUTURE = 10       // projected months shown from now
+const TOP_EXPENSES = 4      // largest expenses marked on the liquidity timeline
 const TREND_MONTHS = 8
 const AVG_WINDOW = 6
 
@@ -83,6 +90,45 @@ export interface MoneyFlow {
   leftover: number     // kr left over after expenses + savings (≥ 0)
 }
 
+// ── 2-year wealth outlook (forward net-worth projection vs last month's) ───────
+export interface OutlookPoint {
+  monthId: string
+  label: string
+  netWorth: number
+}
+
+export interface WealthOutlook {
+  points: OutlookPoint[]                 // current projection, baseline (now) … +horizon
+  endLabel: string                       // label of the horizon-end point (~2 years out)
+  endValue: number                       // projected net worth there
+  priorByMonth?: Record<string, number>  // last month's projection, monthId → net worth (overlay)
+  priorEndValue?: number                 // last month's value at ITS own horizon end
+  delta?: number                         // endValue − priorEndValue (how the outlook moved)
+}
+
+// ── 12-month liquidity window (past LIQ_PAST + coming LIQ_FUTURE) ──────────────
+export type LiqKind = 'actual' | 'projected'
+export interface LiqPoint {
+  monthId: string
+  label: string
+  value: number
+  kind: LiqKind
+}
+
+export type ExpenseKind = 'happened' | 'planned'
+export interface LargeExpense {
+  monthId: string
+  label: string
+  amount: number       // positive magnitude
+  description: string
+  kind: ExpenseKind
+}
+
+export interface LiquidityWindow {
+  points: LiqPoint[]
+  markers: LargeExpense[]                // up to TOP_EXPENSES, largest first
+}
+
 export interface MonthlyReport {
   monthId: string
   title: string                 // "Juni 2026"
@@ -97,6 +143,23 @@ export interface MonthlyReport {
   netWorth?: { value: number; prev?: number; series: NetWorthPoint[] }
   trend: TrendPoint[]           // trailing window ending at this month
   highlights: Highlight[]
+  // Forward-looking sections — only on the latest (current) month's report.
+  wealthOutlook?: WealthOutlook
+  liquidity?: LiquidityWindow
+}
+
+// Step a 'YYYY-MM' id by ±n months.
+function shiftMonth(monthId: string, delta: number): string {
+  let year = parseInt(monthId.slice(0, 4))
+  let month = parseInt(monthId.slice(5, 7)) + delta
+  while (month > 12) { month -= 12; year += 1 }
+  while (month < 1) { month += 12; year -= 1 }
+  return `${year}-${String(month).padStart(2, '0')}`
+}
+
+function labelShort(monthId: string): string {
+  const month = parseInt(monthId.slice(5, 7))
+  return `${MONTH_NAMES_SHORT[month - 1]} ${monthId.slice(2, 4)}`
 }
 
 function labelLong(monthId: string): string {
@@ -133,6 +196,96 @@ function netWorthByMonth(state: AppState): Map<string, number> {
     if (known) out.set(monthId, nw)
   }
   return out
+}
+
+// Liquid cash per imported month (carry-forward, same rationale as netWorthByMonth)
+// — the sum of liquid-role account balances. Used for the actual (past) portion of
+// the liquidity window; the projection supplies the coming months.
+function liquidByMonth(state: AppState): Map<string, number> {
+  const liquidIds = new Set(state.settings.accounts.filter((a) => classifyAccount(a) === 'liquid').map((a) => a.id))
+  const known = new Set(state.settings.accounts.map((a) => a.id))
+  const carried = new Map<string, number>()
+  const out = new Map<string, number>()
+  for (const monthId of Object.keys(state.actuals).sort()) {
+    for (const ab of state.actuals[monthId].accountBalances) {
+      const isLiquid = known.has(ab.accountId) ? liquidIds.has(ab.accountId) : ab.accountType === 'checking'
+      if (isLiquid) carried.set(ab.accountId, ab.balance)
+    }
+    if (carried.size === 0) continue
+    let sum = 0
+    for (const v of carried.values()) sum += v
+    out.set(monthId, sum)
+  }
+  return out
+}
+
+// The forward net-worth projection (current state), plus a comparison against the
+// snapshot saved last period so the report can show how the 2-year outlook moved.
+function buildWealthOutlook(state: AppState, proj: ProjectionResult, start: string): WealthOutlook {
+  const points: OutlookPoint[] = proj.months.map((m) => ({
+    monthId: m.monthId,
+    label: m.label,
+    netWorth: Math.round(m.netWorth),
+  }))
+  const end = points[points.length - 1]
+  const outlook: WealthOutlook = { points, endLabel: end.label, endValue: end.netWorth }
+
+  const prior = state.wealthForecasts?.[shiftMonth(start, -1)]
+  if (prior && prior.points.length > 0) {
+    outlook.priorByMonth = Object.fromEntries(prior.points.map((p) => [p.monthId, Math.round(p.netWorth)]))
+    outlook.priorEndValue = Math.round(prior.points[prior.points.length - 1].netWorth)
+    outlook.delta = end.netWorth - outlook.priorEndValue
+  }
+  return outlook
+}
+
+// The largest expenses to mark on the liquidity timeline: biggest actual
+// transactions in the past window + biggest planned one-offs in the coming window.
+function largeExpenses(state: AppState, start: string): LargeExpense[] {
+  const { monthStartDay, monthStartBusinessDay } = state.settings
+  const { anchors } = getSalaryAnchors(state)
+  const pastWindow = new Set(Array.from({ length: LIQ_PAST }, (_, i) => shiftMonth(start, -(i + 1))))
+  const futureEnd = shiftMonth(start, LIQ_FUTURE - 1)
+
+  const out: LargeExpense[] = []
+
+  for (const tx of state.allTransactions) {
+    if (tx.transaction_type !== 'expense' || !tx.date) continue
+    const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors)
+    if (!pastWindow.has(mid)) continue
+    const amount = Math.abs(tx.amount)
+    if (amount <= 0) continue
+    out.push({ monthId: mid, label: labelShort(mid), amount, description: tx.description || tx.category || 'Utgift', kind: 'happened' })
+  }
+
+  for (const plan of Object.values(state.liquidityPlans)) {
+    for (const e of plan.entries) {
+      if (!e.date || e.amount >= 0) continue   // only expenses/loan payments
+      const mid = getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, anchors)
+      if (mid < start || mid > futureEnd) continue
+      out.push({ monthId: mid, label: labelShort(mid), amount: Math.abs(e.amount), description: e.description || 'Planerad utgift', kind: 'planned' })
+    }
+  }
+
+  return out.sort((a, b) => b.amount - a.amount).slice(0, TOP_EXPENSES)
+}
+
+// 12-month liquidity: LIQ_PAST actual months (carry-forward liquid cash) stitched
+// to LIQ_FUTURE projected months, with the largest expenses marked.
+function buildLiquidityWindow(state: AppState, proj: ProjectionResult, start: string): LiquidityWindow {
+  const liquidActual = liquidByMonth(state)
+  const points: LiqPoint[] = []
+
+  for (let i = LIQ_PAST; i >= 1; i--) {
+    const mid = shiftMonth(start, -i)
+    const v = liquidActual.get(mid)
+    if (v !== undefined) points.push({ monthId: mid, label: labelShort(mid), value: Math.round(v), kind: 'actual' })
+  }
+  for (const m of proj.months.slice(0, LIQ_FUTURE)) {
+    points.push({ monthId: m.monthId, label: m.label, value: Math.round(m.liquidity), kind: 'projected' })
+  }
+
+  return { points, markers: largeExpenses(state, start) }
 }
 
 // Months with actuals, newest first — drives the report month picker.
@@ -322,6 +475,19 @@ export function buildMonthlyReport(state: AppState, monthId: string): MonthlyRep
 
   const highlights = buildHighlights(cur, savingsRate, expense.avg, categories[0])
 
+  // ── Forward-looking sections — only on the latest (current) month's report ──
+  // Both are anchored at "now", so they only make sense on the most recent report.
+  // One projection (24 mo) feeds both: net-worth curve + the coming-months liquidity.
+  const isCurrent = idx === history.length - 1
+  let wealthOutlook: WealthOutlook | undefined
+  let liquidity: LiquidityWindow | undefined
+  if (isCurrent) {
+    const start = currentMonthId(state)
+    const proj = buildProjection({ state, startMonthId: start, horizon: WEALTH_HORIZON })
+    wealthOutlook = buildWealthOutlook(state, proj, start)
+    liquidity = buildLiquidityWindow(state, proj, start)
+  }
+
   return {
     monthId,
     title,
@@ -336,5 +502,7 @@ export function buildMonthlyReport(state: AppState, monthId: string): MonthlyRep
     netWorth,
     trend,
     highlights,
+    wealthOutlook,
+    liquidity,
   }
 }

@@ -284,6 +284,25 @@ export interface LiquidityPlan {
   notes?: string
 }
 
+// ─── Wealth forecast snapshots (Rapport: vs förra månaden) ───────────────────
+
+// One point on a saved net-worth projection curve.
+export interface WealthForecastPoint {
+  monthId: string        // 'YYYY-MM'
+  netWorth: number
+}
+
+// A snapshot of the forward net-worth projection as it looked when taken. Saved
+// once per period (keyed by the period it was taken in), so the monthly Rapport
+// can show how this month's 2-year outlook compares to last month's. Only the
+// net-worth curve is stored — small, and enough to compare horizons over time.
+export interface WealthForecastSnapshot {
+  takenForPeriod: string           // monthId this snapshot represents ("now" when taken)
+  takenAt: string                  // ISO timestamp
+  horizon: number                  // months projected forward
+  points: WealthForecastPoint[]    // ascending; points[0] === takenForPeriod (baseline)
+}
+
 // ─── Monthly close / reconciliation ritual ───────────────────────────────────
 
 // A record that a month has been reviewed and "closed". Stores a snapshot of the
@@ -465,4 +484,7 @@ export interface AppState {
   reconciliations: ReconciliationRecord[]
   importConflicts: TxConflict[]
   monthCloses: Record<string, MonthClose>          // key: 'YYYY-MM'
+  // Monthly snapshots of the forward net-worth projection, so the Rapport can show
+  // this month's 2-year outlook against last month's. Keyed by the period taken in.
+  wealthForecasts: Record<string, WealthForecastSnapshot>   // key: takenForPeriod 'YYYY-MM'
 }

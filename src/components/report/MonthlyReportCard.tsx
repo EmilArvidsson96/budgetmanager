@@ -8,7 +8,7 @@
 import { ArrowUpRight, ArrowDownRight, PiggyBank, Wallet, Coins, TrendingUp, TrendingDown, Target, PieChart } from 'lucide-react'
 import { formatCurrency } from '@/utils/budgetHelpers'
 import type { MonthlyReport, ReportStat, HighlightIcon } from '@/utils/report'
-import { Donut, MiniBars, Sparkline, FlowBar, type Slice } from './charts'
+import { Donut, MiniBars, Sparkline, FlowBar, WealthOutlookChart, LiquidityTimeline, type Slice } from './charts'
 
 const INCOME = '#059669'
 const SAVINGS = '#2563eb'
@@ -269,6 +269,73 @@ export function MonthlyReportCard({ report, summary }: { report: MonthlyReport; 
           </div>
         )}
       </div>
+
+      {/* ── 2-year wealth outlook vs last month ── */}
+      {report.wealthOutlook && (
+        <div className="bg-white rounded-2xl border border-warm-300 p-5">
+          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2 mb-4">
+            <div>
+              <h3 className="text-base font-semibold text-gray-900">Förmögenhet om 2 år</h3>
+              <p className="text-sm text-gray-400">Prognos till {report.wealthOutlook.endLabel}</p>
+            </div>
+            <div className="sm:text-right">
+              <p className="text-2xl font-bold text-gray-900 tabular-nums leading-none">
+                {formatCurrency(report.wealthOutlook.endValue)}
+              </p>
+              {report.wealthOutlook.delta !== undefined ? (
+                <p className={`text-xs font-semibold mt-1 flex items-center gap-0.5 sm:justify-end tabular-nums ${report.wealthOutlook.delta >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                  {report.wealthOutlook.delta >= 0 ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
+                  {formatCurrency(Math.abs(report.wealthOutlook.delta))} mot förra månadens prognos
+                </p>
+              ) : (
+                <p className="text-[11px] text-gray-400 mt-1">Ingen tidigare prognos att jämföra med ännu</p>
+              )}
+            </div>
+          </div>
+          <WealthOutlookChart points={report.wealthOutlook.points} priorByMonth={report.wealthOutlook.priorByMonth} />
+          {report.wealthOutlook.priorByMonth && (
+            <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
+              <span className="flex items-center gap-1.5"><span className="w-3.5 h-0.5 inline-block rounded" style={{ background: '#111827' }} />Nu</span>
+              <span className="flex items-center gap-1.5"><span className="w-3.5 inline-block border-t-2 border-dashed" style={{ borderColor: '#C96332' }} />Förra månaden</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── 12-month liquidity + largest expenses ── */}
+      {report.liquidity && report.liquidity.points.length > 1 && (
+        <div className="bg-white rounded-2xl border border-warm-300 p-5">
+          <h3 className="text-base font-semibold text-gray-900">Likviditet framåt</h3>
+          <p className="text-sm text-gray-400">Pengar på kontot — 2 månader bakåt, 10 framåt</p>
+          <div className="mt-4">
+            <LiquidityTimeline points={report.liquidity.points} markers={report.liquidity.markers} />
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-gray-500">
+            <span className="flex items-center gap-1.5"><span className="w-3.5 h-0.5 inline-block rounded" style={{ background: '#2563eb' }} />Utfall</span>
+            <span className="flex items-center gap-1.5"><span className="w-3.5 inline-block border-t-2 border-dashed" style={{ borderColor: '#2563eb' }} />Prognos</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: '#dc2626' }} />Skedd utgift</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: '#d97706' }} />Planerad utgift</span>
+          </div>
+          {report.liquidity.markers.length > 0 && (
+            <div className="mt-4 border-t border-warm-200 pt-4">
+              <p className="text-xs font-medium text-gray-400 mb-2">Största utgifter i perioden</p>
+              <ul className="space-y-2">
+                {report.liquidity.markers.map((m, i) => (
+                  <li key={i} className="flex items-center gap-2 text-sm min-w-0">
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: m.kind === 'happened' ? '#dc2626' : '#d97706' }} />
+                    <span className="text-gray-600 truncate flex-1 min-w-0">{m.description}</span>
+                    <span className="text-gray-400 text-xs shrink-0 tabular-nums">{m.label}</span>
+                    <span className="text-gray-900 font-medium tabular-nums shrink-0">{formatCurrency(m.amount)}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${m.kind === 'happened' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
+                      {m.kind === 'happened' ? 'Skedd' : 'Planerad'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       <p className="text-center text-[11px] text-gray-400 pt-1">Budgethanteraren · {report.title}</p>
     </div>

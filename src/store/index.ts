@@ -27,6 +27,7 @@ import type {
   TxOverride,
   TxConflict,
   MonthClose,
+  WealthForecastSnapshot,
 } from '@/types'
 import {
   extractOwner,
@@ -456,6 +457,10 @@ function migrateV11(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, budgetHistory: (raw.budgetHistory as Record<string, Record<string, number>>) ?? {} }
 }
 
+function migrateV12(raw: Record<string, unknown>): Record<string, unknown> {
+  return { ...raw, wealthForecasts: (raw.wealthForecasts as Record<string, unknown>) ?? {} }
+}
+
 // Rebuild one already-imported month's actuals from allTransactions + overrides,
 // preserving the snapshot's accountBalances / importedAt. Runs after every
 // re-categorization so aggregated budget totals stay in sync with the transactions.
@@ -610,6 +615,9 @@ interface AppStore extends AppState {
   closeMonth: (close: MonthClose) => void
   reopenMonth: (monthId: string) => void
 
+  // Wealth forecast snapshots (Rapport: this month's outlook vs last month's)
+  captureWealthForecast: (snapshot: WealthForecastSnapshot) => void
+
   // Grocery receipts
   addGroceryReceipt: (receipt: GroceryReceipt) => void
   removeGroceryReceipt: (id: string) => void
@@ -637,6 +645,7 @@ export const useAppStore = create<AppStore>()(
       reconciliations: [],
       importConflicts: [],
       monthCloses: {},
+      wealthForecasts: {},
 
       updateSettings: (s) =>
         set((state) => {
@@ -909,6 +918,13 @@ export const useAppStore = create<AppStore>()(
           return { monthCloses: rest }
         }),
 
+      // Store the current period's forecast, overwriting only that period — prior
+      // periods stay frozen so each becomes a stable "last month" to compare against.
+      captureWealthForecast: (snapshot) =>
+        set((state) => ({
+          wealthForecasts: { ...state.wealthForecasts, [snapshot.takenForPeriod]: snapshot },
+        })),
+
       addGroceryReceipt: (receipt) =>
         set((state) => ({ groceryReceipts: [...state.groceryReceipts, receipt] })),
 
@@ -935,7 +951,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 12,
+      version: 13,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
@@ -950,6 +966,7 @@ export const useAppStore = create<AppStore>()(
         if (version < 10) state = migrateV9(state)
         if (version < 11) state = migrateV10(state)
         if (version < 12) state = migrateV11(state)
+        if (version < 13) state = migrateV12(state)
         return state
       },
       // On load, lock in the plan for any month that has already elapsed so later

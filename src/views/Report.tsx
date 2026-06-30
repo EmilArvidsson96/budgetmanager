@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Sparkles, Printer, FileText } from 'lucide-react'
 import { Layout, PageHeader } from '@/components/layout/Layout'
@@ -23,8 +23,23 @@ export function ReportView() {
   const report = useMemo(
     () => buildMonthlyReport(store, activeMonthId),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [store.actuals, store.budgetBaseline, store.budgetOverrides, store.budgetHistory, store.monthlyBudgets, store.yearlyBudgets, store.settings, activeMonthId]
+    [store.actuals, store.budgetBaseline, store.budgetOverrides, store.budgetHistory, store.monthlyBudgets, store.yearlyBudgets, store.settings, store.liquidityPlans, store.importSnapshots, store.allTransactions, store.wealthForecasts, activeMonthId]
   )
+
+  // Save this period's 2-year forecast (once per period) so next month's report can
+  // compare against it. Writes only the current period, leaving prior ones frozen.
+  const outlookPeriod = report.wealthOutlook?.points[0]?.monthId
+  useEffect(() => {
+    const o = report.wealthOutlook
+    if (!o || o.points.length === 0) return
+    store.captureWealthForecast({
+      takenForPeriod: o.points[0].monthId,
+      takenAt: new Date().toISOString(),
+      horizon: o.points.length - 1,
+      points: o.points.map((p) => ({ monthId: p.monthId, netWorth: p.netWorth })),
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outlookPeriod])
 
   const [aiSummary, setAiSummary] = useState<{ month: string; text: string } | null>(null)
   const [loading, setLoading] = useState(false)
