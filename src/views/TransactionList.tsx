@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Search, X, SlidersHorizontal, ArrowDownUp, Pencil, RotateCcw, ArrowLeftRight } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
@@ -7,6 +7,7 @@ import { txKey } from '@/utils/transferReconciliation'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import { Select } from '@/components/ui/Select'
 import { Button } from '@/components/ui/Button'
+import { Dialog } from '@/components/ui/Dialog'
 import type { CategoryDef, ZlantarCategoryRule, ZlantarTransaction, TxOverride } from '@/types'
 
 // ─── Local helpers (mirrors Transactions.tsx) ─────────────────────────────────
@@ -84,13 +85,16 @@ function monthKey(dateStr: string): string {
   return dateStr.slice(0, 7)
 }
 
-// ─── CategoryPicker (inline re-categorization) ────────────────────────────────
+// ─── CategoryEditDialog (modal re-categorization) ─────────────────────────────
+// A centered modal — never an inline element — so it can't appear "at the bottom",
+// can't be clipped by the table, and can't interfere with the filter controls.
 
 type CategoryOption = { label: string; catId: string; subId?: string; level3Id?: string }
 
-function CategoryPicker({
-  categories, currentCatId, currentSubId, currentLevel3Id, canReset, onPick, onReset, onCancel,
+function CategoryEditDialog({
+  tx, categories, currentCatId, currentSubId, currentLevel3Id, canReset, onPick, onReset, onClose,
 }: {
+  tx: ZlantarTransaction
   categories: CategoryDef[]
   currentCatId: string
   currentSubId?: string
@@ -98,16 +102,12 @@ function CategoryPicker({
   canReset: boolean
   onPick: (catId: string, subId?: string, level3Id?: string) => void
   onReset: () => void
-  onCancel: () => void
+  onClose: () => void
 }) {
   const [catId, setCatId] = useState(currentCatId)
   const [subId, setSubId] = useState(currentSubId ?? '')
   const [level3Id, setLevel3Id] = useState(currentLevel3Id ?? '')
   const [query, setQuery] = useState('')
-  const [open, setOpen] = useState(false)
-  const [openUpward, setOpenUpward] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
 
   const options = useMemo<CategoryOption[]>(() => {
     const result: CategoryOption[] = []
@@ -123,180 +123,140 @@ function CategoryPicker({
     return result
   }, [categories])
 
-  const selectedCat = categories.find((c) => c.id === catId)
-  const selectedSub = selectedCat?.subcategories.find((s) => s.id === subId)
-  const selectedL3 = (selectedCat?.level3 ?? []).find((l) => l.id === level3Id)
-  const currentLabel = [selectedCat?.name, selectedSub?.name, selectedL3?.name].filter(Boolean).join(' / ')
-
   const filtered = query ? options.filter((o) => o.label.toLowerCase().includes(query.toLowerCase())) : options
 
-  useEffect(() => {
-    function onMouseDown(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false)
-        setQuery('')
-      }
-    }
-    document.addEventListener('mousedown', onMouseDown)
-    return () => document.removeEventListener('mousedown', onMouseDown)
-  }, [])
-
-  function pick(opt: CategoryOption) {
-    setCatId(opt.catId)
-    setSubId(opt.subId ?? '')
-    setLevel3Id(opt.level3Id ?? '')
-    setOpen(false)
-    setQuery('')
-  }
-
-  function handleOpen() {
-    if (inputRef.current) {
-      const rect = inputRef.current.getBoundingClientRect()
-      // Flip upward if there isn't room for the dropdown below the input.
-      setOpenUpward(window.innerHeight - rect.bottom < 280)
-    }
-    setOpen(true)
-    setQuery('')
+  function isSelected(o: CategoryOption) {
+    return o.catId === catId && (o.subId ?? '') === subId && (o.level3Id ?? '') === level3Id
   }
 
   return (
-    <div className="col-span-full px-4 pb-3 pt-1 flex flex-wrap items-center gap-2 bg-warm-50 border-b border-warm-200">
-      <div ref={containerRef} className="relative">
+    <Dialog
+      title="Ändra kategori"
+      description={tx.description || tx.account_name}
+      onClose={onClose}
+    >
+      <div className="relative mb-3">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
         <input
-          ref={inputRef}
-          className="border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 w-64"
-          value={open ? query : currentLabel}
+          autoFocus
+          className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+          value={query}
           placeholder="Sök kategori…"
-          onFocus={handleOpen}
-          onChange={(e) => { setQuery(e.target.value); setOpen(true) }}
+          onChange={(e) => setQuery(e.target.value)}
         />
-        {open && filtered.length > 0 && (
-          <div className={`absolute z-50 left-0 w-80 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-xl ${openUpward ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
-            {filtered.map((opt, i) => (
-              <button
-                key={i}
-                className="w-full text-left px-3 py-1.5 text-sm hover:bg-brand-50 hover:text-brand-700 transition-colors"
-                onMouseDown={() => pick(opt)}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+      </div>
+
+      <div className="max-h-72 overflow-y-auto -mx-1 px-1 space-y-0.5">
+        {filtered.length === 0 ? (
+          <div className="text-sm text-gray-400 text-center py-6">Inga kategorier matchar.</div>
+        ) : (
+          filtered.map((opt, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => { setCatId(opt.catId); setSubId(opt.subId ?? ''); setLevel3Id(opt.level3Id ?? '') }}
+              className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-colors flex items-center gap-2
+                ${isSelected(opt) ? 'bg-brand-50 text-brand-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}
+            >
+              <span className="flex-1">{opt.label}</span>
+              {isSelected(opt) && <span className="w-1.5 h-1.5 rounded-full bg-brand-500 shrink-0" />}
+            </button>
+          ))
         )}
       </div>
-      <Button size="sm" onClick={() => onPick(catId, subId || undefined, level3Id || undefined)}>
-        Spara
-      </Button>
-      <Button size="sm" variant="secondary" onClick={() => onPick('transfer')}>
-        <ArrowLeftRight className="w-3.5 h-3.5" /> Överföring
-      </Button>
-      {canReset && (
-        <Button size="sm" variant="secondary" onClick={onReset}>
-          <RotateCcw className="w-3.5 h-3.5" /> Återställ
+
+      <div className="flex flex-wrap items-center gap-2 mt-5 pt-4 border-t border-gray-100">
+        <Button size="sm" onClick={() => onPick(catId, subId || undefined, level3Id || undefined)}>
+          Spara
         </Button>
-      )}
-      <button onClick={onCancel} className="text-xs text-gray-400 hover:text-gray-600 ml-1 transition-colors">
-        Avbryt
-      </button>
-    </div>
+        <Button size="sm" variant="secondary" onClick={() => onPick('transfer')}>
+          <ArrowLeftRight className="w-3.5 h-3.5" /> Överföring
+        </Button>
+        {canReset && (
+          <Button size="sm" variant="secondary" onClick={onReset}>
+            <RotateCcw className="w-3.5 h-3.5" /> Återställ
+          </Button>
+        )}
+        <button onClick={onClose} className="text-sm text-gray-400 hover:text-gray-600 ml-auto transition-colors">
+          Avbryt
+        </button>
+      </div>
+    </Dialog>
   )
 }
 
 // ─── Transaction row ──────────────────────────────────────────────────────────
 
 function TxRow({
-  item, categories, editing, onToggle, onClose,
+  item, categories, isOverridden, editing, onEdit,
 }: {
   item: ResolvedTx
   categories: CategoryDef[]
+  isOverridden: boolean
   editing: boolean
-  onToggle: () => void
-  onClose: () => void
+  onEdit: () => void
 }) {
-  const store = useAppStore()
   const { tx, catId, subId } = item
-  const key = txKey(tx)
-  const override = store.transactionOverrides[key]
   const cat = categories.find((c) => c.id === catId)
   const sub = cat?.subcategories.find((s) => s.id === subId)
   const amtColor = AMOUNT_COLOR[tx.transaction_type] ?? 'text-gray-700'
 
   return (
-    <>
-      {/* Main row */}
-      <div
-        className={`grid grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-4 px-4 py-2.5 items-center transition-colors
-          ${editing ? 'bg-warm-50' : 'hover:bg-gray-50'}`}
+    <div
+      className={`grid grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-4 px-4 py-2.5 items-center transition-colors
+        ${editing ? 'bg-warm-50' : 'hover:bg-gray-50'}`}
+    >
+      {/* Date */}
+      <span className="text-xs text-gray-400 tabular-nums whitespace-nowrap">
+        {formatDate(tx.date)}
+      </span>
+
+      {/* Description */}
+      <span className="text-sm text-gray-800 truncate flex items-center gap-1.5 min-w-0" title={tx.description}>
+        <span className="truncate">{tx.description || <span className="text-gray-400 italic">–</span>}</span>
+        {isOverridden && <span title="Omkategoriserad" className="w-1.5 h-1.5 rounded-full bg-brand-500 shrink-0" />}
+      </span>
+
+      {/* Account */}
+      <span className="text-xs text-gray-400 truncate text-right" title={tx.account_name}>
+        {tx.account_name}
+      </span>
+
+      {/* Category */}
+      <span className="text-xs text-gray-500 truncate">
+        {cat ? (
+          <>
+            {cat.name}
+            {sub && <span className="text-gray-300"> / {sub.name}</span>}
+          </>
+        ) : (
+          <span className="italic text-gray-300">–</span>
+        )}
+      </span>
+
+      {/* Amount */}
+      <span className={`text-sm font-medium tabular-nums text-right ${amtColor}`}>
+        {formatCurrency(tx.amount, true)}
+      </span>
+
+      {/* Edit button */}
+      <button
+        onClick={onEdit}
+        title="Ändra kategori"
+        className={`flex items-center justify-center w-6 h-6 rounded transition-colors
+          ${editing ? 'text-brand-600 bg-brand-50' : 'text-gray-300 hover:text-brand-500 hover:bg-gray-100'}`}
       >
-        {/* Date */}
-        <span className="text-xs text-gray-400 tabular-nums whitespace-nowrap">
-          {formatDate(tx.date)}
-        </span>
-
-        {/* Description */}
-        <span className="text-sm text-gray-800 truncate flex items-center gap-1.5 min-w-0" title={tx.description}>
-          <span className="truncate">{tx.description || <span className="text-gray-400 italic">–</span>}</span>
-          {override && <span title="Omkategoriserad" className="w-1.5 h-1.5 rounded-full bg-brand-500 shrink-0" />}
-        </span>
-
-        {/* Account */}
-        <span className="text-xs text-gray-400 truncate text-right" title={tx.account_name}>
-          {tx.account_name}
-        </span>
-
-        {/* Category */}
-        <span className="text-xs text-gray-500 truncate">
-          {cat ? (
-            <>
-              {cat.name}
-              {sub && <span className="text-gray-300"> / {sub.name}</span>}
-            </>
-          ) : (
-            <span className="italic text-gray-300">–</span>
-          )}
-        </span>
-
-        {/* Amount */}
-        <span className={`text-sm font-medium tabular-nums text-right ${amtColor}`}>
-          {formatCurrency(tx.amount, true)}
-        </span>
-
-        {/* Edit button */}
-        <button
-          onClick={onToggle}
-          title="Ändra kategori"
-          className={`flex items-center justify-center w-6 h-6 rounded transition-colors
-            ${editing ? 'text-brand-600 bg-brand-50' : 'text-gray-300 hover:text-brand-500 hover:bg-gray-100'}`}
-        >
-          <Pencil className="w-3.5 h-3.5" />
-        </button>
-      </div>
-
-      {/* Inline picker */}
-      {editing && (
-        <CategoryPicker
-          key={key}
-          categories={categories}
-          currentCatId={catId}
-          currentSubId={subId}
-          currentLevel3Id={override?.level3Id}
-          canReset={!!override}
-          onPick={(c, s, l3) => {
-            store.setTransactionOverride(key, { categoryId: c, subcategoryId: s, level3Id: l3 })
-            onClose()
-          }}
-          onReset={() => { store.clearTransactionOverride(key); onClose() }}
-          onCancel={onClose}
-        />
-      )}
-    </>
+        <Pencil className="w-3.5 h-3.5" />
+      </button>
+    </div>
   )
 }
 
 // ─── Main view ────────────────────────────────────────────────────────────────
 
 export function TransactionListView() {
-  const { settings, allTransactions, transactionOverrides } = useAppStore()
+  const store = useAppStore()
+  const { settings, allTransactions, transactionOverrides } = store
   const { categories, zlantarCategoryRules, accounts } = settings
 
   const [search, setSearch] = useState('')
@@ -311,15 +271,8 @@ export function TransactionListView() {
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [showAdvanced, setShowAdvanced] = useState(false)
 
-  // txKey of the row currently being re-categorized — only one open at a time.
+  // txKey of the row whose category modal is open (null = closed).
   const [editingKey, setEditingKey] = useState<string | null>(null)
-
-  // Close the open editor whenever the list reorders (sort) or its contents
-  // change (filter/search), so the picker can't stay attached to a row that
-  // has moved or been filtered out.
-  useEffect(() => {
-    setEditingKey(null)
-  }, [search, accountFilter, txTypeFilter, categoryFilter, minAmt, maxAmt, dateFrom, dateTo, sortField, sortDir])
 
   const ruleMap = useMemo(
     () => buildRuleLookup(zlantarCategoryRules ?? DEFAULT_ZLANTAR_RULES),
@@ -410,9 +363,16 @@ export function TransactionListView() {
     return <ArrowDownUp className={`w-3 h-3 ml-1 text-brand-500 ${sortDir === 'asc' ? 'rotate-180' : ''} transition-transform`} />
   }
 
-  // Group into month-header + tx rows
+  // Month headers only make sense when the list is in chronological order.
+  // When sorting by amount/description/account the months interleave, so we
+  // show a flat list instead of a header before nearly every row.
   const rows = useMemo(() => {
     type Row = { type: 'month'; label: string; total: number } | { type: 'tx'; item: ResolvedTx }
+
+    if (sortField !== 'date') {
+      return resolved.map<Row>((item) => ({ type: 'tx', item }))
+    }
+
     const out: Row[] = []
     let currentMonth = ''
     let monthItems: ResolvedTx[] = []
@@ -430,7 +390,13 @@ export function TransactionListView() {
     }
     flush()
     return out
-  }, [resolved])
+  }, [resolved, sortField])
+
+  // The resolved row currently being edited (drives the modal).
+  const editingItem = useMemo(
+    () => (editingKey ? resolved.find((r) => txKey(r.tx) === editingKey) ?? null : null),
+    [editingKey, resolved]
+  )
 
   return (
     <Layout>
@@ -552,14 +518,32 @@ export function TransactionListView() {
                   key={rowKey}
                   item={row.item}
                   categories={categories}
+                  isOverridden={!!transactionOverrides[rowKey]}
                   editing={editingKey === rowKey}
-                  onToggle={() => setEditingKey((k) => (k === rowKey ? null : rowKey))}
-                  onClose={() => setEditingKey(null)}
+                  onEdit={() => setEditingKey(rowKey)}
                 />
               )
             })}
           </div>
         </div>
+      )}
+
+      {/* ── Category edit modal (centered, one at a time) ── */}
+      {editingItem && (
+        <CategoryEditDialog
+          tx={editingItem.tx}
+          categories={categories}
+          currentCatId={editingItem.catId}
+          currentSubId={editingItem.subId}
+          currentLevel3Id={transactionOverrides[editingKey!]?.level3Id}
+          canReset={!!transactionOverrides[editingKey!]}
+          onPick={(c, s, l3) => {
+            store.setTransactionOverride(editingKey!, { categoryId: c, subcategoryId: s, level3Id: l3 })
+            setEditingKey(null)
+          }}
+          onReset={() => { store.clearTransactionOverride(editingKey!); setEditingKey(null) }}
+          onClose={() => setEditingKey(null)}
+        />
       )}
     </Layout>
   )
