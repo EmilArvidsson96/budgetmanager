@@ -17,7 +17,9 @@ interface SelectProps {
 
 export function Select({ value, onChange, options, placeholder, className = '', disabled }: SelectProps) {
   const [open, setOpen] = useState(false)
+  const [openUpward, setOpenUpward] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
   const selected = options.find(o => o.value === value)
   const displayLabel = selected?.label ?? placeholder ?? '—'
@@ -30,6 +32,14 @@ export function Select({ value, onChange, options, placeholder, className = '', 
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [])
 
+  function handleOpen() {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect()
+      setOpenUpward(window.innerHeight - rect.bottom < 260)
+    }
+    setOpen(o => !o)
+  }
+
   function pick(val: string) {
     onChange({ target: { value: val } } as React.ChangeEvent<HTMLSelectElement>)
     setOpen(false)
@@ -38,9 +48,10 @@ export function Select({ value, onChange, options, placeholder, className = '', 
   return (
     <div ref={ref} className={`relative ${className}`}>
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
-        onClick={() => setOpen(o => !o)}
+        onClick={handleOpen}
         className="w-full flex items-center justify-between gap-2 border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white text-left
           hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-brand-500
           disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -49,7 +60,8 @@ export function Select({ value, onChange, options, placeholder, className = '', 
         <ChevronDown className={`w-3.5 h-3.5 text-gray-400 flex-shrink-0 transition-transform duration-150 ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className="absolute z-50 top-full mt-1 left-0 min-w-full bg-white border border-gray-200 rounded-xl shadow-xl py-1 overflow-y-auto"
+        <div
+          className={`absolute z-50 left-0 min-w-full bg-white border border-gray-200 rounded-xl shadow-xl py-1 overflow-y-auto ${openUpward ? 'bottom-full mb-1' : 'top-full mt-1'}`}
           style={{ maxHeight: '16rem' }}
         >
           {placeholder && (
