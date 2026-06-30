@@ -5,11 +5,18 @@ import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
-import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories, actualsEquivalent } from '@/utils/zlantarParser'
+import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories } from '@/utils/zlantarParser'
 import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
+import { getMonthIdForDate } from '@/utils/periodUtils'
 import { formatCurrency } from '@/utils/budgetHelpers'
 import { uniqueSlug } from '@/utils/slug'
-import type { MonthlyActuals, RecurringItem, ReconciliationRecord, TransferMatch, ZlantarImport, ZlantarTransaction, CategoryDef } from '@/types'
+import type { MonthlyActuals, RecurringItem, ReconciliationRecord, TransferMatch, ZlantarImport, ZlantarTransaction, CategoryDef, TxConflict } from '@/types'
+
+type ConflictItem = {
+  key: string
+  stored: ZlantarTransaction
+  incoming: ZlantarTransaction
+}
 
 type Step = 'upload' | 'preview' | 'done'
 
@@ -30,6 +37,8 @@ export function ImportView() {
   const [selectedRecurringIds, setSelectedRecurringIds] = useState<Set<string>>(new Set())
   const [transferMatches, setTransferMatches] = useState<TransferMatch[]>([])
   const [acceptedMatchIds, setAcceptedMatchIds] = useState<Set<string>>(new Set())
+  const [conflicts, setConflicts] = useState<ConflictItem[]>([])
+  const [conflictsExpanded, setConflictsExpanded] = useState(false)
 
   const dataRef = useRef<HTMLInputElement>(null)
   const txRef = useRef<HTMLInputElement>(null)
@@ -52,6 +61,24 @@ export function ImportView() {
       }
 
       const imp = parseZlantarFiles(dataJson, txJson)
+
+      // Detect conflicts: transactions already in the store but with different metadata
+      // (category / subcategory / type) in the new file. These are NOT imported — only shown.
+      const existingByKey = new Map(store.allTransactions.map((tx) => [txKey(tx), tx]))
+      const conflictItems: ConflictItem[] = []
+      for (const tx of imp.transactions) {
+        const key = txKey(tx)
+        const stored = existingByKey.get(key)
+        if (stored && (
+          (stored.category ?? '') !== (tx.category ?? '') ||
+          (stored.subcategory ?? '') !== (tx.subcategory ?? '') ||
+          stored.transaction_type !== tx.transaction_type
+        )) {
+          conflictItems.push({ key, stored, incoming: tx })
+        }
+      }
+      setConflicts(conflictItems)
+      setConflictsExpanded(false)
 
       // Reconcile transfers between owners. Combine new transactions with the
       // existing pool (deduped by key) so cross-import pairs can match.
@@ -89,7 +116,17 @@ export function ImportView() {
       setTransferMatches(matches)
       setAcceptedMatchIds(new Set(matches.map((m) => m.id)))
 
-      // Seed selected months based on the initial (reconciled) filtered preview
+      // Seed selected months: only months that contain at least one new transaction
+      // (not already in allTransactions). Months where only existing transactions
+      // changed are treated as conflicts, not re-importable.
+      const existingKeys = new Set(store.allTransactions.map(txKey))
+      const newTxMonths = new Set<string>()
+      for (const tx of imp.transactions) {
+        if (!tx.date || tx.transaction_type === 'transfer') continue
+        if (!existingKeys.has(txKey(tx))) {
+          newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay))
+        }
+      }
       const initialAccepted = new Set<string>(previouslyReconciled)
       for (const m of matches) {
         initialAccepted.add(m.txAKey)
@@ -104,10 +141,8 @@ export function ImportView() {
         initialAccepted
       )
       const initialMonths = new Set<string>()
-      for (const [ym, candidate] of Object.entries(fullActuals)) {
-        const existing = store.actuals[ym]
-        if (existing && actualsEquivalent(existing, candidate)) continue
-        initialMonths.add(ym)
+      for (const ym of Object.keys(fullActuals)) {
+        if (newTxMonths.has(ym)) initialMonths.add(ym)
       }
       setSelectedMonths(initialMonths)
 
@@ -143,18 +178,26 @@ export function ImportView() {
       store.settings.monthStartBusinessDay,
       acceptedKeys
     )
+    // Only show months that contain at least one new transaction
+    const existingKeys = new Set(store.allTransactions.map(txKey))
+    const newTxMonths = new Set<string>()
+    for (const tx of parsedImport.transactions) {
+      if (!tx.date || tx.transaction_type === 'transfer') continue
+      if (!existingKeys.has(txKey(tx))) {
+        newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay))
+      }
+    }
     const filtered: Record<string, MonthlyActuals> = {}
     let unchanged = 0
     for (const [ym, candidate] of Object.entries(full)) {
-      const existing = store.actuals[ym]
-      if (existing && actualsEquivalent(existing, candidate)) {
+      if (!newTxMonths.has(ym)) {
         unchanged++
         continue
       }
       filtered[ym] = candidate
     }
     return { preview: filtered, unchangedMonthCount: unchanged }
-  }, [parsedImport, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay, acceptedKeys, store.actuals])
+  }, [parsedImport, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay, acceptedKeys, store.allTransactions])
 
   // Unmapped categories among the new transactions, grouped by raw category, with a
   // suggested Swedish name. Recomputes as the user creates/maps categories below.
@@ -215,6 +258,27 @@ export function ImportView() {
       store.addReconciliationRecord(record)
     }
 
+    // Persist any conflicts seen in this import so subsequent imports can
+    // identify which ones are "previously seen" vs newly emerged.
+    if (conflicts.length > 0) {
+      const now = new Date().toISOString()
+      const conflictsToSave: TxConflict[] = conflicts.map((c) => {
+        const prev = store.importConflicts.find((s) => s.txKey === c.key)
+        return {
+          txKey: c.key,
+          label: [c.incoming.date, formatCurrency(c.incoming.amount), c.incoming.description].filter(Boolean).join(' · '),
+          storedCategory: c.stored.category,
+          storedSubcategory: c.stored.subcategory,
+          storedType: c.stored.transaction_type,
+          incomingCategory: c.incoming.category,
+          incomingSubcategory: c.incoming.subcategory,
+          incomingType: c.incoming.transaction_type,
+          firstSeenAt: prev?.firstSeenAt ?? now,
+        }
+      })
+      store.setImportConflicts(conflictsToSave)
+    }
+
     setStep('done')
   }
 
@@ -232,6 +296,8 @@ export function ImportView() {
     setSelectedRecurringIds(new Set())
     setTransferMatches([])
     setAcceptedMatchIds(new Set())
+    setConflicts([])
+    setConflictsExpanded(false)
   }
 
   const toggleMatch = (id: string) =>
@@ -411,10 +477,20 @@ export function ImportView() {
               <div className="flex items-start gap-3">
                 <Info className="w-5 h-5 text-brand-600 mt-0.5 shrink-0" />
                 <p className="text-sm text-gray-700">
-                  <strong>{unchangedMonthCount}</strong> {unchangedMonthCount === 1 ? 'månad är' : 'månader är'} redan importerade och oförändrade — visas inte.
+                  <strong>{unchangedMonthCount}</strong> {unchangedMonthCount === 1 ? 'månad har' : 'månader har'} inga nya transaktioner — visas inte.
                 </p>
               </div>
             </Card>
+          )}
+
+          {/* Conflicts: existing transactions that look different in the new file */}
+          {conflicts.length > 0 && (
+            <ConflictsCard
+              conflicts={conflicts}
+              previouslyFlagged={store.importConflicts}
+              expanded={conflictsExpanded}
+              onToggle={() => setConflictsExpanded((v) => !v)}
+            />
           )}
 
           {/* Transfer reconciliation between owners */}
@@ -781,6 +857,145 @@ function FileDropZone({
           <p className="text-xs text-gray-300 mt-2">Klicka eller dra hit</p>
         </>
       )}
+    </div>
+  )
+}
+
+// ─── Conflict card ────────────────────────────────────────────────────────────
+
+function ConflictsCard({
+  conflicts,
+  previouslyFlagged,
+  expanded,
+  onToggle,
+}: {
+  conflicts: ConflictItem[]
+  previouslyFlagged: TxConflict[]
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const prevMap = new Map(previouslyFlagged.map((c) => c.txKey))
+
+  const isOld = (c: ConflictItem): boolean => {
+    const prev = prevMap.get(c.key)
+    if (!prev) return false
+    return (
+      (prev.incomingCategory ?? '') === (c.incoming.category ?? '') &&
+      (prev.incomingSubcategory ?? '') === (c.incoming.subcategory ?? '') &&
+      prev.incomingType === c.incoming.transaction_type
+    )
+  }
+
+  const newConflicts = conflicts.filter((c) => !isOld(c))
+  const oldConflicts = conflicts.filter((c) => isOld(c))
+
+  return (
+    <Card padding={false}>
+      <button
+        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+        onClick={onToggle}
+      >
+        <div className="flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+          <div>
+            <span className="font-semibold text-gray-800">
+              {conflicts.length} {conflicts.length === 1 ? 'transaktion skiljer sig' : 'transaktioner skiljer sig'} från lagrat minne
+            </span>
+            {oldConflicts.length > 0 && (
+              <span className="ml-2 text-xs text-gray-400">
+                ({oldConflicts.length} sedan tidigare)
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0 ml-3">
+          <span className="text-xs text-gray-400">Importeras inte — bara info</span>
+          {expanded
+            ? <ChevronDown className="w-4 h-4 text-gray-400" />
+            : <ChevronRight className="w-4 h-4 text-gray-400" />}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-gray-100">
+          {/* New or changed conflicts first */}
+          {newConflicts.map((c) => (
+            <ConflictRow key={c.key} conflict={c} isNew />
+          ))}
+          {/* Previously seen conflicts at the bottom */}
+          {oldConflicts.length > 0 && (
+            <>
+              {newConflicts.length > 0 && (
+                <div className="px-4 py-2 bg-gray-50 border-t border-gray-100">
+                  <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">Sedan tidigare flaggade</span>
+                </div>
+              )}
+              {oldConflicts.map((c) => (
+                <ConflictRow key={c.key} conflict={c} isNew={false} previousFirstSeen={prevMap.get(c.key)?.firstSeenAt} />
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function ConflictRow({
+  conflict,
+  isNew,
+  previousFirstSeen,
+}: {
+  conflict: ConflictItem
+  isNew: boolean
+  previousFirstSeen?: string
+}) {
+  const { stored, incoming } = conflict
+  const categoryChanged =
+    (stored.category ?? '') !== (incoming.category ?? '') ||
+    (stored.subcategory ?? '') !== (incoming.subcategory ?? '')
+  const typeChanged = stored.transaction_type !== incoming.transaction_type
+
+  return (
+    <div className={`px-4 py-3 border-t border-gray-100 ${!isNew ? 'opacity-70' : ''}`}>
+      <div className="flex items-start justify-between gap-3 mb-1.5">
+        <div className="min-w-0">
+          <span className="text-sm font-medium text-gray-800">
+            {incoming.date} · {formatCurrency(incoming.amount)}
+          </span>
+          {incoming.description && (
+            <span className="text-xs text-gray-400 ml-2 truncate">{incoming.description}</span>
+          )}
+          <span className="text-xs text-gray-300 ml-2">{incoming.account_name}</span>
+        </div>
+        {previousFirstSeen && (
+          <span className="text-xs text-gray-400 shrink-0">
+            sedd {new Date(previousFirstSeen).toLocaleDateString('sv-SE')}
+          </span>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-3 text-xs">
+        {categoryChanged && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-gray-400">Kategori:</span>
+            <code className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-100">
+              {[stored.category, stored.subcategory].filter(Boolean).join(' / ') || '—'}
+            </code>
+            <span className="text-gray-300">→</span>
+            <code className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100">
+              {[incoming.category, incoming.subcategory].filter(Boolean).join(' / ') || '—'}
+            </code>
+          </div>
+        )}
+        {typeChanged && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-gray-400">Typ:</span>
+            <code className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-100">{stored.transaction_type}</code>
+            <span className="text-gray-300">→</span>
+            <code className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100">{incoming.transaction_type}</code>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

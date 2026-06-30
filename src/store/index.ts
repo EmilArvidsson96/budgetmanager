@@ -23,6 +23,7 @@ import type {
   AccountType,
   ReconciliationRecord,
   TxOverride,
+  TxConflict,
   MonthClose,
 } from '@/types'
 import { extractOwner, buildMonthEntries } from '@/utils/zlantarParser'
@@ -248,6 +249,11 @@ function migrateV6(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, monthCloses: (raw.monthCloses as Record<string, MonthClose>) ?? {} }
 }
 
+// v7 → v8: add importConflicts array for tracking previously flagged tx conflicts.
+function migrateV7(raw: Record<string, unknown>): Record<string, unknown> {
+  return { ...raw, importConflicts: [] }
+}
+
 // Rebuild one already-imported month's actuals from allTransactions + overrides,
 // preserving the snapshot's accountBalances / importedAt. Runs after every
 // re-categorization so aggregated budget totals stay in sync with the transactions.
@@ -373,6 +379,9 @@ interface AppStore extends AppState {
   addReconciliationRecord: (record: ReconciliationRecord) => void
   removeReconciliationRecord: (id: string) => void
 
+  // Import conflict tracking
+  setImportConflicts: (conflicts: TxConflict[]) => void
+
   // Monthly close / reconciliation ritual
   closeMonth: (close: MonthClose) => void
   reopenMonth: (monthId: string) => void
@@ -398,6 +407,7 @@ export const useAppStore = create<AppStore>()(
       lastZlantarImport: undefined,
       importSnapshots: [],
       reconciliations: [],
+      importConflicts: [],
       monthCloses: {},
 
       updateSettings: (s) =>
@@ -629,6 +639,9 @@ export const useAppStore = create<AppStore>()(
           reconciliations: state.reconciliations.filter((r) => r.id !== id),
         })),
 
+      setImportConflicts: (conflicts) =>
+        set(() => ({ importConflicts: conflicts })),
+
       closeMonth: (close) =>
         set((state) => ({ monthCloses: { ...state.monthCloses, [close.monthId]: close } })),
 
@@ -664,7 +677,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 7,
+      version: 8,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
@@ -674,6 +687,7 @@ export const useAppStore = create<AppStore>()(
         if (version < 5) state = migrateV4(state)
         if (version < 6) state = migrateV5(state)
         if (version < 7) state = migrateV6(state)
+        if (version < 8) state = migrateV7(state)
         return state
       },
     }

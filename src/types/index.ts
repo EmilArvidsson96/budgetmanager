@@ -374,6 +374,23 @@ export interface TxOverride {
   level3Id?: string
 }
 
+// ─── Import conflict ─────────────────────────────────────────────────────────
+
+// A transaction that already exists in allTransactions but looks different in a
+// new import file (e.g. Zlantar retroactively changed its category). Stored so
+// subsequent imports can identify which conflicts have already been seen before.
+export interface TxConflict {
+  txKey: string
+  label: string                 // human-readable: "2025-03-15 · -450 kr · Matvaror"
+  storedCategory?: string       // raw Zlantar category in allTransactions
+  storedSubcategory?: string
+  storedType: string
+  incomingCategory?: string     // raw Zlantar category in the new file
+  incomingSubcategory?: string
+  incomingType: string
+  firstSeenAt: string           // ISO timestamp of the first import that flagged this
+}
+
 // ─── Complete app state ───────────────────────────────────────────────────────
 
 export interface AppState {
@@ -388,5 +405,6 @@ export interface AppState {
   lastZlantarImport?: ZlantarImport
   importSnapshots: ImportSnapshot[]
   reconciliations: ReconciliationRecord[]
+  importConflicts: TxConflict[]
   monthCloses: Record<string, MonthClose>          // key: 'YYYY-MM'
 }
