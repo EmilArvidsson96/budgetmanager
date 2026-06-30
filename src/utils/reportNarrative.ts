@@ -22,7 +22,7 @@ Regler:
 - Ledig, vänlig och konkret ton. Skriv "ni" (paret), aldrig "du".
 - Lyft det viktigaste: gick månaden plus eller minus, sparande, och om utgifterna var högre/lägre än vanligt.
 - Var ärlig men aldrig dömande eller oroande. Hitta det positiva när det går.
-- Använd högst en emoji, bara om den känns naturlig.
+- Använd inga emojis och inga symboler – endast vanlig text.
 - Inga rubriker, inga punktlistor, ingen inledning som "Här är". Bara själva sammanfattningen.`
 
 interface Aggregates {

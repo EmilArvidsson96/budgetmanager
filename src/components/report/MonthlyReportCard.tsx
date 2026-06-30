@@ -5,9 +5,9 @@
 // bold numbers, graphs. Everything inside #manadsrapport is what the print CSS
 // isolates onto the page (see index.css).
 
-import { ArrowUpRight, ArrowDownRight, PiggyBank, Wallet, Coins, TrendingUp, Sparkles } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, PiggyBank, Wallet, Coins, TrendingUp, TrendingDown, Target, PieChart } from 'lucide-react'
 import { formatCurrency } from '@/utils/budgetHelpers'
-import type { MonthlyReport, ReportStat } from '@/utils/report'
+import type { MonthlyReport, ReportStat, HighlightIcon } from '@/utils/report'
 import { Donut, MiniBars, Sparkline, FlowBar, type Slice } from './charts'
 
 const INCOME = '#059669'
@@ -66,8 +66,21 @@ function StatCard({
 const HIGHLIGHT_TONE: Record<string, string> = {
   good: 'bg-emerald-50 text-emerald-800 border-emerald-100',
   milestone: 'bg-blue-50 text-blue-800 border-blue-100',
-  bad: 'bg-brand-50 text-brand-800 border-brand-100',
+  bad: 'bg-red-50 text-red-700 border-red-100',
   neutral: 'bg-warm-100 text-warm-800 border-warm-300',
+}
+
+// Semantic highlight key → professional line icon. Colour comes from the tone
+// classes above (icons inherit currentColor).
+const HIGHLIGHT_ICON: Record<HighlightIcon, typeof TrendingUp> = {
+  'surplus': TrendingUp,
+  'deficit': TrendingDown,
+  'saved': PiggyBank,
+  'savings-rate': Target,
+  'drawdown': Wallet,
+  'under-budget': ArrowDownRight,
+  'over-budget': ArrowUpRight,
+  'top-category': PieChart,
 }
 
 export function MonthlyReportCard({ report, summary }: { report: MonthlyReport; summary: string }) {
@@ -96,9 +109,8 @@ export function MonthlyReportCard({ report, summary }: { report: MonthlyReport; 
         <p className="text-xs font-semibold uppercase tracking-widest text-brand-500 mb-1">Månadsrapport</p>
         <h1 className="text-3xl md:text-4xl font-bold text-warm-900 tracking-tight">{report.title}</h1>
 
-        <p className="mt-4 text-base md:text-lg text-warm-800 leading-snug max-w-2xl flex gap-2">
-          <Sparkles className="w-4 h-4 mt-1 shrink-0 text-brand-400" />
-          <span>{summary}</span>
+        <p className="mt-4 text-base md:text-lg text-warm-800 leading-snug max-w-2xl border-l-2 border-brand-300 pl-3">
+          {summary}
         </p>
 
         <div className="mt-6 flex items-end gap-3">
@@ -125,15 +137,18 @@ export function MonthlyReportCard({ report, summary }: { report: MonthlyReport; 
       {/* ── Highlights ── */}
       {report.highlights.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {report.highlights.map((h, i) => (
-            <span
-              key={i}
-              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium ${HIGHLIGHT_TONE[h.tone]}`}
-            >
-              <span aria-hidden>{h.icon}</span>
-              {h.text}
-            </span>
-          ))}
+          {report.highlights.map((h, i) => {
+            const Icon = HIGHLIGHT_ICON[h.icon]
+            return (
+              <span
+                key={i}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium ${HIGHLIGHT_TONE[h.tone]}`}
+              >
+                <Icon className="w-3.5 h-3.5 shrink-0" />
+                {h.text}
+              </span>
+            )
+          })}
         </div>
       )}
 
