@@ -15,10 +15,18 @@ import { buildProjection } from '@/utils/projection'
 import { exportToExcel } from '@/utils/excelExport'
 import { BaselineEditor } from '@/components/budget/BaselineEditor'
 import { PlanGrid } from '@/components/budget/PlanGrid'
+import { BudgetCharts } from '@/components/budget/BudgetCharts'
 import type { LiquidityEntry, LiquidityPlan } from '@/types'
 
 const HORIZONS = [12, 24, 36] as const
 type Horizon = (typeof HORIZONS)[number]
+
+const VIEWS = [
+  { id: 'wealth', label: 'Förmögenhet' },
+  { id: 'liquidity', label: 'Likviditet' },
+  { id: 'budget', label: 'Månadsbudget' },
+] as const
+type PlanViewMode = (typeof VIEWS)[number]['id']
 
 // Cohesive palette (light-mode app, hardcoded like the existing charts).
 const LIQUID_COLOR = '#2563eb'
@@ -199,6 +207,7 @@ function WealthBarShape(props: any) {
 
 export function PlanView() {
   const [horizon, setHorizon] = useState<Horizon>(12)
+  const [view, setView] = useState<PlanViewMode>('wealth')
   const [showForm, setShowForm] = useState(false)
   const [exporting, setExporting] = useState(false)
   const store = useAppStore()
@@ -398,10 +407,23 @@ export function PlanView() {
         title="Plan"
         subtitle="Likviditet & förmögenhet framåt"
         actions={
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <Button variant="secondary" size="sm" onClick={handleExport} loading={exporting}>
               <Download className="w-4 h-4" /> Exportera
             </Button>
+            <div className="flex rounded-lg border border-warm-300 overflow-hidden text-sm">
+              {VIEWS.map((v) => (
+                <button
+                  key={v.id}
+                  onClick={() => setView(v.id)}
+                  className={`px-3 py-1.5 font-medium transition-colors ${v.id !== VIEWS[0].id ? 'border-l border-warm-300' : ''} ${
+                    view === v.id ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-warm-50'
+                  }`}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
             <div className="flex rounded-lg border border-warm-300 overflow-hidden text-sm">
               {HORIZONS.map((h) => (
                 <button
@@ -455,6 +477,7 @@ export function PlanView() {
         )}
 
         {/* Net worth composition */}
+        {view === 'wealth' && (
         <Card>
           <CardHeader title="Förmögenhet över tid" subtitle="Tillgångar ovan noll, skulder under noll — nettoförmögenhet som linje" />
           <ResponsiveContainer width="100%" height={340}>
@@ -516,8 +539,10 @@ export function PlanView() {
             </ComposedChart>
           </ResponsiveContainer>
         </Card>
+        )}
 
         {/* Liquidity */}
+        {view === 'liquidity' && (
         <Card>
           <CardHeader title="Likviditet över tid" subtitle="Kassa månad för månad — per konto" />
           <ResponsiveContainer width="100%" height={220}>
@@ -588,8 +613,13 @@ export function PlanView() {
             </p>
           )}
         </Card>
+        )}
+
+        {/* Monthly budget — stacked bars + composition pie for the selected & coming months */}
+        {view === 'budget' && <BudgetCharts months={months} />}
 
         {/* Budget baseline — the editable plan that drives the projection above */}
+        {view === 'budget' && (
         <Card>
           <CardHeader
             title="Budgetbas — din normalmånad"
@@ -597,11 +627,13 @@ export function PlanView() {
           />
           <BaselineEditor />
         </Card>
+        )}
 
         {/* Coming-months grid — adjustable rows (categories) × columns (months) */}
-        <PlanGrid />
+        {view === 'budget' && <PlanGrid />}
 
         {/* Holdings / assumptions */}
+        {view === 'wealth' && (
         <Card padding={false}>
           <div className="flex items-center justify-between p-5 border-b border-gray-100">
             <div>
@@ -704,8 +736,10 @@ export function PlanView() {
             Klicka på en cell för att redigera. "I budget" = insättningen/amorteringen finns redan som en budgetpost och ska inte dras från likvid en gång till.
           </p>
         </Card>
+        )}
 
         {/* One-off planned entries */}
+        {view === 'liquidity' && (
         <Card padding={false}>
           <div className="flex items-center justify-between p-5 border-b border-gray-100">
             <div>
@@ -790,6 +824,7 @@ export function PlanView() {
             </table>
           </div>
         </Card>
+        )}
       </div>
     </Layout>
   )

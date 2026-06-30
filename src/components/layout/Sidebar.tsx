@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom'
+import { APP_VERSION } from '../../version'
 import {
   LineChart,
   CheckCircle2,
@@ -60,7 +61,7 @@ export function Sidebar() {
         </nav>
 
         <div className="px-3 text-[11px] text-warm-500 tracking-wide">
-          v1.0
+          v{APP_VERSION}
         </div>
       </aside>
 
