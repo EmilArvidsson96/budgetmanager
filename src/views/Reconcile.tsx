@@ -5,6 +5,7 @@ import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { MONTH_NAMES_LONG, makeMonthId, formatCurrency } from '@/utils/budgetHelpers'
+import { getMonthIdForDate } from '@/utils/periodUtils'
 import { budgetedAmount } from '@/utils/projection'
 import { reconcileTransfers, reconciledKeysFromRecords } from '@/utils/transferReconciliation'
 
@@ -14,7 +15,7 @@ export function ReconcileView() {
   const [month, setMonth] = useState(today.getMonth() + 1)
   const store = useAppStore()
   const { settings, actuals, monthCloses, reconciliations, allTransactions } = store
-  const { categories } = settings
+  const { categories, accounts, monthStartDay, monthStartBusinessDay } = settings
 
   const monthId = makeMonthId(year, month)
   const actual = actuals[monthId]
@@ -62,6 +63,31 @@ export function ReconcileView() {
     }
     return { income, expense, savings, net: income - expense - savings }
   }, [rows])
+
+  // Cashflow data for waterfall (actual savings flow from account transfers).
+  const cashflowData = useMemo(() => {
+    if (!actual) return null
+    const savingsAccountIds = new Set(
+      accounts
+        .filter((a) => ['savings', 'isk', 'investment'].includes(a.type))
+        .map((a) => a.id)
+    )
+    let savingsIn = 0, savingsOut = 0
+    for (const tx of allTransactions) {
+      if (!tx.date) continue
+      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) continue
+      if (tx.transaction_type !== 'transfer') continue
+      if (savingsAccountIds.has(tx.account_number)) {
+        if (tx.amount > 0) savingsIn += tx.amount
+        else savingsOut += tx.amount
+      }
+    }
+    const netSavings = savingsIn + savingsOut
+    const expenseGroups = rows
+      .filter((r) => r.cat.type === 'expense' && r.actual > 0)
+      .map((r) => ({ catId: r.cat.id, catName: r.cat.name, catColor: r.cat.color ?? '#94a3b8', total: r.actual }))
+    return { income: totals.income, netSavings, totalExpenses: totals.expense, expenseGroups }
+  }, [actual, allTransactions, accounts, monthStartDay, monthStartBusinessDay, monthId, rows, totals])
 
   // Checklist signals.
   const uncategorizedCount = actual?.entries.find((e) => e.categoryId === 'other')?.transactionCount ?? 0
@@ -176,6 +202,11 @@ export function ReconcileView() {
             })}
           </div>
 
+          {/* Kassaflöde waterfall */}
+          {cashflowData && (cashflowData.income > 0 || cashflowData.totalExpenses > 0) && (
+            <WaterfallCard data={cashflowData} />
+          )}
+
           {/* Checklist */}
           <Card padding={false}>
             <div className="px-5 py-3.5 border-b border-warm-100"><h3 className="font-semibold text-gray-900 text-sm">Checklista</h3></div>
@@ -249,5 +280,107 @@ export function ReconcileView() {
         </div>
       )}
     </Layout>
+  )
+}
+
+// ─── Kassaflöde waterfall ──────────────────────────────────────────────────────
+
+interface WFRow {
+  label: string
+  value: number
+  leftPct: number
+  widthPct: number
+  color: string
+  isResult?: boolean
+  sign: '+' | '−'
+}
+
+interface CashflowExpenseGroup {
+  catId: string
+  catName: string
+  catColor: string
+  total: number
+}
+
+interface CashflowData {
+  income: number
+  netSavings: number
+  totalExpenses: number
+  expenseGroups: CashflowExpenseGroup[]
+}
+
+function WaterfallCard({ data }: { data: CashflowData }) {
+  const { income, netSavings, expenseGroups } = data
+
+  const bufferAmt = netSavings < 0 ? Math.abs(netSavings) : 0
+  const savingsAmt = netSavings > 0 ? netSavings : 0
+  const totalIncoming = income + bufferAmt
+  const totalExpenses = expenseGroups.reduce((s, g) => s + g.total, 0)
+  const chartMax = Math.max(totalIncoming, totalExpenses, 1)
+  const toPct = (v: number) => Math.max(0, Math.min(100, (v / chartMax) * 100))
+
+  const wfRows: WFRow[] = []
+  let remaining = totalIncoming
+
+  wfRows.push({ label: 'Inkomst', value: income, leftPct: 0, widthPct: toPct(income), color: '#6479b3', sign: '+' })
+
+  if (bufferAmt > 0) {
+    wfRows.push({ label: 'Från buffert', value: bufferAmt, leftPct: toPct(income), widthPct: toPct(bufferAmt), color: '#94a3b8', sign: '+' })
+  } else if (savingsAmt > 0) {
+    remaining -= savingsAmt
+    wfRows.push({ label: 'Sparande', value: savingsAmt, leftPct: toPct(remaining), widthPct: toPct(savingsAmt), color: '#52a871', sign: '−' })
+  }
+
+  for (const g of expenseGroups) {
+    remaining -= g.total
+    wfRows.push({ label: g.catName, value: g.total, leftPct: toPct(Math.max(0, remaining)), widthPct: toPct(g.total), color: g.catColor, sign: '−' })
+  }
+
+  const net = remaining
+  wfRows.push({
+    label: net >= 0 ? 'Överskott' : 'Underskott',
+    value: Math.abs(net),
+    leftPct: 0,
+    widthPct: toPct(Math.abs(net)),
+    color: net >= 0 ? '#10b981' : '#ef4444',
+    sign: net >= 0 ? '+' : '−',
+    isResult: true,
+  })
+
+  return (
+    <Card padding={false} className="p-4 md:p-5">
+      <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4">Kassaflöde</div>
+      <div className="space-y-2">
+        {wfRows.map((row, i) => (
+          <div key={i} className={`flex items-center gap-2.5${row.isResult ? ' mt-1 pt-2 border-t border-warm-100' : ''}`}>
+            <span className={`text-xs w-28 text-right flex-shrink-0 ${row.isResult ? 'font-semibold text-gray-700' : 'text-gray-400'}`}>
+              {row.label}
+            </span>
+            <div className="flex-1 relative h-7 bg-gray-50 rounded-md overflow-hidden">
+              <div
+                className="absolute h-full rounded-md transition-all duration-300"
+                style={{
+                  left: `${row.leftPct}%`,
+                  width: `${Math.min(row.widthPct, 100 - row.leftPct)}%`,
+                  backgroundColor: row.color,
+                  opacity: row.isResult ? 1 : 0.85,
+                }}
+              />
+              {row.widthPct > 15 && (
+                <span
+                  className="absolute top-1/2 -translate-y-1/2 text-white text-xs font-medium px-1.5 pointer-events-none"
+                  style={{ left: `calc(${row.leftPct}% + 4px)` }}
+                >
+                  {formatCurrency(row.value)}
+                </span>
+              )}
+            </div>
+            <span className={`text-xs w-24 text-right flex-shrink-0 tabular-nums ${row.isResult ? 'font-semibold text-gray-700' : 'text-gray-600'}`}>
+              {row.sign}{formatCurrency(row.value)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </Card>
   )
 }

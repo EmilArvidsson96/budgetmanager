@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ElementType, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, Search, X, Pencil, RotateCcw, Upload, Tag, ArrowLeftRight, AlertTriangle, Banknote, CheckCircle2, TrendingUp } from 'lucide-react'
@@ -472,64 +472,6 @@ export function FlowView() {
 
 
   // Actual cash flow for the month: income, real savings (via account transfers), and expenses.
-  const cashflowData = useMemo(() => {
-    const savingsAccountIds = new Set(
-      accounts
-        .filter((a) => ['savings', 'isk', 'investment'].includes(a.type))
-        .map((a) => a.id)
-    )
-    const catIds = new Set(categories.map((c) => c.id))
-    const ruleMap = buildRuleLookup(zlantarCategoryRules ?? DEFAULT_ZLANTAR_RULES)
-
-    let income = 0
-    const expenseByCat: Record<string, number> = {}
-    let savingsIn = 0
-    let savingsOut = 0
-
-    for (const tx of allTransactions) {
-      if (!tx.date) continue
-      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) continue
-
-      if (tx.transaction_type === 'transfer') {
-        if (savingsAccountIds.has(tx.account_number)) {
-          if (tx.amount > 0) savingsIn += tx.amount
-          else savingsOut += tx.amount
-        }
-        continue
-      }
-
-      const { catId } = resolveCategory(
-        tx.category ?? '', tx.subcategory ?? '',
-        catIds, ruleMap, transactionOverrides[txKey(tx)]
-      )
-      const cat = categories.find((c) => c.id === catId)
-      if (!cat) continue
-      if (cat.type === 'income') income += tx.amount
-      else if (cat.type === 'expense') expenseByCat[catId] = (expenseByCat[catId] ?? 0) + tx.amount
-    }
-
-    const netSavings = savingsIn + savingsOut
-    const expenseGroups = categories
-      .filter((c) => c.type === 'expense' && expenseByCat[c.id])
-      .map((c) => ({
-        catId: c.id,
-        catName: c.name,
-        catColor: c.color ?? '#94a3b8',
-        total: Math.abs(expenseByCat[c.id]),
-      }))
-    const totalExpenses = expenseGroups.reduce((s, g) => s + g.total, 0)
-
-    return {
-      income,
-      netSavings,
-      savingsIn,
-      savingsOut: Math.abs(savingsOut),
-      totalExpenses,
-      expenseGroups,
-      net: income - netSavings - totalExpenses,
-    }
-  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, accounts, monthId, monthStartDay, monthStartBusinessDay])
-
   const toggleCat = (id: string) => {
     setExpandedCats((prev) => {
       const next = new Set(prev)
@@ -726,11 +668,6 @@ export function FlowView() {
 
       {view === 'categories' && (
         <>
-          {/* Kassaflöde waterfall */}
-          {(cashflowData.income > 0 || cashflowData.totalExpenses > 0) && (
-            <MonthCashflowCard data={cashflowData} />
-          )}
-
           {/* Charts: category detail drill-down, or month overview */}
           {catTimeline ? (
             <CategoryDetailChart
@@ -1121,6 +1058,8 @@ function TransactionRow({
 
 // ─── Category picker (re-categorize a single transaction) ─────────────────────
 
+type CategoryOption = { label: string; catId: string; subId?: string; level3Id?: string }
+
 function CategoryPicker({
   categories, currentCatId, currentSubId, currentLevel3Id, canReset, onPick, onReset,
 }: {
@@ -1135,39 +1074,76 @@ function CategoryPicker({
   const [catId, setCatId] = useState(currentCatId)
   const [subId, setSubId] = useState(currentSubId ?? '')
   const [level3Id, setLevel3Id] = useState(currentLevel3Id ?? '')
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const options = useMemo<CategoryOption[]>(() => {
+    const result: CategoryOption[] = []
+    for (const cat of categories) {
+      result.push({ label: cat.name, catId: cat.id })
+      for (const sub of cat.subcategories) {
+        result.push({ label: `${cat.name} / ${sub.name}`, catId: cat.id, subId: sub.id })
+        for (const l3 of (cat.level3 ?? []).filter((l) => l.parentSubId === sub.id)) {
+          result.push({ label: `${cat.name} / ${sub.name} / ${l3.name}`, catId: cat.id, subId: sub.id, level3Id: l3.id })
+        }
+      }
+    }
+    return result
+  }, [categories])
+
   const selectedCat = categories.find((c) => c.id === catId)
-  const level3Options = (selectedCat?.level3 ?? []).filter((l) => l.parentSubId === subId)
+  const selectedSub = selectedCat?.subcategories.find((s) => s.id === subId)
+  const selectedL3 = (selectedCat?.level3 ?? []).find((l) => l.id === level3Id)
+  const currentLabel = [selectedCat?.name, selectedSub?.name, selectedL3?.name].filter(Boolean).join(' / ')
+
+  const filtered = query
+    ? options.filter((o) => o.label.toLowerCase().includes(query.toLowerCase()))
+    : options
+
+  useEffect(() => {
+    function onMouseDown(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+        setQuery('')
+      }
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [])
+
+  function pick(opt: CategoryOption) {
+    setCatId(opt.catId)
+    setSubId(opt.subId ?? '')
+    setLevel3Id(opt.level3Id ?? '')
+    setOpen(false)
+    setQuery('')
+  }
 
   return (
     <div className="ml-10 md:ml-16 mb-2 flex flex-wrap items-center gap-2 bg-warm-50 border border-warm-200 rounded-lg p-2">
-      <select
-        className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-        value={catId}
-        onChange={(e) => { setCatId(e.target.value); setSubId(''); setLevel3Id('') }}
-      >
-        {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-      </select>
-      {selectedCat && selectedCat.subcategories.length > 0 && (
-        <select
-          className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-          value={subId}
-          onChange={(e) => { setSubId(e.target.value); setLevel3Id('') }}
-        >
-          <option value="">(ingen)</option>
-          {selectedCat.subcategories.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
-      )}
-      {level3Options.length > 0 && (
-        <select
-          className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-          value={level3Id}
-          onChange={(e) => setLevel3Id(e.target.value)}
-          title="Nivå 3"
-        >
-          <option value="">(ingen nivå 3)</option>
-          {level3Options.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-        </select>
-      )}
+      <div ref={containerRef} className="relative">
+        <input
+          className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 w-56"
+          value={open ? query : currentLabel}
+          placeholder="Sök kategori…"
+          onFocus={() => { setOpen(true); setQuery('') }}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true) }}
+        />
+        {open && filtered.length > 0 && (
+          <div className="absolute z-50 top-full mt-1 left-0 w-72 max-h-60 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg">
+            {filtered.map((opt, i) => (
+              <button
+                key={i}
+                className="w-full text-left px-3 py-1.5 text-sm hover:bg-brand-50 hover:text-brand-700"
+                onMouseDown={() => pick(opt)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <Button size="sm" onClick={() => onPick(catId, subId || undefined, level3Id || undefined)}>Spara</Button>
       {canReset && (
         <Button size="sm" variant="secondary" onClick={onReset}>
@@ -1383,139 +1359,4 @@ function CategoryDetailChart({
   )
 }
 
-// ─── Month cashflow waterfall ─────────────────────────────────────────────────
 
-interface CashflowExpenseGroup {
-  catId: string
-  catName: string
-  catColor: string
-  total: number
-}
-
-interface CashflowData {
-  income: number
-  netSavings: number
-  savingsIn: number
-  savingsOut: number
-  totalExpenses: number
-  expenseGroups: CashflowExpenseGroup[]
-  net: number
-}
-
-function MonthCashflowCard({ data }: { data: CashflowData }) {
-  const { income, netSavings, totalExpenses, expenseGroups, net } = data
-  const scale = Math.max(income, 1)
-  const toPct = (v: number) => Math.max(0, (v / scale) * 100)
-
-  return (
-    <Card padding={false} className="p-3 md:p-5 mb-6">
-      <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Kassaflöde</div>
-
-      {/* KPI summary */}
-      <div className="grid grid-cols-2 gap-x-6 gap-y-2 mb-5">
-        <div>
-          <div className="text-xs text-gray-400">Inkomst</div>
-          <div className="text-base font-bold text-gray-900 tabular-nums">{formatCurrency(income)}</div>
-        </div>
-        <div>
-          <div className="text-xs text-gray-400">{netSavings >= 0 ? 'Sparande' : 'Från buffert'}</div>
-          <div className="text-base font-bold text-gray-900 tabular-nums">{formatCurrency(Math.abs(netSavings))}</div>
-        </div>
-        <div>
-          <div className="text-xs text-gray-400">Konsumtion</div>
-          <div className="text-base font-bold text-gray-900 tabular-nums">{formatCurrency(totalExpenses)}</div>
-        </div>
-        <div>
-          <div className="text-xs text-gray-400">Netto</div>
-          <div className={`text-base font-bold tabular-nums ${net < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
-            {formatCurrency(net)}
-          </div>
-        </div>
-      </div>
-
-      {/* Waterfall bars */}
-      <div className="space-y-1.5">
-        <CashflowRow label="Inkomst" barLeft={0} barWidth={toPct(income)} color="#6479b3" value={income} sign="+" />
-
-        {Math.abs(netSavings) > 0 && (netSavings > 0 ? (
-          <CashflowRow
-            label="Sparande"
-            barLeft={toPct(income - netSavings)}
-            barWidth={toPct(netSavings)}
-            color="#52a871"
-            value={netSavings}
-            sign="−"
-          />
-        ) : (
-          <CashflowRow
-            label="Från buffert"
-            barLeft={0}
-            barWidth={toPct(Math.abs(netSavings))}
-            color="#94a3b8"
-            value={Math.abs(netSavings)}
-            sign="+"
-          />
-        ))}
-
-        {expenseGroups.map((g) => (
-          <CashflowRow
-            key={g.catId}
-            label={g.catName}
-            barLeft={0}
-            barWidth={toPct(g.total)}
-            color={g.catColor}
-            value={g.total}
-            sign="−"
-          />
-        ))}
-
-        <div className="border-t border-warm-100 mt-1 pt-2">
-          <CashflowRow
-            label={net < 0 ? 'Underskott' : 'Överskott'}
-            barLeft={0}
-            barWidth={toPct(Math.abs(net))}
-            color={net < 0 ? '#ef4444' : '#10b981'}
-            value={Math.abs(net)}
-            sign={net < 0 ? '−' : '+'}
-            bold
-          />
-        </div>
-      </div>
-    </Card>
-  )
-}
-
-function CashflowRow({
-  label, barLeft, barWidth, color, value, sign, bold,
-}: {
-  label: string
-  barLeft: number
-  barWidth: number
-  color: string
-  value: number
-  sign: string
-  bold?: boolean
-}) {
-  const clampedLeft = Math.min(Math.max(barLeft, 0), 100)
-  const clampedWidth = Math.min(Math.max(barWidth, 0), 200 - clampedLeft)
-  return (
-    <div className="flex items-center gap-2">
-      <span className={`text-xs w-24 shrink-0 text-right ${bold ? 'font-semibold text-gray-700' : 'text-gray-500'}`}>
-        {label}
-      </span>
-      <div className="flex-1 relative h-7 bg-warm-50 rounded overflow-hidden">
-        <div
-          className="absolute inset-y-0 rounded flex items-center px-2"
-          style={{ left: clampedLeft + '%', width: clampedWidth + '%', backgroundColor: color }}
-        >
-          {clampedWidth > 14 && (
-            <span className="text-white text-[10px] font-medium truncate">{formatCurrency(value)}</span>
-          )}
-        </div>
-      </div>
-      <span className={`text-xs tabular-nums w-24 shrink-0 text-right ${bold ? 'font-semibold text-gray-700' : 'text-gray-600'}`}>
-        {sign}{formatCurrency(value)}
-      </span>
-    </div>
-  )
-}
