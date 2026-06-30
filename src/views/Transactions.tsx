@@ -559,25 +559,42 @@ export function FlowView() {
         }
       />
 
-      {/* Month navigator */}
-      <div className="flex items-center gap-1 mb-6">
-        <button
-          onClick={prevMonth}
-          className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-700"
-          aria-label="Föregående månad"
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </button>
-        <span className="text-base font-medium text-gray-800 min-w-44 text-center tabular-nums">
-          {MONTH_NAMES_LONG[month - 1]} {year}
-        </span>
-        <button
-          onClick={nextMonth}
-          className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-700"
-          aria-label="Nästa månad"
-        >
-          <ChevronRight className="w-4 h-4" />
-        </button>
+      {/* Sticky month navigator + selected category chip */}
+      <div className="sticky top-0 z-10 bg-warm-100 -mx-4 px-4 md:-mx-8 md:px-8 py-2 mb-4 border-b border-warm-200/60">
+        <div className="flex items-center justify-between max-w-5xl">
+          <div className="flex items-center gap-1">
+            <button
+              onClick={prevMonth}
+              className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-700"
+              aria-label="Föregående månad"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="text-base font-medium text-gray-800 min-w-44 text-center tabular-nums">
+              {MONTH_NAMES_LONG[month - 1]} {year}
+            </span>
+            <button
+              onClick={nextMonth}
+              className="p-2 rounded-lg hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-700"
+              aria-label="Nästa månad"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+          {selectedCatId && (() => {
+            const sc = categories.find((c) => c.id === selectedCatId)
+            return sc ? (
+              <button
+                onClick={() => setSelectedCatId(null)}
+                className="flex items-center gap-1.5 text-xs bg-white border border-warm-200 rounded-full px-2.5 py-1 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors"
+              >
+                <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: sc.color ?? '#94a3b8' }} />
+                <span>{sc.name}</span>
+                <X className="w-3 h-3 text-gray-400" />
+              </button>
+            ) : null
+          })()}
+        </div>
       </div>
 
       {/* Attention inbox */}
