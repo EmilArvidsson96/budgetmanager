@@ -151,7 +151,7 @@ export function FlowView() {
 
   const store = useAppStore()
   const { settings, allTransactions, transactionOverrides, groceryReceipts, reconciliations } = store
-  const { categories, zlantarCategoryRules, monthStartDay, monthStartBusinessDay, accounts } = settings
+  const { categories, zlantarCategoryRules, monthStartDay, monthStartBusinessDay } = settings
 
   const monthId = makeMonthId(year, month)
 
