@@ -5,6 +5,7 @@ import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
+import { Select } from '@/components/ui/Select'
 import { RECEIPT_MODELS, DEFAULT_RECEIPT_MODEL } from '@/utils/receiptModels'
 import { slugify } from '@/utils/slug'
 import type { Account, RecurringItem, AccountType, ZlantarCategoryRule, CategoryDef, Level3Def } from '@/types'
@@ -239,13 +240,12 @@ function AccountsTab() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Typ</label>
-                <select
-                  className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                <Select
+                  className="w-full"
                   value={form.type ?? 'checking'}
                   onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as AccountType }))}
-                >
-                  {ACCOUNT_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
+                  options={ACCOUNT_TYPES}
+                />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Bank</label>
@@ -456,37 +456,33 @@ function RecurringTab() {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Typ</label>
-                <select
-                  className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm"
+                <Select
+                  className="w-full"
                   value={form.type ?? 'expense'}
                   onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as 'income' | 'expense' }))}
-                >
-                  <option value="expense">Utgift</option>
-                  <option value="income">Inkomst</option>
-                </select>
+                  options={[{ value: 'expense', label: 'Utgift' }, { value: 'income', label: 'Inkomst' }]}
+                />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Kategori</label>
-                <select
-                  className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm"
+                <Select
+                  className="w-full"
                   value={form.categoryId ?? ''}
                   onChange={(e) => setForm((f) => ({ ...f, categoryId: e.target.value, subcategoryId: undefined }))}
-                >
-                  <option value="">Välj kategori...</option>
-                  {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                  options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                  placeholder="Välj kategori..."
+                />
               </div>
               {selectedCat && selectedCat.subcategories.length > 0 && (
                 <div>
                   <label className="text-xs font-medium text-gray-600 block mb-1">Underkategori</label>
-                  <select
-                    className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm"
+                  <Select
+                    className="w-full"
                     value={form.subcategoryId ?? ''}
                     onChange={(e) => setForm((f) => ({ ...f, subcategoryId: e.target.value }))}
-                  >
-                    <option value="">Ingen</option>
-                    {selectedCat.subcategories.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
+                    options={selectedCat.subcategories.map((s) => ({ value: s.id, label: s.name }))}
+                    placeholder="Ingen"
+                  />
                 </div>
               )}
               <div>
@@ -783,22 +779,20 @@ function Level3Manager() {
       />
 
       <div className="flex flex-wrap gap-2 mb-4">
-        <select
-          className="border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+        <Select
           value={catId}
           onChange={(e) => { setCatId(e.target.value); setSubId('') }}
-        >
-          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <select
-          className="border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50"
+          options={categories.map((c) => ({ value: c.id, label: c.name }))}
+        />
+        <Select
           value={effectiveSubId}
           onChange={(e) => setSubId(e.target.value)}
           disabled={subs.length === 0}
-        >
-          {subs.length === 0 && <option value="">Inga underkategorier</option>}
-          {subs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
+          options={subs.length === 0
+            ? [{ value: '', label: 'Inga underkategorier' }]
+            : subs.map((s) => ({ value: s.id, label: s.name }))
+          }
+        />
       </div>
 
       {effectiveSubId && (
@@ -983,26 +977,24 @@ function ZlantarMappingTab() {
         </div>
         <div>
           <label className="text-xs font-medium text-gray-600 block mb-1">App-kategori</label>
-          <select
-            className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+          <Select
+            className="w-full"
             value={form.appCategoryId ?? ''}
             onChange={(e) => setForm((f) => ({ ...f, appCategoryId: e.target.value, appSubcategoryId: undefined }))}
-          >
-            <option value="">Välj...</option>
-            {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+            options={categories.map((c) => ({ value: c.id, label: c.name }))}
+            placeholder="Välj..."
+          />
         </div>
         <div>
           <label className="text-xs font-medium text-gray-600 block mb-1">App-underkategori <span className="font-normal text-gray-400">(valfri)</span></label>
-          <select
-            className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+          <Select
+            className="w-full"
             value={form.appSubcategoryId ?? ''}
             onChange={(e) => setForm((f) => ({ ...f, appSubcategoryId: e.target.value || undefined }))}
             disabled={!selectedCat || selectedCat.subcategories.length === 0}
-          >
-            <option value="">Bevara original</option>
-            {selectedCat?.subcategories.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+            options={selectedCat?.subcategories.map((s) => ({ value: s.id, label: s.name })) ?? []}
+            placeholder="Bevara original"
+          />
         </div>
       </div>
       <div className="flex gap-2">

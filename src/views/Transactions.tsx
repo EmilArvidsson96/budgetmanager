@@ -188,6 +188,7 @@ export function FlowView() {
         ruleMap,
         transactionOverrides[txKey(tx)]
       )
+      if (categories.find((c) => c.id === catId)?.type === 'transfer') continue
       monthTxs.push({ tx, catId, subId })
     }
 
@@ -234,7 +235,14 @@ export function FlowView() {
     const searchLower = search.trim().toLowerCase()
     return allTransactions
       .filter((tx) => {
-        if (tx.transaction_type !== 'transfer' || !tx.date) return false
+        if (!tx.date) return false
+        const isZlantarTransfer = tx.transaction_type === 'transfer'
+        if (!isZlantarTransfer) {
+          const override = transactionOverrides[txKey(tx)]
+          if (!override) return false
+          const resolvedCat = categories.find((c) => c.id === override.categoryId)
+          if (resolvedCat?.type !== 'transfer') return false
+        }
         if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) return false
         if (searchLower) {
           const hay = `${tx.description ?? ''} ${tx.account_name ?? ''}`.toLowerCase()
@@ -243,7 +251,7 @@ export function FlowView() {
         return true
       })
       .sort((a, b) => b.date.localeCompare(a.date))
-  }, [allTransactions, monthId, monthStartDay, monthStartBusinessDay, search])
+  }, [allTransactions, transactionOverrides, categories, monthId, monthStartDay, monthStartBusinessDay, search])
   const transferTotal = transfers.reduce((s, t) => s + t.amount, 0)
 
   const grandTotal = groups.reduce((s, g) => s + g.total, 0)
@@ -285,16 +293,18 @@ export function FlowView() {
   // ── Inbox signal 4: large transactions this month ─────────────────────────────
   const largeTxs = useMemo(() => {
     return allTransactions
-      .filter(
-        (tx) =>
-          tx.date &&
-          tx.transaction_type !== 'transfer' &&
-          !reconciledKeys.has(txKey(tx)) &&
-          getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) === monthId &&
-          Math.abs(tx.amount) >= largeTxThreshold
-      )
+      .filter((tx) => {
+        if (!tx.date) return false
+        if (tx.transaction_type === 'transfer') return false
+        if (reconciledKeys.has(txKey(tx))) return false
+        if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay) !== monthId) return false
+        if (Math.abs(tx.amount) < largeTxThreshold) return false
+        const override = transactionOverrides[txKey(tx)]
+        if (override && categories.find((c) => c.id === override.categoryId)?.type === 'transfer') return false
+        return true
+      })
       .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
-  }, [allTransactions, reconciledKeys, monthId, monthStartDay, monthStartBusinessDay])
+  }, [allTransactions, reconciledKeys, transactionOverrides, categories, monthId, monthStartDay, monthStartBusinessDay])
 
   // Plan-vs-actual rows for the month (income/expense/savings with a budget or spend).
   const planRows = useMemo(() => {

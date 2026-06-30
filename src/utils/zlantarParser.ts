@@ -214,10 +214,12 @@ export function buildMonthEntries(
       ruleMap,
       overrides[makeTxKey(tx)]
     )
+    const catDef = categories.find((c) => c.id === catId)
+    if (catDef?.type === 'transfer') continue
+
     const key = `${catId}|||${subId}`
 
     if (!aggMap[key]) {
-      const catDef = categories.find((c) => c.id === catId)
       const subDef = catDef?.subcategories.find((s) => s.id === subId)
       aggMap[key] = {
         categoryId: catId,

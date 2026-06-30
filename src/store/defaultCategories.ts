@@ -156,6 +156,16 @@ export const DEFAULT_CATEGORIES: CategoryDef[] = [
     icon: 'TrendingUp',
     subcategories: [],
   },
+
+  // ─── Transfers (excluded from budget totals) ──────────────────────────────
+  {
+    id: 'transfer',
+    name: 'Överföring',
+    type: 'transfer',
+    color: '#64748b',
+    icon: 'ArrowLeftRight',
+    subcategories: [],
+  },
 ]
 
 // Default rules for mapping Zlantar's category values to app categories.
