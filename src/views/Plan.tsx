@@ -22,6 +22,7 @@ type Horizon = (typeof HORIZONS)[number]
 
 // Cohesive palette (light-mode app, hardcoded like the existing charts).
 const LIQUID_COLOR = '#2563eb'
+const LIQUID_ACCOUNT_COLORS = ['#2563eb', '#0891b2', '#0d9488', '#4f46e5', '#0284c7', '#059669']
 const ASSET_COLORS = ['#059669', '#0891b2', '#16a34a', '#0d9488', '#7c3aed', '#65a30d', '#0284c7']
 const LIABILITY_COLORS = ['#dc2626', '#ea580c', '#d97706', '#b45309']
 const NETWORTH_COLOR = '#111827'
@@ -85,21 +86,41 @@ function newId() {
 }
 
 function LiquidityTooltip({
-  active, payload, label, largeTxs, planned,
+  active, payload, label, largeTxs, planned, stacked,
 }: {
   active?: boolean
-  payload?: Array<{ value: number }>
+  payload?: Array<{ name: string; value: number; fill: string }>
   label?: string
   largeTxs: Map<string, { amount: number; description: string }[]>
   planned: Map<string, LiquidityEntry[]>
+  stacked: boolean
 }) {
   if (!active || !payload?.length || !label) return null
   const flagTxs = largeTxs.get(label) ?? []
   const flagPlanned = planned.get(label) ?? []
+  const total = payload.reduce((s, p) => s + (p.value ?? 0), 0)
   return (
     <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[180px]">
       <p className="font-semibold text-gray-800 mb-1">{label}</p>
-      <p className="text-gray-600 tabular-nums">{formatCurrency(payload[0].value)}</p>
+      {stacked && payload.length > 1 ? (
+        <>
+          {[...payload].reverse().map((p) => (
+            <p key={p.name} className="flex items-center justify-between gap-4 text-gray-600">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-sm inline-block shrink-0" style={{ background: p.fill }} />
+                {p.name}
+              </span>
+              <span className="tabular-nums">{formatCurrency(p.value)}</span>
+            </p>
+          ))}
+          <div className="mt-1.5 pt-1.5 border-t border-gray-100 flex justify-between font-semibold text-gray-800">
+            <span>Totalt</span>
+            <span className="tabular-nums">{formatCurrency(total)}</span>
+          </div>
+        </>
+      ) : (
+        <p className="text-gray-600 tabular-nums">{formatCurrency(total)}</p>
+      )}
       {flagTxs.length > 0 && (
         <div className="mt-2 pt-2 border-t border-amber-100">
           <p className="text-xs font-semibold text-amber-700 mb-1">Stor engångstransaktion</p>
@@ -229,6 +250,13 @@ export function PlanView() {
     liabilitiesByAsset.get(assetId)!.push(l)
   }
 
+  // ── Liquid account breakdown for stacked area chart ──────────────────────
+  const liquidAccounts = accounts.filter((a) => a.role === 'liquid')
+  // Only accounts with a positive starting balance can form a meaningful stack.
+  const posLiquidAccounts = liquidAccounts.filter((a) => (now.values[a.id] ?? 0) > 0)
+  const posLiquidTotal = posLiquidAccounts.reduce((s, a) => s + (now.values[a.id] ?? 0), 0)
+  const useStackedLiquidity = posLiquidAccounts.length > 1 && posLiquidTotal > 0
+
   // ── Chart data ────────────────────────────────────────────────────────────
   const wealthChartData = months.map((m) => {
     const liquid = Math.max(0, Math.round(m.liquidity))
@@ -245,6 +273,30 @@ export function PlanView() {
   })
 
   const liquidityData = months.map((m) => ({ label: m.label, Likviditet: Math.round(m.liquidity) }))
+
+  // Per-account stacked data: proportional share of total liquidity based on starting balances.
+  // When total goes negative we zero-out the stack (the red reference line + alert cover that case).
+  const liquidityStackData = useMemo(() => {
+    if (!useStackedLiquidity) return liquidityData
+    return months.map((m) => {
+      const row: Record<string, string | number> = { label: m.label }
+      const total = Math.round(m.liquidity)
+      if (total <= 0) {
+        for (const a of posLiquidAccounts) row[a.name] = 0
+      } else {
+        let assigned = 0
+        posLiquidAccounts.forEach((a, i) => {
+          const isLast = i === posLiquidAccounts.length - 1
+          const v = isLast ? total - assigned : Math.round((now.values[a.id] ?? 0) / posLiquidTotal * total)
+          row[a.name] = Math.max(0, v)
+          assigned += Math.max(0, v)
+        })
+      }
+      return row
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [months, posLiquidAccounts, posLiquidTotal, useStackedLiquidity, liquidityData])
+
   const liquidityGoesNegative = trough && trough.liquidity < 0
 
   const minLiabilityValue = unlinkedLiabilities.length > 0
@@ -467,9 +519,9 @@ export function PlanView() {
 
         {/* Liquidity */}
         <Card>
-          <CardHeader title="Likviditet över tid" subtitle="Kassa månad för månad — driven av budgeten" />
+          <CardHeader title="Likviditet över tid" subtitle="Kassa månad för månad — per konto" />
           <ResponsiveContainer width="100%" height={220}>
-            <ComposedChart data={liquidityData}>
+            <ComposedChart data={liquidityStackData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
               <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} />
@@ -480,36 +532,58 @@ export function PlanView() {
                   label={props.label}
                   largeTxs={largeNonRecurringByLabel}
                   planned={plannedByLabel}
+                  stacked={useStackedLiquidity}
                 />
               )} />
               <ReferenceLine y={0} stroke="#dc2626" strokeDasharray="3 3" />
-              <Area type="monotone" dataKey="Likviditet" stroke={LIQUID_COLOR} fill={LIQUID_COLOR} fillOpacity={0.15} strokeWidth={2} />
+              {useStackedLiquidity
+                ? posLiquidAccounts.map((a, i) => (
+                    <Area
+                      key={a.id}
+                      type="monotone"
+                      dataKey={a.name}
+                      stackId="liq"
+                      stroke={LIQUID_ACCOUNT_COLORS[i % LIQUID_ACCOUNT_COLORS.length]}
+                      fill={LIQUID_ACCOUNT_COLORS[i % LIQUID_ACCOUNT_COLORS.length]}
+                      fillOpacity={0.65}
+                      strokeWidth={1}
+                      strokeOpacity={0.4}
+                    />
+                  ))
+                : <Area type="monotone" dataKey="Likviditet" stroke={LIQUID_COLOR} fill={LIQUID_COLOR} fillOpacity={0.15} strokeWidth={2} />
+              }
+              {/* Flag: large non-recurring transactions */}
               {liquidityData.filter((d) => largeNonRecurringByLabel.has(d.label)).map((d) => (
                 <ReferenceDot key={`l-${d.label}`} x={d.label} y={d.Likviditet} r={5} fill="#f59e0b" stroke="white" strokeWidth={2} />
               ))}
+              {/* Flag: planned one-off entries */}
               {liquidityData.filter((d) => plannedByLabel.has(d.label)).map((d) => (
                 <ReferenceDot key={`p-${d.label}`} x={d.label} y={d.Likviditet} r={9} fill="#7c3aed" fillOpacity={0.25} stroke="#7c3aed" strokeWidth={2} />
               ))}
             </ComposedChart>
           </ResponsiveContainer>
-          {(largeNonRecurringByLabel.size > 0 || plannedByLabel.size > 0) && (
-            <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
-              {largeNonRecurringByLabel.size > 0 && (
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
-                  Stor engångstransaktion (&gt;{(LARGE_TX_THRESHOLD / 1000).toFixed(0)}k)
-                </span>
-              )}
-              {plannedByLabel.size > 0 && (
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-violet-600 inline-block" />
-                  Planerad engångspost
-                </span>
-              )}
-            </div>
-          )}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-gray-500">
+            {useStackedLiquidity && posLiquidAccounts.map((a, i) => (
+              <span key={a.id} className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: LIQUID_ACCOUNT_COLORS[i % LIQUID_ACCOUNT_COLORS.length] }} />
+                {a.name}
+              </span>
+            ))}
+            {largeNonRecurringByLabel.size > 0 && (
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
+                Stor engångstransaktion (&gt;{(LARGE_TX_THRESHOLD / 1000).toFixed(0)}k)
+              </span>
+            )}
+            {plannedByLabel.size > 0 && (
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-violet-600 inline-block" />
+                Planerad engångspost
+              </span>
+            )}
+          </div>
           {carryForward && (
-            <p className="text-xs text-gray-400 mt-2">
+            <p className="text-xs text-gray-400 mt-1">
               Från {lastBudgetYear! + 1} rullas {lastBudgetYear} års budget framåt — lägg in en budget för senare år för en mer exakt prognos.
             </p>
           )}
