@@ -10,28 +10,36 @@ import { GroceryReceiptsView }  from './views/GroceryReceipts'
 import { FlowView }             from './views/Transactions'
 import { TransactionListView }  from './views/TransactionList'
 import { PinGate }              from './components/PinGate'
+import { useGitHubSync }        from './hooks/useGitHubSync'
+
+function AppRoutes() {
+  useGitHubSync()
+  return (
+    <Routes>
+      <Route path="/"               element={<Navigate to="/plan" replace />} />
+      <Route path="/plan"           element={<PlanView />} />
+      <Route path="/manad"          element={<Navigate to="/plan" replace />} />
+      <Route path="/ar"             element={<Navigate to="/plan" replace />} />
+      <Route path="/likviditet"     element={<Navigate to="/plan" replace />} />
+      <Route path="/likviditet-gammal" element={<LiquidityView />} />
+      <Route path="/floede"         element={<FlowView />} />
+      <Route path="/rapport"        element={<ReportView />} />
+      <Route path="/avstamning"     element={<ReconcileView />} />
+      <Route path="/transaktioner"  element={<TransactionListView />} />
+      <Route path="/importera"      element={<ImportView />} />
+      <Route path="/kvitton"        element={<GroceryReceiptsView />} />
+      <Route path="/installningar"  element={<SettingsView />} />
+      <Route path="/hjalp"          element={<HelpView />} />
+    </Routes>
+  )
+}
 
 export default function App() {
   return (
     <PinGate>
-    <BrowserRouter basename="/budgetmanager">
-      <Routes>
-        <Route path="/"               element={<Navigate to="/plan" replace />} />
-        <Route path="/plan"           element={<PlanView />} />
-        <Route path="/manad"          element={<Navigate to="/plan" replace />} />
-        <Route path="/ar"             element={<Navigate to="/plan" replace />} />
-        <Route path="/likviditet"     element={<Navigate to="/plan" replace />} />
-        <Route path="/likviditet-gammal" element={<LiquidityView />} />
-        <Route path="/floede"         element={<FlowView />} />
-        <Route path="/rapport"        element={<ReportView />} />
-        <Route path="/avstamning"     element={<ReconcileView />} />
-        <Route path="/transaktioner"  element={<TransactionListView />} />
-        <Route path="/importera"      element={<ImportView />} />
-        <Route path="/kvitton"        element={<GroceryReceiptsView />} />
-        <Route path="/installningar"  element={<SettingsView />} />
-        <Route path="/hjalp"          element={<HelpView />} />
-      </Routes>
-    </BrowserRouter>
+      <BrowserRouter basename="/budgetmanager">
+        <AppRoutes />
+      </BrowserRouter>
     </PinGate>
   )
 }

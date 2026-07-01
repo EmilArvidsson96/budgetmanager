@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { Plus, Trash2, Edit2, X, Check, ArrowRight } from 'lucide-react'
+import { Plus, Trash2, Edit2, X, Check, ArrowRight, RefreshCw } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
@@ -10,6 +10,8 @@ import { RECEIPT_MODELS, DEFAULT_RECEIPT_MODEL } from '@/utils/receiptModels'
 import { slugify } from '@/utils/slug'
 import { getSalaryAnchors } from '@/utils/salaryDetection'
 import { MONTH_NAMES_SHORT } from '@/utils/budgetHelpers'
+import { loadSyncConfig, saveSyncConfig, clearSyncConfig } from '@/utils/githubSync'
+import { useSyncStatus, triggerManualSync } from '@/hooks/useGitHubSync'
 import type { Account, RecurringItem, AccountType, ZlantarCategoryRule, CategoryDef, Level3Def } from '@/types'
 
 function newId() { return `id-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
@@ -30,7 +32,7 @@ const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = Object.fromEntries(
 ) as Record<AccountType, string>
 
 export function SettingsView() {
-  const [tab, setTab] = useState<'general' | 'accounts' | 'recurring' | 'categories' | 'mapping' | 'api'>('general')
+  const [tab, setTab] = useState<'general' | 'accounts' | 'recurring' | 'categories' | 'mapping' | 'api' | 'sync'>('general')
 
   return (
     <Layout>
@@ -44,6 +46,7 @@ export function SettingsView() {
           { key: 'categories', label: 'Kategorier' },
           { key: 'mapping',    label: 'Zlantar-mappning' },
           { key: 'api',        label: 'API-nycklar' },
+          { key: 'sync',       label: 'Synkronisering' },
         ] as const).map(({ key, label }) => (
           <button
             key={key}
@@ -62,6 +65,7 @@ export function SettingsView() {
       {tab === 'categories' && <CategoriesTab />}
       {tab === 'mapping'    && <ZlantarMappingTab />}
       {tab === 'api'        && <ApiKeysTab />}
+      {tab === 'sync'       && <SyncTab />}
     </Layout>
   )
 }
@@ -1269,6 +1273,172 @@ function ZlantarMappingTab() {
           })}
         </div>
       </Card>
+    </div>
+  )
+}
+
+// ─── Sync tab ─────────────────────────────────────────────────────────────────
+
+function SyncTab() {
+  const existing = loadSyncConfig()
+  const [token, setToken] = useState(existing?.token ?? '')
+  const [repo, setRepo]   = useState(existing ? `${existing.owner}/${existing.repo}` : '')
+  const [path, setPath]   = useState(existing?.path ?? 'budget-data.json')
+  const [showToken, setShowToken] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const { status, error, lastSyncedAt } = useSyncStatus()
+
+  const isConfigured = Boolean(existing?.token)
+
+  const save = () => {
+    const [owner, ...rest] = repo.trim().split('/')
+    const repoName = rest.join('/')
+    if (!token.trim() || !owner || !repoName) return
+    saveSyncConfig({ token: token.trim(), owner: owner.trim(), repo: repoName.trim(), path: path.trim() || 'budget-data.json' })
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+    // Reload page so the hook re-initialises with new config
+    window.location.reload()
+  }
+
+  const remove = () => {
+    clearSyncConfig()
+    setToken('')
+    setRepo('')
+    setPath('budget-data.json')
+  }
+
+  const syncNow = async () => {
+    setSyncing(true)
+    await triggerManualSync()
+    setSyncing(false)
+  }
+
+  const fmtTime = (iso: string | null) => {
+    if (!iso) return '–'
+    const d = new Date(iso)
+    return `${d.toLocaleDateString('sv-SE')} ${d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}`
+  }
+
+  const statusBadge = () => {
+    if (status === 'syncing') return <Badge variant="amber">Synkar…</Badge>
+    if (status === 'error')   return <Badge variant="red">Fel</Badge>
+    if (status === 'ok')      return <Badge variant="green">Synkad</Badge>
+    return <Badge variant="gray">Ej konfigurerad</Badge>
+  }
+
+  return (
+    <div className="max-w-lg space-y-6">
+      <Card>
+        <CardHeader
+          title="GitHub-synkronisering"
+          subtitle="Spara din budgetdata i ett privat GitHub-repo så att dator och telefon alltid ser samma data. Ändringar synkroniseras automatiskt inom 5 sekunder."
+        />
+        <div className="space-y-4">
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">
+              Personal Access Token{' '}
+              <span className="font-normal text-gray-400">(sparas lokalt, skickas aldrig till GitHub-filen)</span>
+            </label>
+            <div className="relative">
+              <input
+                type={showToken ? 'text' : 'password'}
+                value={token}
+                onChange={(e) => { setToken(e.target.value); setSaved(false) }}
+                placeholder="ghp_…"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-brand-400 pr-14"
+              />
+              <button
+                type="button"
+                onClick={() => setShowToken((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs"
+              >
+                {showToken ? 'Dölj' : 'Visa'}
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-gray-400">
+              Skapa under GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens.
+              Ge token <strong>Contents: Read and write</strong> på det valda repot.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">Repo <span className="font-normal text-gray-400">(ägare/repo-namn)</span></label>
+            <input
+              type="text"
+              value={repo}
+              onChange={(e) => { setRepo(e.target.value); setSaved(false) }}
+              placeholder="användarnamn/mitt-budget-repo"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">Filsökväg i repot</label>
+            <input
+              type="text"
+              value={path}
+              onChange={(e) => { setPath(e.target.value); setSaved(false) }}
+              placeholder="budget-data.json"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+            />
+          </div>
+
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              onClick={save}
+              variant={saved ? 'secondary' : 'primary'}
+              size="md"
+              disabled={!token.trim() || !repo.trim()}
+            >
+              {saved ? '✓ Sparat' : 'Spara & aktivera'}
+            </Button>
+            {isConfigured && (
+              <Button
+                onClick={syncNow}
+                variant="secondary"
+                size="md"
+                disabled={syncing}
+              >
+                <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+                Synka nu
+              </Button>
+            )}
+            {isConfigured && (
+              <Button onClick={remove} variant="secondary" size="md">
+                <Trash2 className="w-4 h-4" />
+                Ta bort
+              </Button>
+            )}
+          </div>
+        </div>
+      </Card>
+
+      {isConfigured && (
+        <Card>
+          <CardHeader title="Synkstatus" />
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500">Status</span>
+              {statusBadge()}
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500">Senast synkad</span>
+              <span className="text-gray-700">{fmtTime(lastSyncedAt)}</span>
+            </div>
+            {error && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 break-all">
+                {error}
+              </div>
+            )}
+            <p className="text-xs text-gray-400 pt-1">
+              Ändringar i appen skickas automatiskt till GitHub inom 5 sekunder.
+              Öppna appen på en annan enhet så hämtas den senaste versionen direkt.
+            </p>
+          </div>
+        </Card>
+      )}
     </div>
   )
 }
