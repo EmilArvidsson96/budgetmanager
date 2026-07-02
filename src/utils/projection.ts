@@ -229,6 +229,7 @@ function manualNetForMonth(state: AppState, monthId: string, anchors?: SalaryAnc
   for (const plan of Object.values(state.liquidityPlans)) {
     for (const e of plan.entries) {
       if (!e.date) continue
+      if (e.includeInProjection === false) continue
       if (getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, anchors) === monthId) {
         net += e.amount
       }

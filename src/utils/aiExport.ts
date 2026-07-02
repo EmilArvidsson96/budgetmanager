@@ -295,7 +295,8 @@ function openItemsSection(state: AppState, todayIso: string): string[] {
   if (oneOffs.length) {
     lines.push('', '**Planerade engångsposter (framåt):**')
     for (const e of oneOffs.slice(0, 30)) {
-      lines.push(`- ${e.date}: ${e.description || '(utan beskrivning)'} ${krSigned(e.amount)}`)
+      const excluded = e.includeInProjection === false ? ' (ingår ej i likviditetsprognosen)' : ''
+      lines.push(`- ${e.date}: ${e.description || '(utan beskrivning)'} ${krSigned(e.amount)}${excluded}`)
     }
   }
 

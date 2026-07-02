@@ -272,6 +272,10 @@ export interface LiquidityEntry {
   accountId?: string
   isRecurring?: boolean
   isConfirmed?: boolean
+  // Whether this entry is counted in the liquidity projection. Defaults to
+  // true when unset — set to false to keep a planned one-time cost on record
+  // without it affecting the projected balance.
+  includeInProjection?: boolean
 }
 
 export interface LiquidityPlan {

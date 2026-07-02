@@ -354,7 +354,7 @@ export function PlanView() {
   const carryForward = lastBudgetYear != null && endYear > lastBudgetYear
 
   // ── One-off entry handling (reuses liquidityPlans) ──────────────────────────
-  const [form, setForm] = useState<Partial<LiquidityEntry>>({ type: 'expense', date: todayIso })
+  const [form, setForm] = useState<Partial<LiquidityEntry>>({ type: 'expense', date: todayIso, includeInProjection: true })
   const addEntry = () => {
     if (!form.description || !form.date || !form.amount) return
     const year = form.date.slice(0, 4)
@@ -365,13 +365,14 @@ export function PlanView() {
       amount: form.type === 'expense' || form.type === 'loan_payment' ? -Math.abs(form.amount) : Math.abs(form.amount),
       type: form.type ?? 'expense',
       isConfirmed: false,
+      includeInProjection: form.includeInProjection === false ? false : undefined,
     }
     if (!store.liquidityPlans[year]) {
       const plan: LiquidityPlan = { id: year, year: Number(year), entries: [], startingBalances: [], startingBalanceMode: 'computed' }
       store.upsertLiquidityPlan(plan)
     }
     store.upsertLiquidityEntry(year, entry)
-    setForm({ type: 'expense', date: form.date })
+    setForm({ type: 'expense', date: form.date, includeInProjection: true })
     setShowForm(false)
   }
 
@@ -413,6 +414,7 @@ export function PlanView() {
   const plannedByLabel = useMemo(() => {
     const byLabel = new Map<string, LiquidityEntry[]>()
     for (const { entry } of upcomingEntries) {
+      if (entry.includeInProjection === false) continue
       const mid = getMonthIdForDate(entry.date, settings.monthStartDay, settings.monthStartBusinessDay, anchors)
       const m = months.find((mo) => mo.monthId === mid)
       if (!m) continue
@@ -826,6 +828,17 @@ export function PlanView() {
                     onChange={(e) => setForm((f) => ({ ...f, amount: parseFloat(e.target.value) }))}
                     className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
                 </div>
+                <div className="flex items-end gap-2">
+                  <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer pb-1.5">
+                    <input
+                      type="checkbox"
+                      checked={form.includeInProjection ?? true}
+                      onChange={(e) => setForm((f) => ({ ...f, includeInProjection: e.target.checked }))}
+                      className="rounded"
+                    />
+                    Ingår i likviditetsprognos
+                  </label>
+                </div>
               </div>
               <div className="flex gap-2">
                 <Button size="sm" onClick={addEntry}>Lägg till</Button>
@@ -842,12 +855,13 @@ export function PlanView() {
                   <th className="text-left px-4 py-2">Beskrivning</th>
                   <th className="text-left px-4 py-2">Typ</th>
                   <th className="text-right px-4 py-2">Belopp</th>
+                  <th className="text-center px-4 py-2">Prognos</th>
                   <th className="px-4 py-2"></th>
                 </tr>
               </thead>
               <tbody>
                 {upcomingEntries.length === 0 && (
-                  <tr><td colSpan={5} className="text-center text-gray-400 py-8">Inga planerade engångsposter inom horisonten</td></tr>
+                  <tr><td colSpan={6} className="text-center text-gray-400 py-8">Inga planerade engångsposter inom horisonten</td></tr>
                 )}
                 {upcomingEntries.map(({ planYear, entry }) => (
                   <tr key={entry.id} className="border-t border-gray-100 hover:bg-gray-50">
@@ -860,6 +874,20 @@ export function PlanView() {
                     </td>
                     <td className={`px-4 py-2.5 text-right font-medium ${entry.amount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {formatCurrency(entry.amount, true)}
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      <input
+                        type="checkbox"
+                        checked={entry.includeInProjection !== false}
+                        onChange={(e) =>
+                          store.upsertLiquidityEntry(planYear, {
+                            ...entry,
+                            includeInProjection: e.target.checked ? undefined : false,
+                          })
+                        }
+                        className="rounded"
+                        title="Ingår i likviditetsprognos"
+                      />
                     </td>
                     <td className="px-4 py-2.5">
                       <button onClick={() => store.removeLiquidityEntry(planYear, entry.id)} className="text-gray-300 hover:text-red-500 transition-colors">
