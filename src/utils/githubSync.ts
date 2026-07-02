@@ -54,9 +54,13 @@ export function clearSyncConfig() {
   localStorage.removeItem(SYNC_CONFIG_KEY)
 }
 
+// Returns null when the file doesn't exist at all (404). When the file exists
+// but is empty or not valid sync JSON (e.g. a placeholder created by hand in the
+// GitHub UI), returns { file: null, sha } so the caller can overwrite it in place
+// with local data using that sha.
 export async function fetchFromGitHub(
   config: SyncConfig
-): Promise<{ file: GitHubFileContent; sha: string } | null> {
+): Promise<{ file: GitHubFileContent | null; sha: string } | null> {
   const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${config.path}`
   const res = await fetch(url, {
     headers: {
@@ -70,8 +74,14 @@ export async function fetchFromGitHub(
     throw new Error(`GitHub: ${res.status} ${body.message ?? res.statusText}`)
   }
   const raw = await res.json() as { content: string; sha: string }
-  const decoded = decodeURIComponent(escape(atob(raw.content.replace(/\n/g, ''))))
-  return { file: JSON.parse(decoded) as GitHubFileContent, sha: raw.sha }
+  const decoded = decodeURIComponent(escape(atob((raw.content ?? '').replace(/\n/g, '')))).trim()
+  if (!decoded) return { file: null, sha: raw.sha }
+  try {
+    return { file: JSON.parse(decoded) as GitHubFileContent, sha: raw.sha }
+  } catch {
+    // File exists but isn't valid sync JSON — treat as empty and let local data win.
+    return { file: null, sha: raw.sha }
+  }
 }
 
 export async function pushToGitHub(

@@ -82,11 +82,13 @@ export function useGitHubSync() {
       try {
         const result = await fetchFromGitHub(config)
 
-        if (!result) {
-          // Repo file doesn't exist yet — upload current local data
+        if (!result || !result.file) {
+          // File doesn't exist (result null) or exists but is empty/invalid
+          // (result.file null, sha set). Either way, upload current local data —
+          // passing the sha when present so an existing placeholder is overwritten.
           const state = extractAppStateForSync(useAppStore.getState() as unknown as Record<string, unknown>)
           const pushedAt = new Date().toISOString()
-          const sha = await pushToGitHub(config, state, null, pushedAt)
+          const sha = await pushToGitHub(config, state, result?.sha ?? null, pushedAt)
           _currentSha = sha
           updateSyncMeta({ lastPushedAt: pushedAt, lastFileSha: sha })
           setStatus('ok', undefined, pushedAt)
