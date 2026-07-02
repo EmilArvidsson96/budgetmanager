@@ -180,10 +180,10 @@ function GeneralTab() {
               <div>
                 <span className="text-sm font-medium text-gray-700">Starta perioden när lönen kommer</span>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  Lär sig ditt återkommande lönebelopp från historiken och letar efter en insättning
-                  inom ±&#8202;{store.settings.salaryAmountTolerancePct ?? 20}&#8202;% av det, runt startdagen ovan — oavsett
-                  vad transaktionen heter. Perioden börjar på det faktiska lönedatumet; startdagen blir
-                  förväntad lönedag och reserv för månader där ingen lön hittas.
+                  Söker igenom hela månaden efter din lön — i första hand en insättning som är
+                  kategoriserad som lön, annars ett återkommande belopp (±&#8202;{store.settings.salaryAmountTolerancePct ?? 20}&#8202;%).
+                  Skatteåterbäring, ränta och bidrag räknas inte som lön. Perioden börjar på det
+                  faktiska lönedatumet; startdagen ovan blir bara reserv för månader där ingen lön hittas.
                 </p>
               </div>
             </label>
@@ -191,17 +191,6 @@ function GeneralTab() {
             {salaryAnchoredMonths && (
               <div className="mt-4 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-medium text-gray-600 block mb-1">Sökfönster (± dagar)</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={store.settings.salaryDetectionWindowDays ?? 6}
-                      onChange={(e) => store.updateSettings({ salaryDetectionWindowDays: Math.max(1, Math.min(20, parseInt(e.target.value) || 6)) })}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
-                    />
-                  </div>
                   <div>
                     <label className="text-xs font-medium text-gray-600 block mb-1">Beloppstolerans (±&nbsp;%)</label>
                     <input
@@ -246,7 +235,7 @@ function GeneralTab() {
                       {anchorEntries.slice(0, 18).map(([id]) => {
                         const m = salaryInfo.matches[id]
                         return (
-                          <span key={id} className="inline-flex items-center gap-1 text-[11px] bg-white border border-gray-200 rounded px-2 py-0.5 text-gray-600" title={m?.via === 'tag' ? 'Hittad via kategori-tagg' : m?.via === 'both' ? 'Återkommande belopp + tagg' : 'Återkommande belopp'}>
+                          <span key={id} className="inline-flex items-center gap-1 text-[11px] bg-white border border-gray-200 rounded px-2 py-0.5 text-gray-600" title={m?.via === 'tag' ? 'Hittad via lönekategori' : 'Hittad via återkommande belopp'}>
                             <span className="font-medium text-gray-800">{fmtPeriod(id)}</span>
                             <span className="text-gray-400">→</span>
                             <span>{fmtDay(m?.date ?? '')}</span>

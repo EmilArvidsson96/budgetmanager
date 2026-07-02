@@ -550,8 +550,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   monthStartDay: 1,
   monthStartBusinessDay: false,
   salaryAnchoredMonths: false,
-  salaryDetectionWindowDays: 6,
-  salaryMinAmount: 5000,
+  salaryMinAmount: 20000,
   salaryAmountTolerancePct: 20,
   salaryMinRecurringMonths: 2,
   categories: DEFAULT_CATEGORIES,
@@ -656,7 +655,6 @@ export const useAppStore = create<AppStore>()(
             (s.monthStartDay !== undefined && s.monthStartDay !== state.settings.monthStartDay) ||
             (s.monthStartBusinessDay !== undefined && s.monthStartBusinessDay !== state.settings.monthStartBusinessDay) ||
             (s.salaryAnchoredMonths !== undefined && s.salaryAnchoredMonths !== state.settings.salaryAnchoredMonths) ||
-            (s.salaryDetectionWindowDays !== undefined && s.salaryDetectionWindowDays !== state.settings.salaryDetectionWindowDays) ||
             (s.salaryMinAmount !== undefined && s.salaryMinAmount !== state.settings.salaryMinAmount) ||
             (s.salaryAmountTolerancePct !== undefined && s.salaryAmountTolerancePct !== state.settings.salaryAmountTolerancePct) ||
             (s.salaryMinRecurringMonths !== undefined && s.salaryMinRecurringMonths !== state.settings.salaryMinRecurringMonths)

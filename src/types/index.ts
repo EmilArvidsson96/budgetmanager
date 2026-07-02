@@ -424,8 +424,7 @@ export interface AppSettings {
   // that month, instead of the fixed monthStartDay. monthStartDay then acts as the
   // expected day (window centre + fallback when no salary is detected).
   salaryAnchoredMonths?: boolean        // default false; when on, periods start at detected salary
-  salaryDetectionWindowDays?: number    // ± days around monthStartDay to search (default 6)
-  salaryMinAmount?: number              // min positive amount to count as salary (default 5000)
+  salaryMinAmount?: number              // min positive amount to count as salary (default 20000)
   salaryAmountTolerancePct?: number     // ± band around a recurring amount, e.g. 20 (default 20)
   salaryMinRecurringMonths?: number     // months an amount must recur in to count (default 2)
   categories: CategoryDef[]

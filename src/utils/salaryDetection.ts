@@ -1,27 +1,26 @@
 // Salary detection — find the date salary actually landed each month so a budget
 // period can begin "when the salary comes" instead of on a fixed nominal day.
 //
-// Why: a fixed monthStartDay (+ the simple Sat/Sun→Fri shift) only approximates
-// payday. Real salary dates wobble (employer differences, red days), so the fixed
-// boundary mis-buckets the salary itself or nearby transactions.
+// Why: a fixed monthStartDay only approximates payday, so the boundary mis-buckets
+// the salary and nearby transactions. We pin the boundary to the real credit.
 //
-// The label is unreliable: Zlantar sometimes tags the credit 'salary', sometimes
-// it's just the employer's name and the category is something else. So we don't
-// trust the tag. The robust signal is a RECURRING deposit of roughly the same
-// size (±tolerance) landing near the expected payday every month. We learn that
-// amount from history and match on it; the category tag is only a bonus signal.
+// What the real data taught us (see the household's history):
+//   • Salary lands on days ~18–28 and is reliably tagged income/salary — even when
+//     the description is the employer's name rather than "LÖN".
+//   • The confusers are OTHER large recurring credits earlier in the month: tax
+//     refunds (raw category 'refund', e.g. "SK9610…"), which are salary-sized and
+//     recur, so an amount-only heuristic wrongly picks them.
+// So detection: search the WHOLE calendar month (never a window tied to
+// monthStartDay), take the income/salary-tagged credit as the primary signal, and
+// only fall back to a recurring-amount match — with refund/interest/sale/subsidy
+// explicitly excluded — for months that have no tagged salary at all.
 //
-// Approach, per calendar month:
-//   1. collect "window credits" — positive, non-transfer credits ≥ minAmount that
-//      land within monthStartDay ± windowDays (clamped to the calendar month).
-//   2. a window credit is salary-like if EITHER its amount recurs (within
-//      tolerance) in ≥ minRecurring distinct months, OR it's tagged income/salary.
-//   3. the EARLIEST salary-like credit that month is the anchor — the period
-//      begins when the household's money first arrives. With two earners the
-//      second salary a few days later falls naturally into the same period.
+// Anchoring rule: the EARLIEST qualifying credit that month is the anchor — the
+// period begins when the household's money first arrives. With two earners the
+// second salary a few days later falls naturally into the same period.
 //
-// The window is clamped to the calendar month so anchors[M] always lands within
-// month M, which is the invariant getMonthIdForDate relies on (see periodUtils).
+// Every anchor lands within its own calendar month (all candidates come from that
+// month), which is the invariant getMonthIdForDate relies on (see periodUtils).
 
 import type {
   ZlantarTransaction,
@@ -36,7 +35,7 @@ import { resolveTxCategory } from '@/utils/zlantarParser'
 export interface SalaryMatch {
   date: string          // ISO date the period is anchored to
   amount: number        // the matched credit amount
-  via: 'recurring' | 'tag' | 'both'
+  via: 'tag' | 'recurring'
 }
 
 export interface SalaryAnchorInfo {
@@ -51,24 +50,23 @@ export interface SalaryAnchorInfo {
   matches: Record<string, SalaryMatch>
 }
 
-function daysInMonth(year: number, month: number): number {
-  return new Date(year, month, 0).getDate()
-}
+// Income subtypes / raw Zlantar categories that are income but NOT salary. Kept
+// out of the recurring-amount fallback so a recurring tax refund never anchors.
+const NON_SALARY_SUBS = new Set(['refund', 'sale', 'interest'])
+const NON_SALARY_RAW = new Set(['refund', 'sale', 'interest', 'subsidy', 'account', 'stocks'])
 
-// A candidate credit that landed inside a month's payday window.
-interface WindowCredit {
+interface Candidate {
   periodId: string
   date: string
   amount: number
   tagged: boolean       // resolves to income/salary
+  eligibleForRecurring: boolean  // not a known non-salary income (refund/etc.)
 }
 
 export interface SalaryDetectionOptions {
-  monthStartDay: number
-  windowDays: number
   minAmount: number
-  tolerancePct: number      // ± band around a recurring amount, e.g. 20
-  minRecurringMonths: number // how many distinct months an amount must recur in
+  tolerancePct: number       // ± band around a recurring amount, e.g. 20
+  minRecurringMonths: number // distinct months an amount must recur in
 }
 
 // Core detection. Pure — takes everything it needs as arguments.
@@ -79,79 +77,72 @@ export function detectSalaryAnchors(
   overrides: Record<string, TxOverride>,
   opts: SalaryDetectionOptions
 ): SalaryAnchorInfo {
-  const { monthStartDay, windowDays, minAmount, tolerancePct, minRecurringMonths } = opts
+  const { minAmount, tolerancePct, minRecurringMonths } = opts
   const tol = Math.max(0, tolerancePct) / 100
 
-  // Every period that has any non-transfer activity — used to flag the gaps.
   const activeMonths = new Set<string>()
-  // Positive credits that landed inside each month's payday window.
-  const windowCredits: WindowCredit[] = []
+  const candidates: Candidate[] = []
 
   for (const tx of transactions) {
     if (!tx.date || tx.transaction_type === 'transfer') continue
 
-    const year = parseInt(tx.date.slice(0, 4))
-    const month = parseInt(tx.date.slice(5, 7))
-    const day = parseInt(tx.date.slice(8, 10))
-    const periodId = `${year}-${String(month).padStart(2, '0')}`
+    const periodId = tx.date.slice(0, 7) // "YYYY-MM" — candidates are whole-month
     activeMonths.add(periodId)
 
     if (tx.amount < minAmount) continue
 
-    // Only credits inside the payday window count, so a mid-month bonus or a
-    // back-pay run doesn't hijack the boundary (and the anchor stays in-month).
-    const dim = daysInMonth(year, month)
-    const lo = Math.max(1, monthStartDay - windowDays)
-    const hi = Math.min(dim, monthStartDay + windowDays)
-    if (day < lo || day > hi) continue
-
     const { catId, subId } = resolveTxCategory(tx, categories, rules, overrides)
-    windowCredits.push({
+    const rawCat = tx.category ?? ''
+    const tagged = catId === 'income' && subId === 'salary'
+    const knownNonSalary = NON_SALARY_SUBS.has(subId) || NON_SALARY_RAW.has(rawCat)
+
+    candidates.push({
       periodId,
       date: tx.date,
       amount: tx.amount,
-      tagged: catId === 'income' && subId === 'salary',
+      tagged,
+      eligibleForRecurring: !knownNonSalary,
     })
   }
 
-  // Is this credit's amount recurring? True when at least `minRecurringMonths`
-  // DISTINCT months have a window credit within ±tol of it (counting its own).
-  const recurs = (amount: number): boolean => {
-    const lo = amount * (1 - tol)
-    const hi = amount * (1 + tol)
-    const months = new Set<string>()
-    for (const wc of windowCredits) {
-      if (wc.amount >= lo && wc.amount <= hi) months.add(wc.periodId)
-      if (months.size >= minRecurringMonths) return true
+  const anchors: SalaryAnchors = {}
+  const matches: Record<string, SalaryMatch> = {}
+  const setEarliest = (c: Candidate, via: SalaryMatch['via']) => {
+    const current = matches[c.periodId]
+    if (!current || c.date < current.date) {
+      anchors[c.periodId] = c.date
+      matches[c.periodId] = { date: c.date, amount: c.amount, via }
     }
-    return false
   }
-  // Memoize per distinct amount so we don't re-scan for every credit.
+
+  // Pass 1 — the reliable signal: earliest tagged salary per month.
+  for (const c of candidates) {
+    if (c.tagged) setEarliest(c, 'tag')
+  }
+
+  // Pass 2 — fallback for months with NO tagged salary: an amount that recurs
+  // across months (within tolerance), among salary-eligible credits only.
+  const recurPool = candidates.filter((c) => c.eligibleForRecurring)
   const recurCache = new Map<number, boolean>()
   const isRecurring = (amount: number): boolean => {
     const cached = recurCache.get(amount)
     if (cached !== undefined) return cached
-    const r = recurs(amount)
+    const lo = amount * (1 - tol)
+    const hi = amount * (1 + tol)
+    const months = new Set<string>()
+    for (const c of recurPool) {
+      if (c.amount >= lo && c.amount <= hi) months.add(c.periodId)
+      if (months.size >= minRecurringMonths) break
+    }
+    const r = months.size >= minRecurringMonths
     recurCache.set(amount, r)
     return r
   }
-
-  // Earliest salary-like credit per month becomes the anchor.
-  const anchors: SalaryAnchors = {}
-  const matches: Record<string, SalaryMatch> = {}
-  for (const wc of windowCredits) {
-    const recurring = isRecurring(wc.amount)
-    if (!recurring && !wc.tagged) continue
-
-    const current = matches[wc.periodId]
-    if (!current || wc.date < current.date) {
-      anchors[wc.periodId] = wc.date
-      matches[wc.periodId] = {
-        date: wc.date,
-        amount: wc.amount,
-        via: recurring && wc.tagged ? 'both' : recurring ? 'recurring' : 'tag',
-      }
-    }
+  for (const c of candidates) {
+    if (matches[c.periodId]) continue      // already tag-anchored this month
+    if (!c.eligibleForRecurring || c.tagged) continue
+    if (!isRecurring(c.amount)) continue
+    setEarliest(c, 'recurring')
   }
 
   const flaggedMonths = [...activeMonths].filter((m) => !anchors[m]).sort()
@@ -179,9 +170,7 @@ export function getSalaryAnchors(input: {
     settings.zlantarCategoryRules,
     input.transactionOverrides ?? {},
     {
-      monthStartDay: settings.monthStartDay,
-      windowDays: settings.salaryDetectionWindowDays ?? 6,
-      minAmount: settings.salaryMinAmount ?? 5000,
+      minAmount: settings.salaryMinAmount ?? 20000,
       tolerancePct: settings.salaryAmountTolerancePct ?? 20,
       minRecurringMonths: settings.salaryMinRecurringMonths ?? 2,
     }
