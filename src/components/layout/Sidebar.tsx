@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { APP_VERSION } from '../../version'
 import {
@@ -32,10 +32,13 @@ const NAV_ITEMS = [
 const PRIMARY_PATHS = ['/plan', '/floede', '/avstamning', '/rapport']
 const primaryItems = NAV_ITEMS.filter((i) => PRIMARY_PATHS.includes(i.to))
 const overflowItems = NAV_ITEMS.filter((i) => !PRIMARY_PATHS.includes(i.to))
+const SHEET_ID = 'mobile-more-sheet'
 
 export function Sidebar() {
   const location = useLocation()
   const [moreOpen, setMoreOpen] = useState(false)
+  const moreBtnRef = useRef<HTMLButtonElement>(null)
+  const sheetRef = useRef<HTMLDivElement>(null)
 
   // Close the sheet whenever the route changes (item picked, browser back, …).
   // Tracking the previous path and adjusting during render is React's recommended
@@ -44,6 +47,27 @@ export function Sidebar() {
   if (location.pathname !== prevPath) {
     setPrevPath(location.pathname)
     setMoreOpen(false)
+  }
+
+  // While the sheet is open: move focus into it, close on Escape (returning focus
+  // to the toggle), and clean the listener up. Keeps the overflow menu keyboard-
+  // operable now that these destinations are no longer always-visible links.
+  useEffect(() => {
+    if (!moreOpen) return
+    sheetRef.current?.querySelector<HTMLElement>('a')?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMoreOpen(false)
+        moreBtnRef.current?.focus()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [moreOpen])
+
+  const closeMore = () => {
+    setMoreOpen(false)
+    moreBtnRef.current?.focus()
   }
 
   const overflowActive = overflowItems.some((i) => location.pathname.startsWith(i.to))
@@ -95,7 +119,7 @@ export function Sidebar() {
       {moreOpen && (
         <div
           className="md:hidden fixed inset-0 z-30 bg-black/25"
-          onClick={() => setMoreOpen(false)}
+          onClick={closeMore}
           aria-hidden="true"
         />
       )}
@@ -105,11 +129,16 @@ export function Sidebar() {
         {/* Overflow sheet, anchored just above the bar */}
         {moreOpen && (
           <div className="absolute bottom-full inset-x-0 mb-2 px-3">
-            <div className="bg-warm-100 border border-warm-300 rounded-2xl shadow-xl overflow-hidden">
+            <div
+              ref={sheetRef}
+              id={SHEET_ID}
+              aria-label="Mer"
+              className="bg-warm-100 border border-warm-300 rounded-2xl shadow-xl overflow-hidden"
+            >
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-warm-300">
                 <span className="text-xs font-semibold uppercase tracking-wide text-warm-600">Mer</span>
                 <button
-                  onClick={() => setMoreOpen(false)}
+                  onClick={closeMore}
                   className="p-1 -mr-1 rounded-lg text-warm-500 hover:text-warm-900 hover:bg-warm-200 transition-colors"
                   aria-label="Stäng"
                 >
@@ -120,6 +149,7 @@ export function Sidebar() {
                 <NavLink
                   key={to}
                   to={to}
+                  onClick={() => setMoreOpen(false)}
                   className={({ isActive }) =>
                     `flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors
                     ${isActive ? 'bg-warm-200 text-warm-900' : 'text-warm-700 hover:bg-warm-200'}`
@@ -152,9 +182,12 @@ export function Sidebar() {
             </NavLink>
           ))}
           <button
+            ref={moreBtnRef}
             type="button"
             onClick={() => setMoreOpen((v) => !v)}
             aria-expanded={moreOpen}
+            aria-controls={SHEET_ID}
+            aria-haspopup="true"
             aria-label="Fler sektioner"
             className={`flex-1 flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition-colors
             ${moreOpen || overflowActive ? 'text-brand-500' : 'text-warm-500'}`}

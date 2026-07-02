@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react'
 
 // Matches Tailwind's `md` breakpoint (768px). Anything narrower is treated as a
 // phone so we can adapt touch-first affordances — currently chart tooltips.
-const MOBILE_QUERY = '(max-width: 767px)'
+// The .98 mirrors Tailwind's own max-width boundary so this JS query and the
+// `md:` CSS overrides flip at exactly the same point (no fractional-width gap).
+const MOBILE_QUERY = '(max-width: 767.98px)'
 
 export function useIsMobile(): boolean {
   const [isMobile, setIsMobile] = useState(

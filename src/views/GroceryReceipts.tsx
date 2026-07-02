@@ -222,7 +222,7 @@ function AreaTooltipContent({
     .filter((p) => ((orig[p.dataKey] as number) ?? 0) > 0)
 
   return (
-    <div className="bg-white border border-warm-200 rounded-xl shadow-lg p-3 text-xs space-y-1 max-h-72 overflow-auto">
+    <div className="bg-white border border-warm-200 rounded-xl shadow-lg p-3 text-xs space-y-1 max-h-72 overflow-auto max-w-[75vw] md:max-w-none">
       <p className="font-semibold text-gray-800 mb-1">{label}</p>
       {visible.map((p) => {
         const abs = (orig[p.dataKey] as number) ?? 0
@@ -257,7 +257,7 @@ function PieTooltipContent({
   if (!active || !payload?.length) return null
   const entry = payload[0]
   return (
-    <div className="bg-white border border-warm-200 rounded-xl shadow-lg p-3 text-xs">
+    <div className="bg-white border border-warm-200 rounded-xl shadow-lg p-3 text-xs max-w-[75vw] md:max-w-none">
       <p className="font-semibold mb-1" style={{ color: CHART_COLORS[entry.payload.cat] }}>
         {entry.name}
       </p>
