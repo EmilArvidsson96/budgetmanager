@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, Plus, Download, Trash2 } from 'lucide-react'
 import { Select } from '@/components/ui/Select'
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { useAppStore } from '@/store'
+import { useIsMobile, MOBILE_TOOLTIP_POSITION } from '@/hooks/useIsMobile'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -26,6 +27,7 @@ const TYPE_LABELS: Record<LiquidityEntry['type'], string> = {
 const DEFAULT_LARGE_TX_THRESHOLD = 5000
 
 export function LiquidityView() {
+  const isMobile = useIsMobile()
   const [year, setYear] = useState(new Date().getFullYear())
   const [exporting, setExporting] = useState(false)
   const [showForm, setShowForm] = useState(false)
@@ -226,13 +228,13 @@ export function LiquidityView() {
               )}
 
               {mode === 'manual' && (
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <input
                     type="number"
                     value={plan.manualStartingBalance ?? ''}
                     onChange={(e) => setManualBalance(parseFloat(e.target.value) || 0)}
                     placeholder="0"
-                    className="border border-gray-200 rounded-md px-3 py-1.5 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                    className="border border-gray-200 rounded-md px-3 py-1.5 text-sm w-full sm:w-40 focus:outline-none focus:ring-2 focus:ring-brand-500"
                   />
                   <span className="text-sm text-gray-500">kr</span>
                   {computed && (
@@ -260,7 +262,7 @@ export function LiquidityView() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v) => formatCurrency(Number(v ?? 0))} labelStyle={{ fontWeight: 600 }} />
+                  <Tooltip position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined} formatter={(v) => formatCurrency(Number(v ?? 0))} labelStyle={{ fontWeight: 600 }} />
                   <Line
                     type="monotone"
                     dataKey="balance"
@@ -289,6 +291,7 @@ export function LiquidityView() {
                 <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                 <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} tick={{ fontSize: 11 }} />
                 <Tooltip
+                  position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
                   formatter={(v) => formatCurrency(Number(v ?? 0))}
                   labelStyle={{ fontWeight: 600 }}
                 />
@@ -369,7 +372,7 @@ export function LiquidityView() {
                       Bekräftad
                     </label>
                   </div>
-                  <div className="flex items-end gap-2">
+                  <div className="col-span-2 md:col-span-1 flex items-end gap-2">
                     <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer pb-1.5">
                       <input
                         type="checkbox"
@@ -390,7 +393,7 @@ export function LiquidityView() {
 
             {/* Table */}
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[720px] text-sm">
                 <thead>
                   <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                     <th className="text-left px-4 py-2">Datum</th>
@@ -469,7 +472,7 @@ export function LiquidityView() {
           </Card>
           {/* Large transactions from imports */}
           <Card padding={false}>
-            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-5 border-b border-gray-100">
               <div>
                 <h3 className="font-semibold text-gray-900">Stora transaktioner från import</h3>
                 <p className="text-sm text-gray-500">{largeTxs.length} transaktioner för {year}</p>
@@ -486,7 +489,7 @@ export function LiquidityView() {
               </div>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[520px] text-sm">
                 <thead>
                   <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                     <th className="text-left px-4 py-2">Datum</th>

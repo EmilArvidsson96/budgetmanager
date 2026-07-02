@@ -203,7 +203,7 @@ function TxRow({
 
   return (
     <div
-      className={`grid grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-4 px-4 py-2.5 items-center transition-colors
+      className={`grid grid-cols-[4.5rem_1fr_auto_1.75rem] md:grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-2 md:gap-x-4 px-4 py-2.5 items-center transition-colors
         ${editing ? 'bg-warm-50' : 'hover:bg-gray-50'}`}
     >
       {/* Date */}
@@ -218,12 +218,12 @@ function TxRow({
       </span>
 
       {/* Account */}
-      <span className="text-xs text-gray-400 truncate text-right" title={tx.account_name}>
+      <span className="hidden md:block text-xs text-gray-400 truncate text-right" title={tx.account_name}>
         {tx.account_name}
       </span>
 
       {/* Category */}
-      <span className="text-xs text-gray-500 truncate">
+      <span className="hidden md:block text-xs text-gray-500 truncate">
         {cat ? (
           <>
             {cat.name}
@@ -420,8 +420,8 @@ export function TransactionListView() {
               </button>
             )}
           </div>
-          <Select value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)} options={accountOptions} placeholder="Alla konton" className="w-48" />
-          <Select value={txTypeFilter} onChange={(e) => setTxTypeFilter(e.target.value)} options={Object.entries(TX_TYPE_LABELS).map(([value, label]) => ({ value, label }))} placeholder="Alla typer" className="w-40" />
+          <Select value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)} options={accountOptions} placeholder="Alla konton" className="w-full sm:w-48" />
+          <Select value={txTypeFilter} onChange={(e) => setTxTypeFilter(e.target.value)} options={Object.entries(TX_TYPE_LABELS).map(([value, label]) => ({ value, label }))} placeholder="Alla typer" className="w-full sm:w-40" />
           <button
             onClick={() => setShowAdvanced((v) => !v)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors
@@ -450,11 +450,11 @@ export function TransactionListView() {
               <span className="shrink-0">Till</span>
               <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
             </div>
-            <div className="flex items-center gap-1.5 text-sm text-gray-500">
+            <div className="flex flex-wrap items-center gap-1.5 text-sm text-gray-500">
               <span className="shrink-0">Belopp</span>
-              <input type="number" value={minAmt} onChange={(e) => setMinAmt(e.target.value)} placeholder="Min" min="0" className="w-24 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+              <input type="number" value={minAmt} onChange={(e) => setMinAmt(e.target.value)} placeholder="Min" min="0" className="w-20 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
               <span className="text-gray-400">–</span>
-              <input type="number" value={maxAmt} onChange={(e) => setMaxAmt(e.target.value)} placeholder="Max" min="0" className="w-24 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+              <input type="number" value={maxAmt} onChange={(e) => setMaxAmt(e.target.value)} placeholder="Max" min="0" className="w-20 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
               <span className="text-gray-400 text-xs">kr (abs)</span>
             </div>
             <Select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} options={categoryOptions} placeholder="Alla kategorier" className="w-48" />
@@ -464,7 +464,7 @@ export function TransactionListView() {
 
       {/* ── Summary strip ── */}
       {resolved.length > 0 && (
-        <div className="flex gap-6 text-sm text-gray-500 mb-4 px-1">
+        <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-500 mb-4 px-1">
           <span><span className="font-medium text-gray-700">{summary.count}</span> transaktioner</span>
           {summary.income !== 0 && <span>In: <span className="font-medium text-emerald-600">{formatCurrency(summary.income)}</span></span>}
           {summary.expense !== 0 && <span>Ut: <span className="font-medium text-red-600">{formatCurrency(Math.abs(summary.expense))}</span></span>}
@@ -481,18 +481,18 @@ export function TransactionListView() {
         </div>
       ) : (
         <div className="bg-white border border-gray-200 rounded-2xl">
-          {/* Column headers — 6 cols matching TxRow */}
-          <div className="grid grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-4 px-4 py-2.5 border-b border-gray-100 bg-gray-50 rounded-t-2xl text-xs font-medium text-gray-500 uppercase tracking-wide">
+          {/* Column headers — 6 cols matching TxRow (Konto/Kategori hidden on mobile) */}
+          <div className="grid grid-cols-[4.5rem_1fr_auto_1.75rem] md:grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-2 md:gap-x-4 px-4 py-2.5 border-b border-gray-100 bg-gray-50 rounded-t-2xl text-xs font-medium text-gray-500 uppercase tracking-wide">
             <button onClick={() => toggleSort('date')} className="flex items-center text-left hover:text-gray-700 transition-colors whitespace-nowrap">
               Datum <SortIcon field="date" />
             </button>
             <button onClick={() => toggleSort('description')} className="flex items-center text-left hover:text-gray-700 transition-colors">
               Beskrivning <SortIcon field="description" />
             </button>
-            <button onClick={() => toggleSort('account')} className="flex items-center justify-end hover:text-gray-700 transition-colors whitespace-nowrap">
+            <button onClick={() => toggleSort('account')} className="hidden md:flex items-center justify-end hover:text-gray-700 transition-colors whitespace-nowrap">
               Konto <SortIcon field="account" />
             </button>
-            <span>Kategori</span>
+            <span className="hidden md:block">Kategori</span>
             <button onClick={() => toggleSort('amount')} className="flex items-center justify-end hover:text-gray-700 transition-colors whitespace-nowrap">
               Belopp <SortIcon field="amount" />
             </button>
@@ -504,8 +504,8 @@ export function TransactionListView() {
             {rows.map((row, i) => {
               if (row.type === 'month') {
                 return (
-                  <div key={`month-${i}`} className="grid grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-4 px-4 py-2 bg-warm-50 border-y border-warm-200">
-                    <span className="text-xs font-semibold text-gray-600 col-span-5">{row.label}</span>
+                  <div key={`month-${i}`} className="grid grid-cols-[4.5rem_1fr_auto_1.75rem] md:grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-2 md:gap-x-4 px-4 py-2 bg-warm-50 border-y border-warm-200">
+                    <span className="text-xs font-semibold text-gray-600 col-span-2 md:col-span-5">{row.label}</span>
                     <span className={`text-xs font-semibold text-right ${row.total >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                       {formatCurrency(row.total, true)}
                     </span>

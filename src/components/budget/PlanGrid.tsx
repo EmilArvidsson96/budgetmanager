@@ -76,7 +76,7 @@ export function PlanGrid() {
   return (
     <Card padding={false}>
       <div className="flex items-center justify-between p-5 border-b border-gray-100">
-        <div>
+        <div className="min-w-0 pr-2">
           <h3 className="font-semibold text-gray-900">Kommande månader</h3>
           <p className="text-sm text-gray-500">Cellerna visar din bas — skriv bara i månader som ska avvika.</p>
         </div>
@@ -104,7 +104,7 @@ export function PlanGrid() {
                     <span className="text-xs font-medium text-gray-600 tabular-nums">{monthLabel(mid)}</span>
                     <button
                       onClick={() => removeMonth(mid)}
-                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition-all"
+                      className="md:opacity-0 md:group-hover:opacity-100 text-gray-300 hover:text-red-500 transition-all"
                       title="Ta bort månad"
                     >
                       <X className="w-3 h-3" />
@@ -128,7 +128,7 @@ export function PlanGrid() {
                     <span className="text-sm text-gray-800 truncate flex-1 min-w-0">{cat.name}</span>
                     <button
                       onClick={() => removeCategory(cat.id)}
-                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition-all shrink-0"
+                      className="md:opacity-0 md:group-hover:opacity-100 text-gray-300 hover:text-red-500 transition-all shrink-0"
                       title="Ta bort rad"
                     >
                       <X className="w-3 h-3" />
@@ -162,10 +162,10 @@ export function PlanGrid() {
         </table>
       </div>
 
-      <div className="flex items-center gap-3 p-4 border-t border-gray-100">
+      <div className="flex flex-wrap items-center gap-3 p-4 border-t border-gray-100">
         {availableCats.length > 0 ? (
           <Select
-            className="w-56"
+            className="w-full sm:w-56"
             value={addCat}
             onChange={(e) => { addCategory(e.target.value); setAddCat('') }}
             options={[{ value: '', label: '+ Lägg till kategori…' }, ...availableCats.map((c) => ({ value: c.id, label: c.name }))]}

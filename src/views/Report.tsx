@@ -96,7 +96,7 @@ export function ReportView() {
         actions={
           <div className="no-print flex flex-wrap items-center gap-2">
             <Select
-              className="w-40"
+              className="w-full sm:w-40"
               value={activeMonthId}
               onChange={(e) => {
                 setMonthId(e.target.value)
