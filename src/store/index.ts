@@ -29,6 +29,7 @@ import type {
   TxConflict,
   MonthClose,
   WealthForecastSnapshot,
+  CoachReview,
 } from '@/types'
 import {
   extractOwner,
@@ -474,6 +475,11 @@ function migrateV13(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, settings }
 }
 
+// v14 → v15: add coachReviews map for the AI financial coach.
+function migrateV14(raw: Record<string, unknown>): Record<string, unknown> {
+  return { ...raw, coachReviews: (raw.coachReviews as Record<string, CoachReview>) ?? {} }
+}
+
 // Rebuild one already-imported month's actuals from allTransactions + overrides,
 // preserving the snapshot's accountBalances / importedAt. Runs after every
 // re-categorization so aggregated budget totals stay in sync with the transactions.
@@ -668,6 +674,9 @@ interface AppStore extends AppState {
   // Wealth forecast snapshots (Rapport: this month's outlook vs last month's)
   captureWealthForecast: (snapshot: WealthForecastSnapshot) => void
 
+  // AI coach reviews (one saved review per assessed period)
+  saveCoachReview: (review: CoachReview) => void
+
   // Grocery receipts
   addGroceryReceipt: (receipt: GroceryReceipt) => void
   removeGroceryReceipt: (id: string) => void
@@ -696,6 +705,7 @@ export const useAppStore = create<AppStore>()(
       importConflicts: [],
       monthCloses: {},
       wealthForecasts: {},
+      coachReviews: {},
 
       updateSettings: (s) =>
         set((state) => {
@@ -980,6 +990,11 @@ export const useAppStore = create<AppStore>()(
           wealthForecasts: { ...state.wealthForecasts, [snapshot.takenForPeriod]: snapshot },
         })),
 
+      saveCoachReview: (review) =>
+        set((state) => ({
+          coachReviews: { ...state.coachReviews, [review.monthId]: review },
+        })),
+
       addGroceryReceipt: (receipt) =>
         set((state) => ({ groceryReceipts: [...state.groceryReceipts, receipt] })),
 
@@ -1006,7 +1021,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 14,
+      version: 15,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
@@ -1023,6 +1038,7 @@ export const useAppStore = create<AppStore>()(
         if (version < 12) state = migrateV11(state)
         if (version < 13) state = migrateV12(state)
         if (version < 14) state = migrateV13(state)
+        if (version < 15) state = migrateV14(state)
         return state
       },
       // On load: for salary-anchored users re-bucket actuals first (period labels
