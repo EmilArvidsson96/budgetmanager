@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { Select } from '@/components/ui/Select'
 import { RECEIPT_MODELS, DEFAULT_RECEIPT_MODEL } from '@/utils/receiptModels'
+import { DEFAULT_COACH_MODEL } from '@/utils/coach'
 import { slugify } from '@/utils/slug'
 import { getSalaryAnchors } from '@/utils/salaryDetection'
 import { MONTH_NAMES_SHORT } from '@/utils/budgetHelpers'
@@ -1631,6 +1632,8 @@ function ApiKeysTab() {
   const [saved, setSaved] = useState(false)
   const [show, setShow] = useState(false)
   const model = store.settings.anthropicModel ?? DEFAULT_RECEIPT_MODEL
+  const coachEnabled = !!store.settings.coachEnabled
+  const coachModel = store.settings.coachModel ?? DEFAULT_COACH_MODEL
 
   function save() {
     store.updateSettings({ anthropicApiKey: key.trim() || undefined })
@@ -1709,6 +1712,55 @@ function ApiKeysTab() {
               <span className="text-sm text-gray-700 group-hover:text-gray-900">{m.label}</span>
             </label>
           ))}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="AI-ekonomicoach"
+          subtitle="Sifferdriven månadsöversikt vid varje avräkning + on-request-chat i Avstämning"
+        />
+        <div className="space-y-4">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={coachEnabled}
+              onChange={(e) => store.updateSettings({ coachEnabled: e.target.checked })}
+              className="mt-0.5 rounded accent-brand-600"
+            />
+            <div>
+              <span className="text-sm font-medium text-gray-700">Aktivera coachen</span>
+              <p className="text-xs text-gray-400 mt-0.5">
+                När en ny löneperiod börjar erbjuder Avstämning en kort genomgång av månaden som stängdes.
+                Bara färdigberäknade nyckeltal skickas till Claude – aldrig enskilda transaktioner. Utan
+                API-nyckel visas en automatisk (regelbaserad) översikt istället.
+              </p>
+            </div>
+          </label>
+
+          {coachEnabled && (
+            <div className="border-t border-gray-100 pt-4">
+              <p className="text-xs font-medium text-gray-500 mb-2">Modell för coachen</p>
+              <div className="space-y-2">
+                {RECEIPT_MODELS.map((m) => (
+                  <label key={m.id} className="flex items-center gap-3 cursor-pointer group">
+                    <input
+                      type="radio"
+                      name="coach-model"
+                      value={m.id}
+                      checked={coachModel === m.id}
+                      onChange={() => store.updateSettings({ coachModel: m.id })}
+                      className="accent-brand-600"
+                    />
+                    <span className="text-sm text-gray-700 group-hover:text-gray-900">{m.label}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-gray-400 mt-2">
+                Sonnet rekommenderas – översikten kräver kvantitativt resonemang, inte bara textextraktion.
+              </p>
+            </div>
+          )}
         </div>
       </Card>
     </div>

@@ -10,6 +10,9 @@ import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { budgetedAmount } from '@/utils/projection'
 import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
+import { CoachReviewCard } from '@/components/coach/CoachReviewCard'
+import { CoachChat } from '@/components/coach/CoachChat'
+import { coachDueMonthId } from '@/utils/coachDigest'
 import type { ZlantarTransaction, ZlantarCategoryRule, TxOverride } from '@/types'
 
 type RuleTarget = { appCategoryId: string; appSubcategoryId?: string }
@@ -52,8 +55,18 @@ function resolveCategory(
 
 export function ReconcileView() {
   const today = new Date()
-  const [year, setYear] = useState(today.getFullYear())
-  const [month, setMonth] = useState(today.getMonth() + 1)
+  // When the coach is on and a review is due, open on the month that just closed
+  // (the "avräkning" to review) instead of the in-progress calendar month. Seeded
+  // once — manual month navigation still works. getState() avoids reordering hooks.
+  const dueSeed = useMemo(() => {
+    const s = useAppStore.getState()
+    if (!s.settings.coachEnabled) return null
+    const id = coachDueMonthId(s)
+    return id ? { year: parseInt(id.slice(0, 4)), month: parseInt(id.slice(5, 7)) } : null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const [year, setYear] = useState(dueSeed?.year ?? today.getFullYear())
+  const [month, setMonth] = useState(dueSeed?.month ?? today.getMonth() + 1)
   const store = useAppStore()
   const { settings, actuals, monthCloses, reconciliations, allTransactions, transactionOverrides } = store
   const { categories, monthStartDay, monthStartBusinessDay, zlantarCategoryRules } = settings
@@ -274,6 +287,10 @@ export function ReconcileView() {
 
       {actual && (
         <div className="space-y-5">
+          {/* AI coach — monthly review + on-request chat */}
+          <CoachReviewCard monthId={monthId} />
+          <CoachChat monthId={monthId} />
+
           {/* Status banner */}
           {close ? (
             <div className={`flex items-start gap-2 text-sm rounded-xl px-4 py-3 border ${drifted ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
