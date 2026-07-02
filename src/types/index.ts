@@ -430,6 +430,10 @@ export interface AppSettings {
   anthropicModel?: string
   // Used as an extra keyword when matching swish/bank-transfers between owners.
   partnerName?: string
+  // Your own first name. Used to render a friendly disambiguation label (e.g.
+  // "Sparkonto (Emil)") when an account's owner is set to a self-referential
+  // placeholder like "Mig"/"Jag" instead of an actual name.
+  myName?: string
 }
 
 // Per-transaction category override, keyed by txKey (date|amount|description|

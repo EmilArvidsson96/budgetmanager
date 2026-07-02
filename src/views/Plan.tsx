@@ -13,6 +13,7 @@ import { formatCurrency } from '@/utils/budgetHelpers'
 import { getMonthIdForDate } from '@/utils/periodUtils'
 import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { buildProjection } from '@/utils/projection'
+import { buildAccountDisplayNames } from '@/utils/accountDisplay'
 import { exportToExcel } from '@/utils/excelExport'
 import { buildAiBriefing } from '@/utils/aiExport'
 import { BaselineEditor } from '@/components/budget/BaselineEditor'
@@ -187,9 +188,9 @@ function WealthBarShape(props: any) {
     const h = Math.max(1, Math.round(seg.value * ppu))
     const isTop = !(_assetSegs as any[]).slice(i + 1).some((s: any) => s.value > 0)
     els.push(isTop
-      ? <path key={seg.name} fill={seg.color} fillOpacity={0.9}
+      ? <path key={seg.id} fill={seg.color} fillOpacity={0.9}
           d={`M${x+R},${curY-h} h${width-2*R} a${R},${R} 0 0 1 ${R},${R} v${h-R} h${-width} v${-(h-R)} a${R},${R} 0 0 1 ${R},${-R}z`} />
-      : <rect key={seg.name} x={x} y={curY - h} width={width} height={h} fill={seg.color} fillOpacity={0.9} />)
+      : <rect key={seg.id} x={x} y={curY - h} width={width} height={h} fill={seg.color} fillOpacity={0.9} />)
     curY -= h
   })
 
@@ -200,9 +201,9 @@ function WealthBarShape(props: any) {
     const h = Math.max(1, Math.round(Math.abs(seg.value) * ppu))
     const isBottom = !(_liabSegs as any[]).slice(i + 1).some((s: any) => s.value < 0)
     els.push(isBottom
-      ? <path key={seg.name} fill={seg.color} fillOpacity={0.85}
+      ? <path key={seg.id} fill={seg.color} fillOpacity={0.85}
           d={`M${x},${negY} h${width} v${h-R} a${R},${R} 0 0 1 ${-R},${R} h${-(width-2*R)} a${R},${R} 0 0 1 ${-R},${-R}z`} />
-      : <rect key={seg.name} x={x} y={negY} width={width} height={h} fill={seg.color} fillOpacity={0.85} />)
+      : <rect key={seg.id} x={x} y={negY} width={width} height={h} fill={seg.color} fillOpacity={0.85} />)
     negY += h
   })
 
@@ -267,6 +268,16 @@ export function PlanView() {
   )
 
   const { months, accounts } = projection
+
+  // Disambiguates accounts that share the same name (e.g. two "Sparkonto")
+  // by appending the owner's first name, so charts/tables never merge or
+  // mislabel two accounts under one identical string.
+  const accountDisplayNames = useMemo(
+    () => buildAccountDisplayNames(store.settings.accounts, store.settings.myName),
+    [store.settings.accounts, store.settings.myName]
+  )
+  const displayName = (id: string, fallback: string) => accountDisplayNames.get(id) ?? fallback
+
   const now = months[0]
   const end = months[months.length - 1]
 
@@ -305,10 +316,10 @@ export function PlanView() {
     const assetSegs = assetAccounts.map((a, i) => {
       const linked = liabilitiesByAsset.get(a.id) ?? []
       const loanSum = linked.reduce((s, l) => s + (m.values[l.id] ?? 0), 0)
-      return { name: a.name, value: Math.max(0, Math.round((m.values[a.id] ?? 0) + loanSum)), color: ASSET_COLORS[i % ASSET_COLORS.length] }
+      return { id: a.id, name: displayName(a.id, a.name), value: Math.max(0, Math.round((m.values[a.id] ?? 0) + loanSum)), color: ASSET_COLORS[i % ASSET_COLORS.length] }
     })
     const liabSegs = unlinkedLiabilities.map((l, i) => ({
-      name: l.name, value: Math.round(m.values[l.id] ?? 0), color: LIABILITY_COLORS[i % LIABILITY_COLORS.length],
+      id: l.id, name: displayName(l.id, l.name), value: Math.round(m.values[l.id] ?? 0), color: LIABILITY_COLORS[i % LIABILITY_COLORS.length],
     }))
     const totalAssets = liquid + assetSegs.reduce((s, seg) => s + seg.value, 0)
     return { label: m.label, _wealth: totalAssets, _liquid: liquid, _assetSegs: assetSegs, _liabSegs: liabSegs, Nettoförmögenhet: Math.round(m.netWorth) }
@@ -324,13 +335,13 @@ export function PlanView() {
       const row: Record<string, string | number> = { label: m.label }
       const total = Math.round(m.liquidity)
       if (total <= 0) {
-        for (const a of posLiquidAccounts) row[a.name] = 0
+        for (const a of posLiquidAccounts) row[a.id] = 0
       } else {
         let assigned = 0
         posLiquidAccounts.forEach((a, i) => {
           const isLast = i === posLiquidAccounts.length - 1
           const v = isLast ? total - assigned : Math.round((now.values[a.id] ?? 0) / posLiquidTotal * total)
-          row[a.name] = Math.max(0, v)
+          row[a.id] = Math.max(0, v)
           assigned += Math.max(0, v)
         })
       }
@@ -554,7 +565,7 @@ export function PlanView() {
                         </div>
                       )}
                       {d._assetSegs?.filter((s: any) => s.value > 0).map((seg: any) => (
-                        <div key={seg.name} className="flex justify-between gap-8">
+                        <div key={seg.id} className="flex justify-between gap-8">
                           <span className="flex items-center gap-1.5">
                             <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: seg.color }} />
                             {seg.name}
@@ -563,7 +574,7 @@ export function PlanView() {
                         </div>
                       ))}
                       {d._liabSegs?.filter((s: any) => s.value < 0).map((seg: any) => (
-                        <div key={seg.name} className="flex justify-between gap-8">
+                        <div key={seg.id} className="flex justify-between gap-8">
                           <span className="flex items-center gap-1.5">
                             <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: seg.color }} />
                             {seg.name}
@@ -614,7 +625,8 @@ export function PlanView() {
                     <Area
                       key={a.id}
                       type="monotone"
-                      dataKey={a.name}
+                      dataKey={a.id}
+                      name={displayName(a.id, a.name)}
                       stackId="liq"
                       stroke={LIQUID_ACCOUNT_COLORS[i % LIQUID_ACCOUNT_COLORS.length]}
                       fill={LIQUID_ACCOUNT_COLORS[i % LIQUID_ACCOUNT_COLORS.length]}
@@ -639,7 +651,7 @@ export function PlanView() {
             {useStackedLiquidity && posLiquidAccounts.map((a, i) => (
               <span key={a.id} className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: LIQUID_ACCOUNT_COLORS[i % LIQUID_ACCOUNT_COLORS.length] }} />
-                {a.name}
+                {displayName(a.id, a.name)}
               </span>
             ))}
             {largeNonRecurringByLabel.size > 0 && (
@@ -736,7 +748,7 @@ export function PlanView() {
                   return (
                     <tr key={a.id} className="border-t border-gray-100">
                       <td className="px-4 py-2">
-                        <span className="font-medium text-gray-800">{a.name}</span>
+                        <span className="font-medium text-gray-800">{displayName(a.id, a.name)}</span>
                         <span className="ml-2 text-xs text-gray-400">
                           {a.role === 'liquid' ? 'Likvid' : a.role === 'liability' ? 'Skuld' : 'Tillgång'}
                         </span>

@@ -9,6 +9,7 @@ import { getMonthIdForDate } from '@/utils/periodUtils'
 import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { budgetedAmount } from '@/utils/projection'
 import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
+import { buildAccountDisplayNames } from '@/utils/accountDisplay'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import type { ZlantarTransaction, ZlantarCategoryRule, TxOverride } from '@/types'
 
@@ -74,6 +75,13 @@ export function ReconcileView() {
 
   const prevMonth = () => { if (month === 1) { setMonth(12); setYear((y) => y - 1) } else setMonth((m) => m - 1) }
   const nextMonth = () => { if (month === 12) { setMonth(1); setYear((y) => y + 1) } else setMonth((m) => m + 1) }
+
+  // Disambiguates accounts sharing the exact same name (e.g. two "Sparkonto",
+  // one per owner) by appending the owner's first name.
+  const accountDisplayNames = useMemo(
+    () => buildAccountDisplayNames(settings.accounts, settings.myName),
+    [settings.accounts, settings.myName]
+  )
 
   // Per-category plan vs actual.
   const rows = useMemo(() => {
@@ -167,7 +175,7 @@ export function ReconcileView() {
         const closing = ab.balance
         return {
           accountId: ab.accountId,
-          accountName: ab.accountName,
+          accountName: accountDisplayNames.get(ab.accountId) ?? ab.accountName,
           opening: opening ?? closing,
           closing,
           delta: opening === undefined ? 0 : closing - opening,
@@ -189,7 +197,7 @@ export function ReconcileView() {
     const totalExpenses = expenseGroups.reduce((s, g) => s + g.total, 0)
 
     return { income, incomeTxs, netSavings, savingsAccounts, totalExpenses, expenseGroups }
-  }, [actual, actuals, prevMonthId, allTransactions, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, anchors, monthId])
+  }, [actual, actuals, prevMonthId, allTransactions, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, anchors, monthId, accountDisplayNames])
 
   // Checklist signals.
   // Only entries in Övrigt WITHOUT a meaningful subcategory count as
