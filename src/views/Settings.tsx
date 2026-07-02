@@ -10,6 +10,7 @@ import { RECEIPT_MODELS, DEFAULT_RECEIPT_MODEL } from '@/utils/receiptModels'
 import { slugify } from '@/utils/slug'
 import { getSalaryAnchors } from '@/utils/salaryDetection'
 import { MONTH_NAMES_SHORT } from '@/utils/budgetHelpers'
+import { buildAccountDisplayNames } from '@/utils/accountDisplay'
 import type { Account, RecurringItem, AccountType, ZlantarCategoryRule, CategoryDef, Level3Def } from '@/types'
 
 function newId() { return `id-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
@@ -70,11 +71,13 @@ export function SettingsView() {
 
 function GeneralTab() {
   const store = useAppStore()
-  const { monthStartDay, monthStartBusinessDay, partnerName, salaryAnchoredMonths } = store.settings
+  const { monthStartDay, monthStartBusinessDay, partnerName, myName, salaryAnchoredMonths } = store.settings
   const [day, setDay] = useState(String(monthStartDay))
   const [saved, setSaved] = useState(false)
   const [partner, setPartner] = useState(partnerName ?? '')
   const [partnerSaved, setPartnerSaved] = useState(false)
+  const [me, setMe] = useState(myName ?? '')
+  const [meSaved, setMeSaved] = useState(false)
 
   // Live preview of which months the salary detector anchored vs. fell back on.
   const salaryInfo = useMemo(
@@ -101,6 +104,12 @@ function GeneralTab() {
     store.updateSettings({ partnerName: partner.trim() || undefined })
     setPartnerSaved(true)
     setTimeout(() => setPartnerSaved(false), 2000)
+  }
+
+  const saveMe = () => {
+    store.updateSettings({ myName: me.trim() || undefined })
+    setMeSaved(true)
+    setTimeout(() => setMeSaved(false), 2000)
   }
 
   const toggleBusinessDay = (checked: boolean) => {
@@ -246,6 +255,28 @@ function GeneralTab() {
         <div className="space-y-3">
           <div>
             <label className="text-xs font-medium text-gray-600 block mb-1">
+              Mitt namn <span className="font-normal text-gray-400">(valfritt)</span>
+            </label>
+            <div className="flex items-center gap-3">
+              <input
+                type="text"
+                value={me}
+                onChange={(e) => { setMe(e.target.value); setMeSaved(false) }}
+                placeholder="t.ex. Emil"
+                className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+              />
+              <Button onClick={saveMe} variant={meSaved ? 'secondary' : 'primary'} size="md">
+                {meSaved ? '✓ Sparat' : 'Spara'}
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-gray-400">
+              Ditt förnamn räcker. Används för att visa ett tydligt namn (t.ex. ”Sparkonto (Emil)”) när
+              du har konton som råkar heta samma sak som din partners, istället för att bara skriva ”Mig”.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-600 block mb-1">
               Partnerns namn <span className="font-normal text-gray-400">(valfritt)</span>
             </label>
             <div className="flex items-center gap-3">
@@ -286,6 +317,13 @@ function AccountsTab() {
         .map((a) => a.owner?.trim())
         .filter((o): o is string => Boolean(o))
     )
+  )
+
+  // Disambiguates accounts sharing the exact same name by appending the
+  // owner's first name, e.g. "Sparkonto (Emil)" / "Sparkonto (Anna)".
+  const displayNames = useMemo(
+    () => buildAccountDisplayNames(accounts, store.settings.myName),
+    [accounts, store.settings.myName]
   )
 
   const startNew = () => {
@@ -393,7 +431,7 @@ function AccountsTab() {
                       {accounts
                         .filter((a) => ['savings', 'isk', 'investment', 'property', 'other'].includes(a.type))
                         .map((a) => (
-                          <option key={a.id} value={a.id}>{a.name}</option>
+                          <option key={a.id} value={a.id}>{displayNames.get(a.id) ?? a.name}</option>
                         ))}
                     </select>
                   </div>
