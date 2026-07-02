@@ -178,7 +178,8 @@ function labelLong(monthId: string): string {
 //
 // Loans are stored negative → result is a plain signed sum. Honors includeInNetWorth
 // (default included). A month gets a value once ≥1 net-worth account is known by then.
-function netWorthByMonth(state: AppState): Map<string, number> {
+// Exported so the AI coach digest can read the same net-worth series the report uses.
+export function netWorthByMonth(state: AppState): Map<string, number> {
   const included = new Map(state.settings.accounts.map((a) => [a.id, a.includeInNetWorth !== false]))
   const carried = new Map<string, number>()   // accountId -> latest known balance
   const out = new Map<string, number>()
