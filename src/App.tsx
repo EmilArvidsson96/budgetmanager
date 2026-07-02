@@ -11,9 +11,11 @@ import { FlowView }             from './views/Transactions'
 import { TransactionListView }  from './views/TransactionList'
 import { PinGate }              from './components/PinGate'
 import { useGitHubSync }        from './hooks/useGitHubSync'
+import { useSnapshots }         from './hooks/useSnapshots'
 
 function AppRoutes() {
   useGitHubSync()
+  useSnapshots()
   return (
     <Routes>
       <Route path="/"               element={<Navigate to="/plan" replace />} />

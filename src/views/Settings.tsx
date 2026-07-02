@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, Trash2, Edit2, X, Check, ArrowRight, RefreshCw } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
@@ -12,6 +12,7 @@ import { getSalaryAnchors } from '@/utils/salaryDetection'
 import { MONTH_NAMES_SHORT } from '@/utils/budgetHelpers'
 import { loadSyncConfig, saveSyncConfig, clearSyncConfig } from '@/utils/githubSync'
 import { useSyncStatus, triggerManualSync } from '@/hooks/useGitHubSync'
+import { listSnapshots, restoreSnapshot, createSnapshot, deleteSnapshot, type Snapshot } from '@/utils/snapshots'
 import type { Account, RecurringItem, AccountType, ZlantarCategoryRule, CategoryDef, Level3Def } from '@/types'
 
 function newId() { return `id-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
@@ -32,7 +33,7 @@ const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = Object.fromEntries(
 ) as Record<AccountType, string>
 
 export function SettingsView() {
-  const [tab, setTab] = useState<'general' | 'accounts' | 'recurring' | 'categories' | 'mapping' | 'api' | 'sync'>('general')
+  const [tab, setTab] = useState<'general' | 'accounts' | 'recurring' | 'categories' | 'mapping' | 'api' | 'sync' | 'backup'>('general')
 
   return (
     <Layout>
@@ -47,6 +48,7 @@ export function SettingsView() {
           { key: 'mapping',    label: 'Zlantar-mappning' },
           { key: 'api',        label: 'API-nycklar' },
           { key: 'sync',       label: 'Synkronisering' },
+          { key: 'backup',     label: 'Säkerhetskopior' },
         ] as const).map(({ key, label }) => (
           <button
             key={key}
@@ -66,6 +68,7 @@ export function SettingsView() {
       {tab === 'mapping'    && <ZlantarMappingTab />}
       {tab === 'api'        && <ApiKeysTab />}
       {tab === 'sync'       && <SyncTab />}
+      {tab === 'backup'     && <BackupTab />}
     </Layout>
   )
 }
@@ -1299,6 +1302,167 @@ function ZlantarMappingTab() {
             )
           })}
         </div>
+      </Card>
+    </div>
+  )
+}
+
+// ─── Backup / rollback tab ────────────────────────────────────────────────────
+
+function BackupTab() {
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([])
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [msg, setMsg] = useState<string | null>(null)
+
+  const refresh = async () => {
+    try {
+      setSnapshots(await listSnapshots())
+    } catch {
+      setMsg('Kunde inte läsa säkerhetskopior (IndexedDB otillgängligt i detta läge).')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const snaps = await listSnapshots()
+        if (active) setSnapshots(snaps)
+      } catch {
+        if (active) setMsg('Kunde inte läsa säkerhetskopior (IndexedDB otillgängligt i detta läge).')
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [])
+
+  const flash = (text: string) => { setMsg(text); setTimeout(() => setMsg(null), 3000) }
+
+  const createNow = async () => {
+    setBusy(true)
+    try {
+      await createSnapshot('manual')
+      await refresh()
+      flash('Säkerhetskopia skapad.')
+    } catch {
+      flash('Kunde inte skapa säkerhetskopia.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const doRestore = async (id: string) => {
+    setBusy(true)
+    try {
+      await restoreSnapshot(id)
+      await refresh()
+      setConfirmId(null)
+      flash('Data återställd. Den tidigare versionen sparades som en säkerhetskopia så att du kan ångra.')
+    } catch {
+      flash('Kunde inte återställa.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (id: string) => {
+    setBusy(true)
+    try {
+      await deleteSnapshot(id)
+      await refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const fmt = (iso: string) => {
+    const d = new Date(iso)
+    return `${d.toLocaleDateString('sv-SE')} ${d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}`
+  }
+
+  const reasonLabel = (r: Snapshot['reason']) =>
+    r === 'manual' ? 'Manuell' : r === 'pre-restore' ? 'Före återställning' : 'Auto'
+
+  const reasonVariant = (r: Snapshot['reason']): 'blue' | 'amber' | 'gray' =>
+    r === 'manual' ? 'blue' : r === 'pre-restore' ? 'amber' : 'gray'
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <Card>
+        <CardHeader
+          title="Säkerhetskopior & återställning"
+          subtitle="En ögonblicksbild av all din data sparas automatiskt var 10:e minut (lokalt i denna webbläsare). Äldre kopior gallras gradvis: dagsvis efter en vecka, veckovis efter en månad, månadsvis efter tre månader."
+          action={
+            <Button size="sm" onClick={createNow} disabled={busy}>
+              <Plus className="w-4 h-4" />Skapa nu
+            </Button>
+          }
+        />
+
+        {msg && (
+          <div className="mb-3 p-3 bg-brand-50 border border-brand-100 rounded-lg text-xs text-brand-700">
+            {msg}
+          </div>
+        )}
+
+        {loading ? (
+          <p className="text-sm text-gray-400 text-center py-6">Laddar…</p>
+        ) : snapshots.length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-6">Inga säkerhetskopior ännu.</p>
+        ) : (
+          <>
+            <p className="text-xs text-gray-400 mb-2">{snapshots.length} sparade kopior</p>
+            <div className="space-y-1.5 max-h-[28rem] overflow-y-auto">
+              {snapshots.map((s) => (
+                <div key={s.id} className="flex items-center gap-2 p-2.5 bg-gray-50 rounded-lg">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-800">{fmt(s.takenAt)}</p>
+                  </div>
+                  <Badge variant={reasonVariant(s.reason)} size="sm">{reasonLabel(s.reason)}</Badge>
+                  {confirmId === s.id ? (
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" onClick={() => doRestore(s.id)} disabled={busy}>
+                        <Check className="w-3.5 h-3.5" />Bekräfta
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={() => setConfirmId(null)}>
+                        <X className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <Button size="sm" variant="secondary" onClick={() => setConfirmId(s.id)} disabled={busy}>
+                        Återställ
+                      </Button>
+                      <button
+                        onClick={() => remove(s.id)}
+                        disabled={busy}
+                        className="text-gray-300 hover:text-red-500 p-1"
+                        title="Ta bort"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader title="Så fungerar återställning" />
+        <ul className="text-xs text-gray-500 space-y-1.5 list-disc pl-4">
+          <li>Att återställa byter ut all din nuvarande data mot den valda ögonblicksbilden.</li>
+          <li>Innan återställningen sparas din nuvarande data automatiskt som en kopia märkt <em>Före återställning</em> — så du kan alltid ångra.</li>
+          <li>Om GitHub-synk är aktiv skickas den återställda datan vidare till dina andra enheter inom några sekunder.</li>
+          <li>Säkerhetskopiorna lagras lokalt i denna webbläsare och delas inte mellan enheter.</li>
+        </ul>
       </Card>
     </div>
   )
