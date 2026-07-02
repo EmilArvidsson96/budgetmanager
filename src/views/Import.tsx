@@ -226,7 +226,7 @@ export function ImportView() {
       filtered[ym] = candidate
     }
     return { preview: filtered, unchangedMonthCount: unchanged }
-  }, [parsedImport, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay, store.settings.salaryAnchoredMonths, store.settings.salaryDetectionWindowDays, store.settings.salaryMinAmount, store.transactionOverrides, acceptedKeys, store.allTransactions])
+  }, [parsedImport, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay, store.settings.salaryAnchoredMonths, store.settings.salaryDetectionWindowDays, store.settings.salaryMinAmount, store.settings.salaryAmountTolerancePct, store.settings.salaryMinRecurringMonths, store.transactionOverrides, acceptedKeys, store.allTransactions])
 
   // Unmapped categories among the new transactions, grouped by raw category, with a
   // suggested Swedish name. Recomputes as the user creates/maps categories below.

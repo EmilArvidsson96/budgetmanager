@@ -552,6 +552,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   salaryAnchoredMonths: false,
   salaryDetectionWindowDays: 6,
   salaryMinAmount: 5000,
+  salaryAmountTolerancePct: 20,
+  salaryMinRecurringMonths: 2,
   categories: DEFAULT_CATEGORIES,
   accounts: [],
   recurringItems: [],
@@ -655,7 +657,9 @@ export const useAppStore = create<AppStore>()(
             (s.monthStartBusinessDay !== undefined && s.monthStartBusinessDay !== state.settings.monthStartBusinessDay) ||
             (s.salaryAnchoredMonths !== undefined && s.salaryAnchoredMonths !== state.settings.salaryAnchoredMonths) ||
             (s.salaryDetectionWindowDays !== undefined && s.salaryDetectionWindowDays !== state.settings.salaryDetectionWindowDays) ||
-            (s.salaryMinAmount !== undefined && s.salaryMinAmount !== state.settings.salaryMinAmount)
+            (s.salaryMinAmount !== undefined && s.salaryMinAmount !== state.settings.salaryMinAmount) ||
+            (s.salaryAmountTolerancePct !== undefined && s.salaryAmountTolerancePct !== state.settings.salaryAmountTolerancePct) ||
+            (s.salaryMinRecurringMonths !== undefined && s.salaryMinRecurringMonths !== state.settings.salaryMinRecurringMonths)
           if (periodChanged) {
             return { settings: newSettings, actuals: recomputeAllActuals(state, newSettings) }
           }

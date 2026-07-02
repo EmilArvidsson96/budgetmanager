@@ -177,9 +177,10 @@ function GeneralTab() {
               <div>
                 <span className="text-sm font-medium text-gray-700">Starta perioden när lönen kommer</span>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  Letar upp lönen (inkomst&nbsp;→&nbsp;Lön) runt startdagen ovan och låter perioden
-                  börja på det faktiska lönedatumet i stället för en fast dag. Startdagen blir den
-                  förväntade lönedagen — och reserv för månader där ingen lön hittas.
+                  Lär sig ditt återkommande lönebelopp från historiken och letar efter en insättning
+                  inom ±&#8202;{store.settings.salaryAmountTolerancePct ?? 20}&#8202;% av det, runt startdagen ovan — oavsett
+                  vad transaktionen heter. Perioden börjar på det faktiska lönedatumet; startdagen blir
+                  förväntad lönedag och reserv för månader där ingen lön hittas.
                 </p>
               </div>
             </label>
@@ -199,6 +200,17 @@ function GeneralTab() {
                     />
                   </div>
                   <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Beloppstolerans (±&nbsp;%)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={80}
+                      value={store.settings.salaryAmountTolerancePct ?? 20}
+                      onChange={(e) => store.updateSettings({ salaryAmountTolerancePct: Math.max(1, Math.min(80, parseInt(e.target.value) || 20)) })}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
                     <label className="text-xs font-medium text-gray-600 block mb-1">Minsta lönebelopp (kr)</label>
                     <input
                       type="number"
@@ -206,6 +218,17 @@ function GeneralTab() {
                       step={500}
                       value={store.settings.salaryMinAmount ?? 5000}
                       onChange={(e) => store.updateSettings({ salaryMinAmount: Math.max(0, parseInt(e.target.value) || 0) })}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Återkommer i minst (mån)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={store.settings.salaryMinRecurringMonths ?? 2}
+                      onChange={(e) => store.updateSettings({ salaryMinRecurringMonths: Math.max(1, Math.min(12, parseInt(e.target.value) || 2)) })}
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                     />
                   </div>
@@ -217,13 +240,17 @@ function GeneralTab() {
                       Identifierade lönedatum ({anchorEntries.length} perioder)
                     </p>
                     <div className="flex flex-wrap gap-1.5">
-                      {anchorEntries.slice(0, 18).map(([id, iso]) => (
-                        <span key={id} className="inline-flex items-center gap-1 text-[11px] bg-white border border-gray-200 rounded px-2 py-0.5 text-gray-600">
-                          <span className="font-medium text-gray-800">{fmtPeriod(id)}</span>
-                          <span className="text-gray-400">→</span>
-                          <span>{fmtDay(iso)}</span>
-                        </span>
-                      ))}
+                      {anchorEntries.slice(0, 18).map(([id]) => {
+                        const m = salaryInfo.matches[id]
+                        return (
+                          <span key={id} className="inline-flex items-center gap-1 text-[11px] bg-white border border-gray-200 rounded px-2 py-0.5 text-gray-600" title={m?.via === 'tag' ? 'Hittad via kategori-tagg' : m?.via === 'both' ? 'Återkommande belopp + tagg' : 'Återkommande belopp'}>
+                            <span className="font-medium text-gray-800">{fmtPeriod(id)}</span>
+                            <span className="text-gray-400">→</span>
+                            <span>{fmtDay(m?.date ?? '')}</span>
+                            {m && <span className="text-gray-400">· {Math.round(m.amount).toLocaleString('sv-SE')}&nbsp;kr</span>}
+                          </span>
+                        )
+                      })}
                     </div>
                   </div>
                 )}
