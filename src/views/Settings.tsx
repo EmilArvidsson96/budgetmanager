@@ -14,6 +14,7 @@ import { MONTH_NAMES_SHORT } from '@/utils/budgetHelpers'
 import { loadSyncConfig, saveSyncConfig, clearSyncConfig } from '@/utils/githubSync'
 import { useSyncStatus, triggerManualSync } from '@/hooks/useGitHubSync'
 import { listSnapshots, restoreSnapshot, createSnapshot, deleteSnapshot, type Snapshot } from '@/utils/snapshots'
+import { findTxKeyCollisions } from '@/utils/transferReconciliation'
 import type { Account, RecurringItem, AccountType, ZlantarCategoryRule, CategoryDef, Level3Def } from '@/types'
 
 function newId() { return `id-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
@@ -325,7 +326,90 @@ function GeneralTab() {
           </div>
         </div>
       </Card>
+
+      <DiagnosticsCard />
     </div>
+  )
+}
+
+// ─── Diagnostics ──────────────────────────────────────────────────────────────
+// Debug mode shows raw per-transaction identifiers (txKey, index, account
+// fields) in the transaction list. The collision report below is always
+// computed and shown regardless of the toggle, since it flags a real data
+// issue: two distinct transactions with identical date/amount/description/
+// account number are indistinguishable to anything keyed by txKey (React list
+// keys, transactionOverrides, import dedup) — this is a real Zlantar-data
+// pattern (e.g. two same-day, same-amount "SL" top-ups), not a hypothetical.
+
+function DiagnosticsCard() {
+  const store = useAppStore()
+  const debugMode = !!store.settings.debugMode
+  const collisions = useMemo(() => findTxKeyCollisions(store.allTransactions), [store.allTransactions])
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <Card>
+      <CardHeader
+        title="Diagnostik"
+        subtitle="Felsökningsverktyg för att undersöka hur transaktioner identifieras internt."
+      />
+      <div className="space-y-4">
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={debugMode}
+            onChange={(e) => store.updateSettings({ debugMode: e.target.checked })}
+            className="mt-0.5 rounded accent-brand-600"
+          />
+          <div>
+            <span className="text-sm font-medium text-gray-700">Debug-läge</span>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Visar interna fält (index, kontonummer, bank, intern nyckel) under varje rad i
+              Transaktioner-listan, samt en varning där flera transaktioner delar samma nyckel.
+            </p>
+          </div>
+        </label>
+
+        <div className={`p-3 rounded-lg border text-xs ${collisions.length > 0 ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-gray-50 border-gray-100 text-gray-500'}`}>
+          {collisions.length === 0 ? (
+            <p>Inga nyckelkonflikter hittade bland {store.allTransactions.length} transaktioner.</p>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-medium">
+                  {collisions.length} grupp{collisions.length === 1 ? '' : 'er'} med delad nyckel
+                  ({collisions.reduce((s, c) => s + c.transactions.length, 0)} transaktioner berörda).
+                </p>
+                <button onClick={() => setExpanded((v) => !v)} className="shrink-0 text-amber-700 underline hover:no-underline">
+                  {expanded ? 'Dölj' : 'Visa'}
+                </button>
+              </div>
+              <p className="mt-1 text-amber-700">
+                Dessa transaktioner har identiskt datum, belopp, beskrivning och kontonummer — appen kan inte
+                skilja dem åt. Det kan visa sig som dubblett-/spökrader i listan, att redigera-knappen öppnar
+                fel post, eller (vid en framtida import) att en äkta ny transaktion feltolkas som redan importerad.
+              </p>
+              {expanded && (
+                <div className="mt-3 space-y-2 max-h-64 overflow-y-auto">
+                  {collisions.map((c) => (
+                    <div key={c.key} className="bg-white border border-amber-100 rounded-lg p-2">
+                      <p className="font-mono text-[11px] text-amber-900 break-all">{c.key}</p>
+                      <ul className="mt-1 space-y-0.5">
+                        {c.transactions.map((tx, i) => (
+                          <li key={i} className="text-[11px] text-gray-500 font-mono">
+                            index={tx.index} · bank={tx.bank_name} · account_index={tx.account_index}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </Card>
   )
 }
 

@@ -907,8 +907,25 @@ export const useAppStore = create<AppStore>()(
 
       setZlantarImport: (imp) =>
         set((state) => {
-          const existingKeys = new Set(state.allTransactions.map(txKey))
-          const newTxs = imp.transactions.filter((tx) => !existingKeys.has(txKey(tx)))
+          // A plain Set can't tell "already imported" apart from "a second,
+          // genuinely distinct transaction that happens to share a txKey"
+          // (e.g. two same-day, same-amount "SL" top-ups) — undercounting
+          // drops the second one forever. Count occurrences instead, so a
+          // re-import only skips as many matches per key as already exist.
+          const existingCounts = new Map<string, number>()
+          for (const tx of state.allTransactions) {
+            const key = txKey(tx)
+            existingCounts.set(key, (existingCounts.get(key) ?? 0) + 1)
+          }
+          const newTxs = imp.transactions.filter((tx) => {
+            const key = txKey(tx)
+            const remaining = existingCounts.get(key) ?? 0
+            if (remaining > 0) {
+              existingCounts.set(key, remaining - 1)
+              return false
+            }
+            return true
+          })
 
           // Account balances carried by this upload (empty for a tx-only import).
           const incomingBalances = buildAccountBalances(imp.data)

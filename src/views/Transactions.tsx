@@ -610,8 +610,8 @@ export function FlowView() {
 
         <InboxRow icon={Tag} color="amber" label="Okategoriserade poster" count={uncategorizedTxs.length}
           open={openInbox === 'uncat'} onToggle={() => toggleInbox('uncat')}>
-          {uncategorizedTxs.slice(0, 12).map((t) => (
-            <TransactionRow key={txKey(t.tx)} tx={t.tx} categories={categories} catId="other" subId={undefined} />
+          {uncategorizedTxs.slice(0, 12).map((t, i) => (
+            <TransactionRow key={`${txKey(t.tx)}::${i}`} tx={t.tx} categories={categories} catId="other" subId={undefined} />
           ))}
           {uncategorizedTxs.length > 12 && (
             <p className="text-xs text-gray-400 px-4 md:px-5 py-2">+{uncategorizedTxs.length - 12} till — öppna kategorin nedan</p>
@@ -646,8 +646,8 @@ export function FlowView() {
 
         <InboxRow icon={Banknote} color="gray" label={`Stora transaktioner (≥ ${formatCurrency(largeTxThreshold)})`} count={largeTxs.length}
           open={openInbox === 'large'} onToggle={() => toggleInbox('large')} last>
-          {largeTxs.slice(0, 12).map((tx) => (
-            <div key={txKey(tx)} className="flex items-center gap-2 px-4 md:px-5 py-2.5 border-t border-warm-100">
+          {largeTxs.slice(0, 12).map((tx, i) => (
+            <div key={`${txKey(tx)}::${i}`} className="flex items-center gap-2 px-4 md:px-5 py-2.5 border-t border-warm-100">
               <div className="flex-1 min-w-0">
                 <div className="text-sm text-gray-700 truncate">{tx.description || '—'}</div>
                 <div className="text-[11px] text-gray-400 truncate tabular-nums">{tx.date.slice(0, 10)} · {tx.account_name}</div>
@@ -800,8 +800,8 @@ export function FlowView() {
               <span className="min-w-0 truncate">{transfers.length} överföringar · räknas inte in i budgeten</span>
               <span className="tabular-nums font-medium text-gray-700">netto {formatCurrency(transferTotal)}</span>
             </div>
-            {transfers.map((tx) => (
-              <div key={txKey(tx)} className="flex items-start gap-2 px-3 md:px-5 py-2.5 border-b border-warm-100 last:border-0">
+            {transfers.map((tx, i) => (
+              <div key={`${txKey(tx)}::${i}`} className="flex items-start gap-2 px-3 md:px-5 py-2.5 border-b border-warm-100 last:border-0">
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-gray-700 truncate" title={tx.description ?? ''}>{tx.description || '—'}</div>
                   <div className="text-[11px] text-gray-400 truncate">
@@ -1148,8 +1148,8 @@ function SubcategoryBranch({
           )}
           {[...transactions]
             .sort((a, b) => b.tx.date.localeCompare(a.tx.date))
-            .map((t) => (
-              <TransactionRow key={txKey(t.tx)} tx={t.tx} categories={categories} catId={catId} subId={subId} />
+            .map((t, i) => (
+              <TransactionRow key={`${txKey(t.tx)}::${i}`} tx={t.tx} categories={categories} catId={catId} subId={subId} />
             ))}
         </div>
       )}
