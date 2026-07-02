@@ -32,7 +32,8 @@ function OverviewSection() {
       </p>
 
       {/* Workflow diagram */}
-      <svg viewBox="0 0 720 160" className="w-full" aria-label="Arbetsflödesöversikt">
+      <div className="overflow-x-auto">
+      <svg viewBox="0 0 720 160" className="w-full min-w-[560px]" aria-label="Arbetsflödesöversikt">
         {/* Step boxes */}
         {[
           { x: 20,  label: '1. Inställningar', sub: 'Konton & återkommande poster', color: '#6366f1' },
@@ -63,6 +64,7 @@ function OverviewSection() {
         </text>
         <line x1={110} y1={118} x2={630} y2={118} stroke="#e5e7eb" strokeWidth={1} strokeDasharray="4 3" />
       </svg>
+      </div>
     </Card>
   )
 }
@@ -83,7 +85,8 @@ function MonthlyBudgetSection() {
         </p>
 
         {/* Figure: monthly budget table mockup */}
-        <svg viewBox="0 0 680 260" className="w-full rounded-lg" aria-label="Månadsbudget figur">
+        <div className="overflow-x-auto">
+        <svg viewBox="0 0 680 260" className="w-full rounded-lg min-w-[560px]" aria-label="Månadsbudget figur">
           <rect width={680} height={260} rx={10} fill="#f9fafb" />
 
           {/* Month navigator */}
@@ -136,6 +139,7 @@ function MonthlyBudgetSection() {
             </g>
           ))}
         </svg>
+        </div>
 
         <div className="mt-5 grid md:grid-cols-3 gap-4 text-sm">
           <Step n="1" title="Navigera månader">
@@ -169,7 +173,8 @@ function YearlyBudgetSection() {
         </p>
 
         {/* Figure: yearly grid */}
-        <svg viewBox="0 0 680 180" className="w-full rounded-lg" aria-label="Årsbudget figur">
+        <div className="overflow-x-auto">
+        <svg viewBox="0 0 680 180" className="w-full rounded-lg min-w-[560px]" aria-label="Årsbudget figur">
           <rect width={680} height={180} rx={10} fill="#f9fafb" />
 
           {/* Header row */}
@@ -218,6 +223,7 @@ function YearlyBudgetSection() {
           <rect x={196} y={64} width={44} height={72} rx={4} fill="none" stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="3 2" />
           <text x={218} y={150} textAnchor="middle" fontSize={9} fill="#f59e0b">Dec avviker</text>
         </svg>
+        </div>
 
         <div className="mt-4 text-sm text-gray-500">
           Celler med avvikande värden markeras automatiskt. Klicka på en cells belopp för att hoppa till den aktuella månadsbudgeten.
@@ -244,7 +250,8 @@ function LiquiditySection() {
         </p>
 
         {/* Figure: area chart mockup */}
-        <svg viewBox="0 0 680 180" className="w-full rounded-lg" aria-label="Likviditetsgraf figur">
+        <div className="overflow-x-auto">
+        <svg viewBox="0 0 680 180" className="w-full rounded-lg min-w-[560px]" aria-label="Likviditetsgraf figur">
           <rect width={680} height={180} rx={10} fill="#f9fafb" />
 
           {/* Y-axis labels */}
@@ -288,6 +295,7 @@ function LiquiditySection() {
           <rect x={290} y={10} width={140} height={22} rx={5} fill="#fef3c7" stroke="#fcd34d" />
           <text x={360} y={25} textAnchor="middle" fontSize={9} fill="#92400e">+ Skatteåterbäring 18k</text>
         </svg>
+        </div>
 
         <div className="mt-5 grid md:grid-cols-2 gap-4 text-sm">
           <Step n="1" title="Skapa likviditetsplan">
@@ -319,7 +327,8 @@ function ImportSection() {
         </p>
 
         {/* Figure: import flow */}
-        <svg viewBox="0 0 680 160" className="w-full rounded-lg" aria-label="Importflöde figur">
+        <div className="overflow-x-auto">
+        <svg viewBox="0 0 680 160" className="w-full rounded-lg min-w-[560px]" aria-label="Importflöde figur">
           <rect width={680} height={160} rx={10} fill="#f9fafb" />
 
           {/* Zlantar box */}
@@ -360,6 +369,7 @@ function ImportSection() {
           <text x={398} y={140} textAnchor="middle" fontSize={9} fill="#9ca3af">Steg 3: ladda upp</text>
           <text x={586} y={140} textAnchor="middle" fontSize={9} fill="#9ca3af">Steg 4: klart!</text>
         </svg>
+        </div>
 
         <div className="mt-5 grid md:grid-cols-3 gap-4 text-sm">
           <Step n="1" title="Exportera från Zlantar">
@@ -393,7 +403,8 @@ function SettingsSection() {
         </p>
 
         {/* Figure: settings tabs */}
-        <svg viewBox="0 0 680 190" className="w-full rounded-lg" aria-label="Inställningar figur">
+        <div className="overflow-x-auto">
+        <svg viewBox="0 0 680 190" className="w-full rounded-lg min-w-[560px]" aria-label="Inställningar figur">
           <rect width={680} height={190} rx={10} fill="#f9fafb" />
 
           {/* Tab bar */}
@@ -433,6 +444,7 @@ function SettingsSection() {
           <rect x={572} y={170} width={88} height={16} rx={8} fill="#4f46e5" />
           <text x={616} y={181} textAnchor="middle" fontSize={9} fontWeight="600" fill="white">+ Lägg till</text>
         </svg>
+        </div>
 
         <div className="mt-5 grid md:grid-cols-3 gap-4 text-sm">
           <Step n="1" title="Konton">

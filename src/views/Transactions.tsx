@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ElementType, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, Search, X, Pencil, RotateCcw, Upload, Tag, ArrowLeftRight, AlertTriangle, Banknote, CheckCircle2, TrendingUp, Sparkles, SlidersHorizontal } from 'lucide-react'
@@ -7,6 +7,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import { useAppStore } from '@/store'
+import { useIsMobile, MOBILE_TOOLTIP_POSITION } from '@/hooks/useIsMobile'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
@@ -20,7 +21,7 @@ import {
 } from '@/utils/budgetHelpers'
 import { budgetedAmount, baselineTarget } from '@/utils/projection'
 import { suggestForCategory, seasonalHint } from '@/utils/budgetSuggestions'
-import { getMonthIdForDate, getPeriodProgress } from '@/utils/periodUtils'
+import { getMonthIdForDate, getPeriodProgress, bucketKindForCategory, type BucketKind } from '@/utils/periodUtils'
 import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import { txKey, reconciledKeysFromRecords, reconcileTransfers } from '@/utils/transferReconciliation'
@@ -161,7 +162,17 @@ export function FlowView() {
   const store = useAppStore()
   const { settings, allTransactions, transactionOverrides, groceryReceipts, reconciliations } = store
   const { categories, zlantarCategoryRules, monthStartDay, monthStartBusinessDay } = settings
-  const { anchors, flaggedMonths } = useSalaryAnchors()
+  const { config, flaggedMonths } = useSalaryAnchors()
+
+  // Resolve a transaction's BucketKind (listed income vs. other) so period
+  // bucketing can apply the type-dependent boundary. Memoized rule lookup keeps
+  // the hot per-tx loops cheap.
+  const kindRuleMap = useMemo(() => buildRuleLookup(zlantarCategoryRules ?? DEFAULT_ZLANTAR_RULES), [zlantarCategoryRules])
+  const kindCatIds = useMemo(() => new Set(categories.map((c) => c.id)), [categories])
+  const kindOf = useCallback((tx: ZlantarTransaction): BucketKind => {
+    const { catId, subId } = resolveCategory(tx.category ?? '', tx.subcategory ?? '', kindCatIds, kindRuleMap, transactionOverrides[txKey(tx)])
+    return bucketKindForCategory(catId, subId, tx.category ?? '')
+  }, [kindCatIds, kindRuleMap, transactionOverrides])
 
   const monthId = makeMonthId(year, month)
   const seasonHint = seasonalHint(month)
@@ -187,7 +198,6 @@ export function FlowView() {
       if (!tx.date) continue
       if (tx.transaction_type === 'transfer') continue
       if (reconciledKeys.has(txKey(tx))) continue
-      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) continue
       if (searchLower) {
         const hay = (tx.description ?? '').toLowerCase()
         if (!hay.includes(searchLower)) continue
@@ -200,6 +210,8 @@ export function FlowView() {
         transactionOverrides[txKey(tx)]
       )
       if (categories.find((c) => c.id === catId)?.type === 'transfer') continue
+      const kind = bucketKindForCategory(catId, subId, tx.category ?? '')
+      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, config, kind) !== monthId) continue
       monthTxs.push({ tx, catId, subId })
     }
 
@@ -238,7 +250,7 @@ export function FlowView() {
         }
       })
       .filter((g) => g.count > 0)
-  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, monthId, monthStartDay, monthStartBusinessDay, anchors, search, reconciledKeys])
+  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, monthId, monthStartDay, monthStartBusinessDay, config, kindOf, search, reconciledKeys])
 
   // Transfers for the selected month (own-account transfers — excluded from budget
   // totals; surfaced here so you can see what was moved).
@@ -254,7 +266,7 @@ export function FlowView() {
           const resolvedCat = categories.find((c) => c.id === override.categoryId)
           if (resolvedCat?.type !== 'transfer') return false
         }
-        if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) return false
+        if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, config, kindOf(tx)) !== monthId) return false
         if (searchLower) {
           const hay = (tx.description ?? '').toLowerCase()
           if (!hay.includes(searchLower)) return false
@@ -262,7 +274,7 @@ export function FlowView() {
         return true
       })
       .sort((a, b) => b.date.localeCompare(a.date))
-  }, [allTransactions, transactionOverrides, categories, monthId, monthStartDay, monthStartBusinessDay, anchors, search])
+  }, [allTransactions, transactionOverrides, categories, monthId, monthStartDay, monthStartBusinessDay, config, kindOf, search])
   const transferTotal = transfers.reduce((s, t) => s + t.amount, 0)
 
   const grandTotal = groups.reduce((s, g) => s + g.total, 0)
@@ -316,14 +328,14 @@ export function FlowView() {
         if (!tx.date) return false
         if (tx.transaction_type === 'transfer') return false
         if (reconciledKeys.has(txKey(tx))) return false
-        if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) return false
+        if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, config, kindOf(tx)) !== monthId) return false
         if (Math.abs(tx.amount) < largeTxThreshold) return false
         const override = transactionOverrides[txKey(tx)]
         if (override && categories.find((c) => c.id === override.categoryId)?.type === 'transfer') return false
         return true
       })
       .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
-  }, [allTransactions, reconciledKeys, transactionOverrides, categories, monthId, monthStartDay, monthStartBusinessDay, anchors])
+  }, [allTransactions, reconciledKeys, transactionOverrides, categories, monthId, monthStartDay, monthStartBusinessDay, config, kindOf])
 
   // Plan-vs-actual rows for the month (income/expense/savings with a budget or spend).
   const planRows = useMemo(() => {
@@ -391,7 +403,7 @@ export function FlowView() {
 
     for (const tx of allTransactions) {
       if (!tx.date || tx.transaction_type === 'transfer') continue
-      const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors)
+      const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, config, kindOf(tx))
       if (!monthSet.has(mid)) continue
       if (searchLower) {
         const hay = (tx.description ?? '').toLowerCase()
@@ -421,7 +433,7 @@ export function FlowView() {
       }
       return row
     })
-  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, year, month, monthStartDay, monthStartBusinessDay, anchors, search])
+  }, [allTransactions, transactionOverrides, categories, zlantarCategoryRules, year, month, monthStartDay, monthStartBusinessDay, config, kindOf, search])
 
   const expenseCategories = useMemo(
     () => categories.filter((c) => c.type === 'expense'),
@@ -455,7 +467,7 @@ export function FlowView() {
 
     for (const tx of allTransactions) {
       if (!tx.date || tx.transaction_type === 'transfer') continue
-      const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors)
+      const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, config, kindOf(tx))
       if (!monthSet.has(mid)) continue
       const { catId, subId } = resolveCategory(
         tx.category ?? '', tx.subcategory ?? '',
@@ -506,7 +518,7 @@ export function FlowView() {
     }
 
     return { cat, rows, activeSubs }
-  }, [selectedCatId, allTransactions, transactionOverrides, categories, zlantarCategoryRules, year, month, monthStartDay, monthStartBusinessDay, anchors])
+  }, [selectedCatId, allTransactions, transactionOverrides, categories, zlantarCategoryRules, year, month, monthStartDay, monthStartBusinessDay, config, kindOf])
 
 
   // Actual cash flow for the month: income, real savings (via account transfers), and expenses.
@@ -541,7 +553,7 @@ export function FlowView() {
 
       {/* Sticky month navigator + selected category chip */}
       <div className="sticky top-0 z-10 bg-warm-100 -mx-4 px-4 md:-mx-8 md:px-8 py-2 mb-4 border-b border-warm-200/60">
-        <div className="flex items-center justify-between max-w-5xl">
+        <div className="flex items-center justify-between max-w-5xl flex-wrap gap-y-1 min-w-0">
           <div className="flex items-center gap-1">
             <button
               onClick={prevMonth}
@@ -550,7 +562,7 @@ export function FlowView() {
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
-            <span className="text-base font-medium text-gray-800 min-w-44 text-center tabular-nums">
+            <span className="text-base font-medium text-gray-800 min-w-[6.5rem] text-center tabular-nums">
               {MONTH_NAMES_LONG[month - 1]} {year}
             </span>
             {flaggedMonths.includes(monthId) && (
@@ -574,10 +586,10 @@ export function FlowView() {
             return sc ? (
               <button
                 onClick={() => setSelectedCatId(null)}
-                className="flex items-center gap-1.5 text-xs bg-white border border-warm-200 rounded-full px-2.5 py-1 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors"
+                className="flex items-center gap-1.5 text-xs bg-white border border-warm-200 rounded-full px-2.5 py-1 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors min-w-0 max-w-[45%]"
               >
                 <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: sc.color ?? '#94a3b8' }} />
-                <span>{sc.name}</span>
+                <span className="truncate">{sc.name}</span>
                 <X className="w-3 h-3 text-gray-400" />
               </button>
             ) : null
@@ -598,8 +610,8 @@ export function FlowView() {
 
         <InboxRow icon={Tag} color="amber" label="Okategoriserade poster" count={uncategorizedTxs.length}
           open={openInbox === 'uncat'} onToggle={() => toggleInbox('uncat')}>
-          {uncategorizedTxs.slice(0, 12).map((t) => (
-            <TransactionRow key={txKey(t.tx)} tx={t.tx} categories={categories} catId="other" subId={undefined} />
+          {uncategorizedTxs.slice(0, 12).map((t, i) => (
+            <TransactionRow key={`${txKey(t.tx)}::${i}`} tx={t.tx} categories={categories} catId="other" subId={undefined} />
           ))}
           {uncategorizedTxs.length > 12 && (
             <p className="text-xs text-gray-400 px-4 md:px-5 py-2">+{uncategorizedTxs.length - 12} till — öppna kategorin nedan</p>
@@ -634,8 +646,8 @@ export function FlowView() {
 
         <InboxRow icon={Banknote} color="gray" label={`Stora transaktioner (≥ ${formatCurrency(largeTxThreshold)})`} count={largeTxs.length}
           open={openInbox === 'large'} onToggle={() => toggleInbox('large')} last>
-          {largeTxs.slice(0, 12).map((tx) => (
-            <div key={txKey(tx)} className="flex items-center gap-2 px-4 md:px-5 py-2.5 border-t border-warm-100">
+          {largeTxs.slice(0, 12).map((tx, i) => (
+            <div key={`${txKey(tx)}::${i}`} className="flex items-center gap-2 px-4 md:px-5 py-2.5 border-t border-warm-100">
               <div className="flex-1 min-w-0">
                 <div className="text-sm text-gray-700 truncate">{tx.description || '—'}</div>
                 <div className="text-[11px] text-gray-400 truncate tabular-nums">{tx.date.slice(0, 10)} · {tx.account_name}</div>
@@ -784,12 +796,12 @@ export function FlowView() {
           </Card>
         ) : (
           <Card padding={false} className="overflow-hidden">
-            <div className="flex items-center justify-between px-3 md:px-5 py-3 bg-warm-50 border-b border-warm-200 text-xs text-gray-500">
-              <span>{transfers.length} överföringar · räknas inte in i budgeten</span>
+            <div className="flex items-center justify-between px-3 md:px-5 py-3 bg-warm-50 border-b border-warm-200 text-xs text-gray-500 flex-wrap gap-x-2 gap-y-0.5">
+              <span className="min-w-0 truncate">{transfers.length} överföringar · räknas inte in i budgeten</span>
               <span className="tabular-nums font-medium text-gray-700">netto {formatCurrency(transferTotal)}</span>
             </div>
-            {transfers.map((tx) => (
-              <div key={txKey(tx)} className="flex items-start gap-2 px-3 md:px-5 py-2.5 border-b border-warm-100 last:border-0">
+            {transfers.map((tx, i) => (
+              <div key={`${txKey(tx)}::${i}`} className="flex items-start gap-2 px-3 md:px-5 py-2.5 border-b border-warm-100 last:border-0">
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-gray-700 truncate" title={tx.description ?? ''}>{tx.description || '—'}</div>
                   <div className="text-[11px] text-gray-400 truncate">
@@ -826,7 +838,7 @@ function MonthPlanRow({ cat, actual, monthId, incomeBase }: { cat: CategoryDef; 
   const store = useAppStore()
   const [editing, setEditing] = useState(false)
   const { monthStartDay, monthStartBusinessDay } = store.settings
-  const { anchors } = useSalaryAnchors()
+  const { config } = useSalaryAnchors()
 
   const signedBudget = budgetedAmount(store, monthId, cat.id)
   const budget = Math.abs(signedBudget)
@@ -836,7 +848,7 @@ function MonthPlanRow({ cat, actual, monthId, incomeBase }: { cat: CategoryDef; 
 
   // How far through the month we are — drives the pace colour.
   const today = useMemo(() => new Date(), [])
-  const { elapsed, state } = getPeriodProgress(monthId, monthStartDay, monthStartBusinessDay, today, anchors)
+  const { elapsed, state } = getPeriodProgress(monthId, monthStartDay, monthStartBusinessDay, today, config)
   // Salary lands late, so income is only "due" once we're past the 25th (or the
   // period has closed). Before that, a missing income shouldn't flag red.
   const incomeDue = state === 'past' || (state === 'current' && today.getDate() >= 26)
@@ -1006,7 +1018,7 @@ function CategoryBranch({
           style={{ backgroundColor: cat.color ?? '#94a3b8' }}
         />
         <span className="font-medium text-sm text-gray-800 truncate min-w-0 flex-1">{cat.name}</span>
-        <Badge variant={cat.type === 'income' ? 'green' : cat.type === 'savings' ? 'blue' : 'gray'} size="sm">
+        <Badge variant={cat.type === 'income' ? 'green' : cat.type === 'savings' ? 'blue' : 'gray'} size="sm" className="hidden sm:inline-flex">
           {cat.type === 'income' ? 'Inkomst' : cat.type === 'savings' ? 'Spar' : 'Utgift'}
         </Badge>
         {onCategoryChart && (
@@ -1136,8 +1148,8 @@ function SubcategoryBranch({
           )}
           {[...transactions]
             .sort((a, b) => b.tx.date.localeCompare(a.tx.date))
-            .map((t) => (
-              <TransactionRow key={txKey(t.tx)} tx={t.tx} categories={categories} catId={catId} subId={subId} />
+            .map((t, i) => (
+              <TransactionRow key={`${txKey(t.tx)}::${i}`} tx={t.tx} categories={categories} catId={catId} subId={subId} />
             ))}
         </div>
       )}
@@ -1290,16 +1302,16 @@ function CategoryPicker({
 
   return (
     <div className="ml-10 md:ml-16 mb-2 flex flex-wrap items-center gap-2 bg-warm-50 border border-warm-200 rounded-lg p-2">
-      <div ref={containerRef} className="relative">
+      <div ref={containerRef} className="relative flex-1 min-w-0">
         <input
-          className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 w-56"
+          className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 w-full"
           value={open ? query : currentLabel}
           placeholder="Sök kategori…"
           onFocus={() => { setOpen(true); setQuery('') }}
           onChange={(e) => { setQuery(e.target.value); setOpen(true) }}
         />
         {open && filtered.length > 0 && (
-          <div className="absolute z-50 top-full mt-1 left-0 w-72 max-h-60 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg">
+          <div className="absolute z-50 top-full mt-1 left-0 w-[min(18rem,calc(100vw-5rem))] max-h-60 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg">
             {filtered.map((opt, i) => (
               <button
                 key={i}
@@ -1328,6 +1340,7 @@ function CategoryPicker({
 // ─── Category donut ───────────────────────────────────────────────────────────
 
 function CategoryDonut({ data, total, onCategoryClick }: { data: DonutSlice[]; total: number; onCategoryClick?: (catId: string) => void }) {
+  const isMobile = useIsMobile()
   return (
     <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr] gap-3 items-center">
       <ResponsiveContainer width="100%" height={200}>
@@ -1352,6 +1365,7 @@ function CategoryDonut({ data, total, onCategoryClick }: { data: DonutSlice[]; t
             ))}
           </Pie>
           <Tooltip
+            position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
             formatter={(v, _name, item) => {
               const num = Number(v ?? 0)
               const pct = total > 0 ? ((num / total) * 100).toFixed(0) : 0
@@ -1400,6 +1414,7 @@ function CategoryTrendBar({
   categories: CategoryDef[]
   onCategoryClick?: (catId: string) => void
 }) {
+  const isMobile = useIsMobile()
   // Only stack categories that have at least one non-zero value to keep the legend tidy.
   const activeCats = categories.filter((c) =>
     data.some((d) => (d[c.id] as number) > 0)
@@ -1419,6 +1434,7 @@ function CategoryTrendBar({
             tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`)}
           />
           <Tooltip
+            position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
             cursor={{ fill: '#f5f1e6' }}
             contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e7e2d3' }}
             formatter={(v, name) => [formatCurrency(Number(v ?? 0)), String(name)]}
@@ -1469,6 +1485,7 @@ function CategoryDetailChart({
   activeSubs: SubTimelineEntry[]
   onClose: () => void
 }) {
+  const isMobile = useIsMobile()
   return (
     <Card padding={false} className="p-3 md:p-5 mb-6">
       <div className="flex items-center justify-between mb-4">
@@ -1500,6 +1517,7 @@ function CategoryDetailChart({
             tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`)}
           />
           <Tooltip
+            position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
             cursor={{ fill: '#f5f1e6' }}
             contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e7e2d3' }}
             formatter={(v, name) => [formatCurrency(Number(v ?? 0)), String(name)]}

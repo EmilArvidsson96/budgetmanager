@@ -3,7 +3,7 @@ import { Search, X, SlidersHorizontal, ArrowDownUp, Pencil, RotateCcw, ArrowLeft
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { formatCurrency } from '@/utils/budgetHelpers'
-import { txKey } from '@/utils/transferReconciliation'
+import { txKey, findTxKeyCollisions } from '@/utils/transferReconciliation'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import { Select } from '@/components/ui/Select'
 import { Button } from '@/components/ui/Button'
@@ -188,13 +188,15 @@ function CategoryEditDialog({
 // ─── Transaction row ──────────────────────────────────────────────────────────
 
 function TxRow({
-  item, categories, isOverridden, editing, onEdit,
+  item, categories, isOverridden, editing, onEdit, debugMode, collision,
 }: {
   item: ResolvedTx
   categories: CategoryDef[]
   isOverridden: boolean
   editing: boolean
   onEdit: () => void
+  debugMode?: boolean
+  collision?: boolean
 }) {
   const { tx, catId, subId } = item
   const cat = categories.find((c) => c.id === catId)
@@ -203,7 +205,7 @@ function TxRow({
 
   return (
     <div
-      className={`grid grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-4 px-4 py-2.5 items-center transition-colors
+      className={`grid grid-cols-[4.5rem_1fr_auto_1.75rem] md:grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-2 md:gap-x-4 px-4 py-2.5 items-center transition-colors
         ${editing ? 'bg-warm-50' : 'hover:bg-gray-50'}`}
     >
       {/* Date */}
@@ -212,18 +214,30 @@ function TxRow({
       </span>
 
       {/* Description */}
-      <span className="text-sm text-gray-800 truncate flex items-center gap-1.5 min-w-0" title={tx.description}>
-        <span className="truncate">{tx.description || <span className="text-gray-400 italic">–</span>}</span>
-        {isOverridden && <span title="Omkategoriserad" className="w-1.5 h-1.5 rounded-full bg-brand-500 shrink-0" />}
+      <span className="text-sm text-gray-800 flex flex-col min-w-0 gap-0.5">
+        <span className="flex items-center gap-1.5 min-w-0">
+          <span className="truncate">{tx.description || <span className="text-gray-400 italic">–</span>}</span>
+          {isOverridden && <span title="Omkategoriserad" className="w-1.5 h-1.5 rounded-full bg-brand-500 shrink-0" />}
+          {collision && (
+            <span title="Delar txKey med minst en annan transaktion — kan visas/redigeras fel" className="text-[10px] px-1 rounded bg-amber-100 text-amber-700 shrink-0">
+              dubblett-nyckel
+            </span>
+          )}
+        </span>
+        {debugMode && (
+          <span className="text-[10px] font-mono text-gray-400 truncate">
+            idx={tx.index} · konto={tx.account_number} · bank={tx.bank_name} · namn={tx.account_name} · nyckel={txKey(tx)}
+          </span>
+        )}
       </span>
 
       {/* Account */}
-      <span className="text-xs text-gray-400 truncate text-right" title={tx.account_name}>
+      <span className="hidden md:block text-xs text-gray-400 truncate text-right" title={tx.account_name}>
         {tx.account_name}
       </span>
 
       {/* Category */}
-      <span className="text-xs text-gray-500 truncate">
+      <span className="hidden md:block text-xs text-gray-500 truncate">
         {cat ? (
           <>
             {cat.name}
@@ -257,7 +271,7 @@ function TxRow({
 export function TransactionListView() {
   const store = useAppStore()
   const { settings, allTransactions, transactionOverrides } = store
-  const { categories, zlantarCategoryRules, accounts } = settings
+  const { categories, zlantarCategoryRules, accounts, debugMode } = settings
 
   const [search, setSearch] = useState('')
   const [accountFilter, setAccountFilter] = useState('')
@@ -271,8 +285,20 @@ export function TransactionListView() {
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [showAdvanced, setShowAdvanced] = useState(false)
 
-  // txKey of the row whose category modal is open (null = closed).
-  const [editingKey, setEditingKey] = useState<string | null>(null)
+  // The transaction whose category modal is open (null = closed). Tracked by
+  // object reference, not txKey — two distinct transactions (e.g. two same-day
+  // "SL" top-ups) can share a txKey, and a string key can't tell them apart.
+  const [editingTx, setEditingTx] = useState<ZlantarTransaction | null>(null)
+
+  // txKeys shared by more than one transaction. Anything keyed by txKey alone
+  // (React list keys, transactionOverrides, import dedup) can't distinguish
+  // these — flagged here so debug mode can surface it instead of silently
+  // misbehaving (ghost/duplicated rows, overrides applying to the wrong row).
+  const collisionKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const c of findTxKeyCollisions(allTransactions)) keys.add(c.key)
+    return keys
+  }, [allTransactions])
 
   const ruleMap = useMemo(
     () => buildRuleLookup(zlantarCategoryRules ?? DEFAULT_ZLANTAR_RULES),
@@ -392,11 +418,13 @@ export function TransactionListView() {
     return out
   }, [resolved, sortField])
 
-  // The resolved row currently being edited (drives the modal).
+  // The resolved row currently being edited (drives the modal). Matched by
+  // object identity so a txKey collision can't open/highlight the wrong row.
   const editingItem = useMemo(
-    () => (editingKey ? resolved.find((r) => txKey(r.tx) === editingKey) ?? null : null),
-    [editingKey, resolved]
+    () => (editingTx ? resolved.find((r) => r.tx === editingTx) ?? null : null),
+    [editingTx, resolved]
   )
+  const editingKeyStr = editingItem ? txKey(editingItem.tx) : null
 
   return (
     <Layout>
@@ -420,8 +448,8 @@ export function TransactionListView() {
               </button>
             )}
           </div>
-          <Select value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)} options={accountOptions} placeholder="Alla konton" className="w-48" />
-          <Select value={txTypeFilter} onChange={(e) => setTxTypeFilter(e.target.value)} options={Object.entries(TX_TYPE_LABELS).map(([value, label]) => ({ value, label }))} placeholder="Alla typer" className="w-40" />
+          <Select value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)} options={accountOptions} placeholder="Alla konton" className="w-full sm:w-48" />
+          <Select value={txTypeFilter} onChange={(e) => setTxTypeFilter(e.target.value)} options={Object.entries(TX_TYPE_LABELS).map(([value, label]) => ({ value, label }))} placeholder="Alla typer" className="w-full sm:w-40" />
           <button
             onClick={() => setShowAdvanced((v) => !v)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors
@@ -450,11 +478,11 @@ export function TransactionListView() {
               <span className="shrink-0">Till</span>
               <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
             </div>
-            <div className="flex items-center gap-1.5 text-sm text-gray-500">
+            <div className="flex flex-wrap items-center gap-1.5 text-sm text-gray-500">
               <span className="shrink-0">Belopp</span>
-              <input type="number" value={minAmt} onChange={(e) => setMinAmt(e.target.value)} placeholder="Min" min="0" className="w-24 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+              <input type="number" value={minAmt} onChange={(e) => setMinAmt(e.target.value)} placeholder="Min" min="0" className="w-20 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
               <span className="text-gray-400">–</span>
-              <input type="number" value={maxAmt} onChange={(e) => setMaxAmt(e.target.value)} placeholder="Max" min="0" className="w-24 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+              <input type="number" value={maxAmt} onChange={(e) => setMaxAmt(e.target.value)} placeholder="Max" min="0" className="w-20 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
               <span className="text-gray-400 text-xs">kr (abs)</span>
             </div>
             <Select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} options={categoryOptions} placeholder="Alla kategorier" className="w-48" />
@@ -462,9 +490,22 @@ export function TransactionListView() {
         )}
       </div>
 
+      {/* ── Debug: txKey collision report ── */}
+      {debugMode && collisionKeys.size > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-xs text-amber-800">
+          <p className="font-medium mb-1">
+            {collisionKeys.size} nyckel{collisionKeys.size === 1 ? '' : 'ar'} delas av flera transaktioner ({allTransactions.filter((tx) => collisionKeys.has(txKey(tx))).length} st totalt).
+          </p>
+          <p className="text-amber-700">
+            Dessa transaktioner har identiskt datum, belopp, beskrivning och kontonummer — appen kan inte skilja dem åt.
+            Det kan ge dubbletter/spöktrader i listan och göra att redigera-knappen öppnar fel post. Rader med detta märkta <span className="px-1 rounded bg-amber-100">dubblett-nyckel</span>.
+          </p>
+        </div>
+      )}
+
       {/* ── Summary strip ── */}
       {resolved.length > 0 && (
-        <div className="flex gap-6 text-sm text-gray-500 mb-4 px-1">
+        <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-500 mb-4 px-1">
           <span><span className="font-medium text-gray-700">{summary.count}</span> transaktioner</span>
           {summary.income !== 0 && <span>In: <span className="font-medium text-emerald-600">{formatCurrency(summary.income)}</span></span>}
           {summary.expense !== 0 && <span>Ut: <span className="font-medium text-red-600">{formatCurrency(Math.abs(summary.expense))}</span></span>}
@@ -481,18 +522,18 @@ export function TransactionListView() {
         </div>
       ) : (
         <div className="bg-white border border-gray-200 rounded-2xl">
-          {/* Column headers — 6 cols matching TxRow */}
-          <div className="grid grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-4 px-4 py-2.5 border-b border-gray-100 bg-gray-50 rounded-t-2xl text-xs font-medium text-gray-500 uppercase tracking-wide">
+          {/* Column headers — 6 cols matching TxRow (Konto/Kategori hidden on mobile) */}
+          <div className="grid grid-cols-[4.5rem_1fr_auto_1.75rem] md:grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-2 md:gap-x-4 px-4 py-2.5 border-b border-gray-100 bg-gray-50 rounded-t-2xl text-xs font-medium text-gray-500 uppercase tracking-wide">
             <button onClick={() => toggleSort('date')} className="flex items-center text-left hover:text-gray-700 transition-colors whitespace-nowrap">
               Datum <SortIcon field="date" />
             </button>
             <button onClick={() => toggleSort('description')} className="flex items-center text-left hover:text-gray-700 transition-colors">
               Beskrivning <SortIcon field="description" />
             </button>
-            <button onClick={() => toggleSort('account')} className="flex items-center justify-end hover:text-gray-700 transition-colors whitespace-nowrap">
+            <button onClick={() => toggleSort('account')} className="hidden md:flex items-center justify-end hover:text-gray-700 transition-colors whitespace-nowrap">
               Konto <SortIcon field="account" />
             </button>
-            <span>Kategori</span>
+            <span className="hidden md:block">Kategori</span>
             <button onClick={() => toggleSort('amount')} className="flex items-center justify-end hover:text-gray-700 transition-colors whitespace-nowrap">
               Belopp <SortIcon field="amount" />
             </button>
@@ -504,8 +545,8 @@ export function TransactionListView() {
             {rows.map((row, i) => {
               if (row.type === 'month') {
                 return (
-                  <div key={`month-${i}`} className="grid grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-4 px-4 py-2 bg-warm-50 border-y border-warm-200">
-                    <span className="text-xs font-semibold text-gray-600 col-span-5">{row.label}</span>
+                  <div key={`month-${i}`} className="grid grid-cols-[4.5rem_1fr_auto_1.75rem] md:grid-cols-[6rem_1fr_8rem_9rem_6rem_2rem] gap-x-2 md:gap-x-4 px-4 py-2 bg-warm-50 border-y border-warm-200">
+                    <span className="text-xs font-semibold text-gray-600 col-span-2 md:col-span-5">{row.label}</span>
                     <span className={`text-xs font-semibold text-right ${row.total >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                       {formatCurrency(row.total, true)}
                     </span>
@@ -515,12 +556,14 @@ export function TransactionListView() {
               const rowKey = txKey(row.item.tx)
               return (
                 <TxRow
-                  key={rowKey}
+                  key={`${rowKey}::${i}`}
                   item={row.item}
                   categories={categories}
                   isOverridden={!!transactionOverrides[rowKey]}
-                  editing={editingKey === rowKey}
-                  onEdit={() => setEditingKey(rowKey)}
+                  editing={editingTx === row.item.tx}
+                  onEdit={() => setEditingTx(row.item.tx)}
+                  debugMode={debugMode}
+                  collision={collisionKeys.has(rowKey)}
                 />
               )
             })}
@@ -529,20 +572,20 @@ export function TransactionListView() {
       )}
 
       {/* ── Category edit modal (centered, one at a time) ── */}
-      {editingItem && (
+      {editingItem && editingKeyStr && (
         <CategoryEditDialog
           tx={editingItem.tx}
           categories={categories}
           currentCatId={editingItem.catId}
           currentSubId={editingItem.subId}
-          currentLevel3Id={transactionOverrides[editingKey!]?.level3Id}
-          canReset={!!transactionOverrides[editingKey!]}
+          currentLevel3Id={transactionOverrides[editingKeyStr]?.level3Id}
+          canReset={!!transactionOverrides[editingKeyStr]}
           onPick={(c, s, l3) => {
-            store.setTransactionOverride(editingKey!, { categoryId: c, subcategoryId: s, level3Id: l3 })
-            setEditingKey(null)
+            store.setTransactionOverride(editingKeyStr, { categoryId: c, subcategoryId: s, level3Id: l3 })
+            setEditingTx(null)
           }}
-          onReset={() => { store.clearTransactionOverride(editingKey!); setEditingKey(null) }}
-          onClose={() => setEditingKey(null)}
+          onReset={() => { store.clearTransactionOverride(editingKeyStr); setEditingTx(null) }}
+          onClose={() => setEditingTx(null)}
         />
       )}
     </Layout>

@@ -272,6 +272,10 @@ export interface LiquidityEntry {
   accountId?: string
   isRecurring?: boolean
   isConfirmed?: boolean
+  // Whether this entry is counted in the liquidity projection. Defaults to
+  // true when unset — set to false to keep a planned one-time cost on record
+  // without it affecting the projected balance.
+  includeInProjection?: boolean
 }
 
 export interface LiquidityPlan {
@@ -316,6 +320,34 @@ export interface MonthClose {
   expense: number
   savings: number
   net: number
+}
+
+// ─── AI financial coach (monthly review + on-request chat) ───────────────────
+
+// The consistent health tone the coach assigns a month. Drives the review card's
+// colour and is fed into the next month's call so the nudging keeps one throughline
+// instead of inventing a new framework each cycle.
+export type CoachVerdict = 'strong' | 'ok' | 'watch' | 'concern'
+
+// One saved monthly coaching review, keyed by the period ("avräkning") it assesses.
+// Structured rather than free prose so the card renders numbers-first and the next
+// review can read back the previous nudge/verdict for continuity. The whole review
+// is derived from a small pre-computed aggregate (see utils/coachDigest) — no raw
+// transactions ever leave the device.
+export interface CoachReview {
+  monthId: string          // 'YYYY-MM' — the period reviewed
+  generatedAt: string      // ISO timestamp
+  source: 'ai' | 'template' // 'template' = deterministic offline fallback (no API call)
+  model?: string           // model id, when source === 'ai'
+  verdict: CoachVerdict
+  throughline: string      // the durable theme the coach keeps returning to
+  headline: string         // net worth now + Δ vs last month / 6 mo
+  savings: string          // realised savings-rate assessment (0 vs unmeasurable distinguished)
+  cashflow: string         // income vs expense, trailing averages
+  buffer: string           // liquid runway in months
+  variances: string        // biggest plan-vs-actual gaps
+  lookahead: string        // projected liquidity trough + its drivers
+  nudge: string            // the single concrete, quantified suggestion for next month
 }
 
 // ─── Transfer reconciliation (between owners) ────────────────────────────────
@@ -420,16 +452,29 @@ export interface AppSettings {
   // that month, instead of the fixed monthStartDay. monthStartDay then acts as the
   // expected day (window centre + fallback when no salary is detected).
   salaryAnchoredMonths?: boolean        // default false; when on, periods start at detected salary
-  salaryDetectionWindowDays?: number    // ± days around monthStartDay to search (default 6)
-  salaryMinAmount?: number              // min positive amount to count as salary (default 5000)
+  salaryMinAmount?: number              // min positive amount to count as salary (default 20000)
+  salaryAmountTolerancePct?: number     // ± band around a recurring amount, e.g. 20 (default 20)
+  salaryMinRecurringMonths?: number     // months an amount must recur in to count (default 2)
+  // Dual reconciliation boundary (only when salaryAnchoredMonths is on): listed
+  // income (salary + benefits + savings withdrawals) on/after incomeCutDay rolls to
+  // the next month's reconciliation; expenses roll only at the detected salary date.
+  incomeCutDay?: number                 // day-of-month cutoff for listed income (default 20)
+  expectedSalaryDay?: number            // fallback salary day for months with no detected salary (default 25)
   categories: CategoryDef[]
   accounts: Account[]
   recurringItems: RecurringItem[]
   zlantarCategoryRules: ZlantarCategoryRule[]
   anthropicApiKey?: string
   anthropicModel?: string
+  // AI financial coach: when on, Avstämning offers a monthly review at each new
+  // salary period and an on-request chat. Off by default — it makes API calls.
+  coachEnabled?: boolean
+  coachModel?: string        // model for the coach; defaults to Sonnet (DEFAULT_COACH_MODEL)
   // Used as an extra keyword when matching swish/bank-transfers between owners.
   partnerName?: string
+  // Shows raw per-transaction identifiers (txKey, index, account fields) in the
+  // transaction list, plus a report of any txKey collisions across allTransactions.
+  debugMode?: boolean
 }
 
 // Per-transaction category override, keyed by txKey (date|amount|description|
@@ -487,4 +532,6 @@ export interface AppState {
   // Monthly snapshots of the forward net-worth projection, so the Rapport can show
   // this month's 2-year outlook against last month's. Keyed by the period taken in.
   wealthForecasts: Record<string, WealthForecastSnapshot>   // key: takenForPeriod 'YYYY-MM'
+  // Saved AI coaching reviews, one per assessed period. Keyed by the reviewed monthId.
+  coachReviews: Record<string, CoachReview>                 // key: reviewed 'YYYY-MM'
 }

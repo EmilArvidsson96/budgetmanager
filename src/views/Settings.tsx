@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, Trash2, Edit2, X, Check, ArrowRight, RefreshCw } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
@@ -7,11 +7,14 @@ import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { Select } from '@/components/ui/Select'
 import { RECEIPT_MODELS, DEFAULT_RECEIPT_MODEL } from '@/utils/receiptModels'
+import { DEFAULT_COACH_MODEL } from '@/utils/coach'
 import { slugify } from '@/utils/slug'
 import { getSalaryAnchors } from '@/utils/salaryDetection'
 import { MONTH_NAMES_SHORT } from '@/utils/budgetHelpers'
 import { loadSyncConfig, saveSyncConfig, clearSyncConfig } from '@/utils/githubSync'
 import { useSyncStatus, triggerManualSync } from '@/hooks/useGitHubSync'
+import { listSnapshots, restoreSnapshot, createSnapshot, deleteSnapshot, type Snapshot } from '@/utils/snapshots'
+import { findTxKeyCollisions } from '@/utils/transferReconciliation'
 import type { Account, RecurringItem, AccountType, ZlantarCategoryRule, CategoryDef, Level3Def } from '@/types'
 
 function newId() { return `id-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
@@ -32,7 +35,7 @@ const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = Object.fromEntries(
 ) as Record<AccountType, string>
 
 export function SettingsView() {
-  const [tab, setTab] = useState<'general' | 'accounts' | 'recurring' | 'categories' | 'mapping' | 'api' | 'sync'>('general')
+  const [tab, setTab] = useState<'general' | 'accounts' | 'recurring' | 'categories' | 'mapping' | 'api' | 'sync' | 'backup'>('general')
 
   return (
     <Layout>
@@ -47,6 +50,7 @@ export function SettingsView() {
           { key: 'mapping',    label: 'Zlantar-mappning' },
           { key: 'api',        label: 'API-nycklar' },
           { key: 'sync',       label: 'Synkronisering' },
+          { key: 'backup',     label: 'Säkerhetskopior' },
         ] as const).map(({ key, label }) => (
           <button
             key={key}
@@ -66,6 +70,7 @@ export function SettingsView() {
       {tab === 'mapping'    && <ZlantarMappingTab />}
       {tab === 'api'        && <ApiKeysTab />}
       {tab === 'sync'       && <SyncTab />}
+      {tab === 'backup'     && <BackupTab />}
     </Layout>
   )
 }
@@ -92,6 +97,12 @@ function GeneralTab() {
   const anchorEntries = Object.entries(salaryInfo.anchors ?? {}).sort((a, b) => b[0].localeCompare(a[0]))
   const fmtPeriod = (id: string) => `${MONTH_NAMES_SHORT[parseInt(id.slice(5, 7)) - 1]} ${id.slice(2, 4)}`
   const fmtDay = (iso: string) => `${parseInt(iso.slice(8, 10))} ${MONTH_NAMES_SHORT[parseInt(iso.slice(5, 7)) - 1].toLowerCase()}`
+  // The salary in calendar month M opens the reconciliation period labelled M+1.
+  const openedPeriod = (calId: string) => {
+    const y = parseInt(calId.slice(0, 4))
+    const m = parseInt(calId.slice(5, 7))
+    return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`
+  }
 
   const save = () => {
     const parsed = parseInt(day)
@@ -177,9 +188,15 @@ function GeneralTab() {
               <div>
                 <span className="text-sm font-medium text-gray-700">Starta perioden när lönen kommer</span>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  Letar upp lönen (inkomst&nbsp;→&nbsp;Lön) runt startdagen ovan och låter perioden
-                  börja på det faktiska lönedatumet i stället för en fast dag. Startdagen blir den
-                  förväntade lönedagen — och reserv för månader där ingen lön hittas.
+                  Lönen som kommer i slutet av en månad öppnar <em>nästa</em> månads avräkning
+                  (lön 22 maj → juni). Lön hittas genom hela månaden — i första hand en insättning
+                  kategoriserad som lön, annars ett återkommande belopp (±&#8202;{store.settings.salaryAmountTolerancePct ?? 20}&#8202;%);
+                  skatteåterbäring, ränta och sparande räknas inte som lön.
+                </p>
+                <p className="text-xs text-gray-400 mt-1.5">
+                  <span className="font-medium text-gray-500">Inkomst</span> (lön, bidrag, sociala ersättningar,
+                  sparuttag) från brytdagen räknas till nästa månad, medan <span className="font-medium text-gray-500">utgifter</span> byter
+                  månad först på det faktiska lönedatumet — så bidrag som kommer strax innan lönen hamnar rätt.
                 </p>
               </div>
             </label>
@@ -188,13 +205,35 @@ function GeneralTab() {
               <div className="mt-4 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-xs font-medium text-gray-600 block mb-1">Sökfönster (± dagar)</label>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Inkomst-brytdag</label>
                     <input
                       type="number"
                       min={1}
-                      max={20}
-                      value={store.settings.salaryDetectionWindowDays ?? 6}
-                      onChange={(e) => store.updateSettings({ salaryDetectionWindowDays: Math.max(1, Math.min(20, parseInt(e.target.value) || 6)) })}
+                      max={28}
+                      value={store.settings.incomeCutDay ?? 20}
+                      onChange={(e) => store.updateSettings({ incomeCutDay: Math.max(1, Math.min(28, parseInt(e.target.value) || 20)) })}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Reserv-lönedag</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={28}
+                      value={store.settings.expectedSalaryDay ?? 25}
+                      onChange={(e) => store.updateSettings({ expectedSalaryDay: Math.max(1, Math.min(28, parseInt(e.target.value) || 25)) })}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Beloppstolerans (±&nbsp;%)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={80}
+                      value={store.settings.salaryAmountTolerancePct ?? 20}
+                      onChange={(e) => store.updateSettings({ salaryAmountTolerancePct: Math.max(1, Math.min(80, parseInt(e.target.value) || 20)) })}
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                     />
                   </div>
@@ -204,8 +243,19 @@ function GeneralTab() {
                       type="number"
                       min={0}
                       step={500}
-                      value={store.settings.salaryMinAmount ?? 5000}
+                      value={store.settings.salaryMinAmount ?? 20000}
                       onChange={(e) => store.updateSettings({ salaryMinAmount: Math.max(0, parseInt(e.target.value) || 0) })}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Återkommer i minst (mån)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={store.settings.salaryMinRecurringMonths ?? 2}
+                      onChange={(e) => store.updateSettings({ salaryMinRecurringMonths: Math.max(1, Math.min(12, parseInt(e.target.value) || 2)) })}
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                     />
                   </div>
@@ -214,24 +264,28 @@ function GeneralTab() {
                 {anchorEntries.length > 0 && (
                   <div className="p-3 bg-gray-50 border border-gray-100 rounded-lg">
                     <p className="text-xs font-medium text-gray-600 mb-2">
-                      Identifierade lönedatum ({anchorEntries.length} perioder)
+                      Avräkningsmånader som öppnas av en lön ({anchorEntries.length})
                     </p>
                     <div className="flex flex-wrap gap-1.5">
-                      {anchorEntries.slice(0, 18).map(([id, iso]) => (
-                        <span key={id} className="inline-flex items-center gap-1 text-[11px] bg-white border border-gray-200 rounded px-2 py-0.5 text-gray-600">
-                          <span className="font-medium text-gray-800">{fmtPeriod(id)}</span>
-                          <span className="text-gray-400">→</span>
-                          <span>{fmtDay(iso)}</span>
-                        </span>
-                      ))}
+                      {anchorEntries.slice(0, 18).map(([id]) => {
+                        const m = salaryInfo.matches[id]
+                        return (
+                          <span key={id} className="inline-flex items-center gap-1 text-[11px] bg-white border border-gray-200 rounded px-2 py-0.5 text-gray-600" title={m?.via === 'tag' ? 'Hittad via lönekategori' : 'Hittad via återkommande belopp'}>
+                            <span className="font-medium text-gray-800">{fmtPeriod(openedPeriod(id))}</span>
+                            <span className="text-gray-400">börjar</span>
+                            <span>{fmtDay(m?.date ?? '')}</span>
+                            {m && <span className="text-gray-400">· {Math.round(m.amount).toLocaleString('sv-SE')}&nbsp;kr</span>}
+                          </span>
+                        )
+                      })}
                     </div>
                   </div>
                 )}
 
                 {salaryInfo.flaggedMonths.length > 0 && (
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
-                    <span className="font-medium">Lön ej hittad i {salaryInfo.flaggedMonths.length} månader</span> —
-                    dessa använder den förväntade startdagen ({monthStartDay}). Kontrollera fönstret/beloppet ovan om det ser fel ut:{' '}
+                    <span className="font-medium">Lön ej hittad för {salaryInfo.flaggedMonths.length} avräkningsmånader</span> —
+                    dessa använder reserv-lönedagen ({store.settings.expectedSalaryDay ?? 25}). Kontrollera beloppet/toleransen ovan om det ser fel ut:{' '}
                     {salaryInfo.flaggedMonths.slice(-6).map(fmtPeriod).join(', ')}
                     {salaryInfo.flaggedMonths.length > 6 ? ' …' : ''}
                   </div>
@@ -272,7 +326,90 @@ function GeneralTab() {
           </div>
         </div>
       </Card>
+
+      <DiagnosticsCard />
     </div>
+  )
+}
+
+// ─── Diagnostics ──────────────────────────────────────────────────────────────
+// Debug mode shows raw per-transaction identifiers (txKey, index, account
+// fields) in the transaction list. The collision report below is always
+// computed and shown regardless of the toggle, since it flags a real data
+// issue: two distinct transactions with identical date/amount/description/
+// account number are indistinguishable to anything keyed by txKey (React list
+// keys, transactionOverrides, import dedup) — this is a real Zlantar-data
+// pattern (e.g. two same-day, same-amount "SL" top-ups), not a hypothetical.
+
+function DiagnosticsCard() {
+  const store = useAppStore()
+  const debugMode = !!store.settings.debugMode
+  const collisions = useMemo(() => findTxKeyCollisions(store.allTransactions), [store.allTransactions])
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <Card>
+      <CardHeader
+        title="Diagnostik"
+        subtitle="Felsökningsverktyg för att undersöka hur transaktioner identifieras internt."
+      />
+      <div className="space-y-4">
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={debugMode}
+            onChange={(e) => store.updateSettings({ debugMode: e.target.checked })}
+            className="mt-0.5 rounded accent-brand-600"
+          />
+          <div>
+            <span className="text-sm font-medium text-gray-700">Debug-läge</span>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Visar interna fält (index, kontonummer, bank, intern nyckel) under varje rad i
+              Transaktioner-listan, samt en varning där flera transaktioner delar samma nyckel.
+            </p>
+          </div>
+        </label>
+
+        <div className={`p-3 rounded-lg border text-xs ${collisions.length > 0 ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-gray-50 border-gray-100 text-gray-500'}`}>
+          {collisions.length === 0 ? (
+            <p>Inga nyckelkonflikter hittade bland {store.allTransactions.length} transaktioner.</p>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-medium">
+                  {collisions.length} grupp{collisions.length === 1 ? '' : 'er'} med delad nyckel
+                  ({collisions.reduce((s, c) => s + c.transactions.length, 0)} transaktioner berörda).
+                </p>
+                <button onClick={() => setExpanded((v) => !v)} className="shrink-0 text-amber-700 underline hover:no-underline">
+                  {expanded ? 'Dölj' : 'Visa'}
+                </button>
+              </div>
+              <p className="mt-1 text-amber-700">
+                Dessa transaktioner har identiskt datum, belopp, beskrivning och kontonummer — appen kan inte
+                skilja dem åt. Det kan visa sig som dubblett-/spökrader i listan, att redigera-knappen öppnar
+                fel post, eller (vid en framtida import) att en äkta ny transaktion feltolkas som redan importerad.
+              </p>
+              {expanded && (
+                <div className="mt-3 space-y-2 max-h-64 overflow-y-auto">
+                  {collisions.map((c) => (
+                    <div key={c.key} className="bg-white border border-amber-100 rounded-lg p-2">
+                      <p className="font-mono text-[11px] text-amber-900 break-all">{c.key}</p>
+                      <ul className="mt-1 space-y-0.5">
+                        {c.transactions.map((tx, i) => (
+                          <li key={i} className="text-[11px] text-gray-500 font-mono">
+                            index={tx.index} · bank={tx.bank_name} · account_index={tx.account_index}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </Card>
   )
 }
 
@@ -321,7 +458,7 @@ function AccountsTab() {
         {editing && (
           <div className="mb-4 p-4 bg-brand-50 rounded-xl border border-brand-100">
             <h4 className="font-medium text-gray-800 mb-3">{editing.id.startsWith('id-') ? 'Nytt konto' : 'Redigera konto'}</h4>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Namn</label>
                 <input
@@ -488,13 +625,13 @@ function AccountsTab() {
         <div className="space-y-2">
           {accounts.map((a) => (
             <div key={a.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
                 <div>
-                  <p className="font-medium text-sm text-gray-800">{a.name}</p>
+                  <p className="font-medium text-sm text-gray-800 truncate">{a.name}</p>
                   <p className="text-xs text-gray-400">{a.bankName ?? '–'} · {a.currency}</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-shrink-0">
                 {a.owner && <Badge variant="blue">{a.owner}</Badge>}
                 {a.interestRate !== undefined && (
                   <Badge variant="amber">{a.interestRate}%</Badge>
@@ -545,7 +682,7 @@ function RecurringTab() {
 
         {showForm && (
           <div className="mb-4 p-4 bg-brand-50 rounded-xl border border-brand-100">
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 mb-3">
               <div className="md:col-span-2">
                 <label className="text-xs font-medium text-gray-600 block mb-1">Namn</label>
                 <input
@@ -625,14 +762,14 @@ function RecurringTab() {
             const sub = cat?.subcategories.find((s) => s.id === item.subcategoryId)
             return (
               <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                <div>
-                  <p className="font-medium text-sm text-gray-800">{item.name}</p>
+                <div className="min-w-0">
+                  <p className="font-medium text-sm text-gray-800 truncate">{item.name}</p>
                   <p className="text-xs text-gray-400">
                     {cat?.name}{sub ? ` / ${sub.name}` : ''}
                     {item.dayOfMonth ? ` · dag ${item.dayOfMonth}` : ''}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-shrink-0">
                   <span className={`text-sm font-medium ${item.type === 'income' ? 'text-green-700' : 'text-gray-700'}`}>
                     {item.type === 'income' ? '+' : '−'}{item.amount.toLocaleString('sv-SE')} kr
                   </span>
@@ -760,14 +897,14 @@ function CategoriesTab() {
                       {isCore && <Badge variant="blue" size="sm">Zlantar</Badge>}
                       <button
                         onClick={() => startEdit(sub.id, sub.name)}
-                        className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                        className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
                       >
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
                       {!isCore && (
                         <button
                           onClick={() => deleteSub(sub.id)}
-                          className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity"
+                          className="md:opacity-0 md:group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -930,13 +1067,13 @@ function Level3Manager() {
                     <span className="flex-1 text-sm text-gray-700">{l.name}</span>
                     <button
                       onClick={() => { setEditingId(l.id); setEditName(l.name) }}
-                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                      className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
                     >
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => deleteLevel3(l.id)}
-                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity"
+                      className="md:opacity-0 md:group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -1062,7 +1199,7 @@ function ZlantarMappingTab() {
   const renderForm = (isNew: boolean) => (
     <div className="p-4 bg-brand-50 rounded-xl border border-brand-100 space-y-3">
       <h4 className="text-sm font-medium text-gray-800">{isNew ? 'Ny regel' : 'Redigera regel'}</h4>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 items-end">
         <div>
           <label className="text-xs font-medium text-gray-600 block mb-1">Zlantar-kategori</label>
           <input
@@ -1158,10 +1295,10 @@ function ZlantarMappingTab() {
                         <span className="text-xs text-gray-400 italic">bevara underkategori</span>
                       )}
                     </div>
-                    <button onClick={() => startEdit(rule)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity">
+                    <button onClick={() => startEdit(rule)} className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity">
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
-                    <button onClick={() => store.removeZlantarRule(rule.id)} className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity">
+                    <button onClick={() => store.removeZlantarRule(rule.id)} className="md:opacity-0 md:group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -1200,7 +1337,7 @@ function ZlantarMappingTab() {
                     <button
                       onClick={() => startAddForZlantar(zCat)}
                       title="Lägg till regel"
-                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                      className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
@@ -1220,7 +1357,7 @@ function ZlantarMappingTab() {
                     <button
                       onClick={() => startAddForZlantar(zCat)}
                       title="Lägg till kategori-regel"
-                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                      className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
@@ -1233,10 +1370,10 @@ function ZlantarMappingTab() {
                     (r) => r.zlantarCategory === zCat && r.zlantarSubcategory === zSub
                   )
                   return (
-                    <div key={zSub} className="flex items-center gap-3 py-1.5 px-2 pl-8 group hover:bg-gray-50/80">
-                      <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 w-32 flex-shrink-0">{zSub}</code>
+                    <div key={zSub} className="flex items-center gap-3 py-1.5 px-2 pl-4 sm:pl-8 group hover:bg-gray-50/80">
+                      <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 w-20 sm:w-32 flex-shrink-0">{zSub}</code>
                       <ArrowRight className="w-3 h-3 text-gray-300 flex-shrink-0" />
-                      <span className="text-sm text-gray-600">
+                      <span className="text-sm text-gray-600 min-w-0">
                         {eff.catName}
                         <span className="text-gray-400"> / {eff.subName}</span>
                       </span>
@@ -1251,7 +1388,7 @@ function ZlantarMappingTab() {
                           <button
                             onClick={() => startEdit(specificRule)}
                             title="Redigera regel"
-                            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                            className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
                           >
                             <Edit2 className="w-3 h-3" />
                           </button>
@@ -1259,7 +1396,7 @@ function ZlantarMappingTab() {
                           <button
                             onClick={() => startAddForZlantar(zCat, zSub)}
                             title="Lägg till regel"
-                            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                            className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
                           >
                             <Plus className="w-3 h-3" />
                           </button>
@@ -1272,6 +1409,167 @@ function ZlantarMappingTab() {
             )
           })}
         </div>
+      </Card>
+    </div>
+  )
+}
+
+// ─── Backup / rollback tab ────────────────────────────────────────────────────
+
+function BackupTab() {
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([])
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [msg, setMsg] = useState<string | null>(null)
+
+  const refresh = async () => {
+    try {
+      setSnapshots(await listSnapshots())
+    } catch {
+      setMsg('Kunde inte läsa säkerhetskopior (IndexedDB otillgängligt i detta läge).')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const snaps = await listSnapshots()
+        if (active) setSnapshots(snaps)
+      } catch {
+        if (active) setMsg('Kunde inte läsa säkerhetskopior (IndexedDB otillgängligt i detta läge).')
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [])
+
+  const flash = (text: string) => { setMsg(text); setTimeout(() => setMsg(null), 3000) }
+
+  const createNow = async () => {
+    setBusy(true)
+    try {
+      await createSnapshot('manual')
+      await refresh()
+      flash('Säkerhetskopia skapad.')
+    } catch {
+      flash('Kunde inte skapa säkerhetskopia.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const doRestore = async (id: string) => {
+    setBusy(true)
+    try {
+      await restoreSnapshot(id)
+      await refresh()
+      setConfirmId(null)
+      flash('Data återställd. Den tidigare versionen sparades som en säkerhetskopia så att du kan ångra.')
+    } catch {
+      flash('Kunde inte återställa.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (id: string) => {
+    setBusy(true)
+    try {
+      await deleteSnapshot(id)
+      await refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const fmt = (iso: string) => {
+    const d = new Date(iso)
+    return `${d.toLocaleDateString('sv-SE')} ${d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}`
+  }
+
+  const reasonLabel = (r: Snapshot['reason']) =>
+    r === 'manual' ? 'Manuell' : r === 'pre-restore' ? 'Före återställning' : 'Auto'
+
+  const reasonVariant = (r: Snapshot['reason']): 'blue' | 'amber' | 'gray' =>
+    r === 'manual' ? 'blue' : r === 'pre-restore' ? 'amber' : 'gray'
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <Card>
+        <CardHeader
+          title="Säkerhetskopior & återställning"
+          subtitle="En ögonblicksbild av all din data sparas automatiskt var 10:e minut (lokalt i denna webbläsare). Äldre kopior gallras gradvis: dagsvis efter en vecka, veckovis efter en månad, månadsvis efter tre månader."
+          action={
+            <Button size="sm" onClick={createNow} disabled={busy}>
+              <Plus className="w-4 h-4" />Skapa nu
+            </Button>
+          }
+        />
+
+        {msg && (
+          <div className="mb-3 p-3 bg-brand-50 border border-brand-100 rounded-lg text-xs text-brand-700">
+            {msg}
+          </div>
+        )}
+
+        {loading ? (
+          <p className="text-sm text-gray-400 text-center py-6">Laddar…</p>
+        ) : snapshots.length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-6">Inga säkerhetskopior ännu.</p>
+        ) : (
+          <>
+            <p className="text-xs text-gray-400 mb-2">{snapshots.length} sparade kopior</p>
+            <div className="space-y-1.5 max-h-[28rem] overflow-y-auto">
+              {snapshots.map((s) => (
+                <div key={s.id} className="flex items-center gap-2 p-2.5 bg-gray-50 rounded-lg">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-800">{fmt(s.takenAt)}</p>
+                  </div>
+                  <Badge variant={reasonVariant(s.reason)} size="sm">{reasonLabel(s.reason)}</Badge>
+                  {confirmId === s.id ? (
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" onClick={() => doRestore(s.id)} disabled={busy}>
+                        <Check className="w-3.5 h-3.5" />Bekräfta
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={() => setConfirmId(null)}>
+                        <X className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <Button size="sm" variant="secondary" onClick={() => setConfirmId(s.id)} disabled={busy}>
+                        Återställ
+                      </Button>
+                      <button
+                        onClick={() => remove(s.id)}
+                        disabled={busy}
+                        className="text-gray-300 hover:text-red-500 p-1"
+                        title="Ta bort"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader title="Så fungerar återställning" />
+        <ul className="text-xs text-gray-500 space-y-1.5 list-disc pl-4">
+          <li>Att återställa byter ut all din nuvarande data mot den valda ögonblicksbilden.</li>
+          <li>Innan återställningen sparas din nuvarande data automatiskt som en kopia märkt <em>Före återställning</em> — så du kan alltid ångra.</li>
+          <li>Om GitHub-synk är aktiv skickas den återställda datan vidare till dina andra enheter inom några sekunder.</li>
+          <li>Säkerhetskopiorna lagras lokalt i denna webbläsare och delas inte mellan enheter.</li>
+        </ul>
       </Card>
     </div>
   )
@@ -1451,6 +1749,8 @@ function ApiKeysTab() {
   const [saved, setSaved] = useState(false)
   const [show, setShow] = useState(false)
   const model = store.settings.anthropicModel ?? DEFAULT_RECEIPT_MODEL
+  const coachEnabled = !!store.settings.coachEnabled
+  const coachModel = store.settings.coachModel ?? DEFAULT_COACH_MODEL
 
   function save() {
     store.updateSettings({ anthropicApiKey: key.trim() || undefined })
@@ -1529,6 +1829,55 @@ function ApiKeysTab() {
               <span className="text-sm text-gray-700 group-hover:text-gray-900">{m.label}</span>
             </label>
           ))}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="AI-ekonomicoach"
+          subtitle="Sifferdriven månadsöversikt vid varje avräkning + on-request-chat i Avstämning"
+        />
+        <div className="space-y-4">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={coachEnabled}
+              onChange={(e) => store.updateSettings({ coachEnabled: e.target.checked })}
+              className="mt-0.5 rounded accent-brand-600"
+            />
+            <div>
+              <span className="text-sm font-medium text-gray-700">Aktivera coachen</span>
+              <p className="text-xs text-gray-400 mt-0.5">
+                När en ny löneperiod börjar erbjuder Avstämning en kort genomgång av månaden som stängdes.
+                Bara färdigberäknade nyckeltal skickas till Claude – aldrig enskilda transaktioner. Utan
+                API-nyckel visas en automatisk (regelbaserad) översikt istället.
+              </p>
+            </div>
+          </label>
+
+          {coachEnabled && (
+            <div className="border-t border-gray-100 pt-4">
+              <p className="text-xs font-medium text-gray-500 mb-2">Modell för coachen</p>
+              <div className="space-y-2">
+                {RECEIPT_MODELS.map((m) => (
+                  <label key={m.id} className="flex items-center gap-3 cursor-pointer group">
+                    <input
+                      type="radio"
+                      name="coach-model"
+                      value={m.id}
+                      checked={coachModel === m.id}
+                      onChange={() => store.updateSettings({ coachModel: m.id })}
+                      className="accent-brand-600"
+                    />
+                    <span className="text-sm text-gray-700 group-hover:text-gray-900">{m.label}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-gray-400 mt-2">
+                Sonnet rekommenderas – översikten kräver kvantitativt resonemang, inte bara textextraktion.
+              </p>
+            </div>
+          )}
         </div>
       </Card>
     </div>

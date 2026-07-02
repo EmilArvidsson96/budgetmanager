@@ -5,11 +5,14 @@ import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { MONTH_NAMES_LONG, makeMonthId, formatCurrency } from '@/utils/budgetHelpers'
-import { getMonthIdForDate } from '@/utils/periodUtils'
+import { getMonthIdForDate, bucketKindForCategory } from '@/utils/periodUtils'
 import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { budgetedAmount } from '@/utils/projection'
 import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
+import { CoachReviewCard } from '@/components/coach/CoachReviewCard'
+import { CoachChat } from '@/components/coach/CoachChat'
+import { coachDueMonthId } from '@/utils/coachDigest'
 import type { ZlantarTransaction, ZlantarCategoryRule, TxOverride } from '@/types'
 
 type RuleTarget = { appCategoryId: string; appSubcategoryId?: string }
@@ -52,12 +55,21 @@ function resolveCategory(
 
 export function ReconcileView() {
   const today = new Date()
-  const [year, setYear] = useState(today.getFullYear())
-  const [month, setMonth] = useState(today.getMonth() + 1)
+  // When the coach is on and a review is due, open on the month that just closed
+  // (the "avräkning" to review) instead of the in-progress calendar month. Seeded
+  // once — manual month navigation still works. getState() avoids reordering hooks.
+  const dueSeed = useMemo(() => {
+    const s = useAppStore.getState()
+    if (!s.settings.coachEnabled) return null
+    const id = coachDueMonthId(s)
+    return id ? { year: parseInt(id.slice(0, 4)), month: parseInt(id.slice(5, 7)) } : null
+  }, [])
+  const [year, setYear] = useState(dueSeed?.year ?? today.getFullYear())
+  const [month, setMonth] = useState(dueSeed?.month ?? today.getMonth() + 1)
   const store = useAppStore()
   const { settings, actuals, monthCloses, reconciliations, allTransactions, transactionOverrides } = store
   const { categories, monthStartDay, monthStartBusinessDay, zlantarCategoryRules } = settings
-  const { anchors } = useSalaryAnchors()
+  const { config } = useSalaryAnchors()
 
   const monthId = makeMonthId(year, month)
   const actual = actuals[monthId]
@@ -137,13 +149,14 @@ export function ReconcileView() {
 
     for (const tx of allTransactions) {
       if (!tx.date) continue
-      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) continue
       if (tx.transaction_type === 'transfer') continue   // never counted
 
-      const { catId } = resolveCategory(
+      const { catId, subId } = resolveCategory(
         tx.category ?? '', tx.subcategory ?? '',
         catIds, ruleMap, transactionOverrides[txKey(tx)]
       )
+      const kind = bucketKindForCategory(catId, subId, tx.category ?? '')
+      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, config, kind) !== monthId) continue
       const cat = categories.find((c) => c.id === catId)
       if (!cat) continue
       if (cat.type === 'income') { income += tx.amount; incomeTxs.push(tx) }
@@ -189,7 +202,7 @@ export function ReconcileView() {
     const totalExpenses = expenseGroups.reduce((s, g) => s + g.total, 0)
 
     return { income, incomeTxs, netSavings, savingsAccounts, totalExpenses, expenseGroups }
-  }, [actual, actuals, prevMonthId, allTransactions, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, anchors, monthId])
+  }, [actual, actuals, prevMonthId, allTransactions, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, config, monthId])
 
   // Checklist signals.
   // Only entries in Övrigt WITHOUT a meaningful subcategory count as
@@ -274,6 +287,11 @@ export function ReconcileView() {
 
       {actual && (
         <div className="space-y-5">
+          {/* AI coach — monthly review + on-request chat. key per month so local
+              state (chat thread, transient notes) never leaks across periods. */}
+          <CoachReviewCard key={monthId} monthId={monthId} />
+          <CoachChat key={`chat-${monthId}`} monthId={monthId} />
+
           {/* Status banner */}
           {close ? (
             <div className={`flex items-start gap-2 text-sm rounded-xl px-4 py-3 border ${drifted ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
@@ -306,7 +324,7 @@ export function ReconcileView() {
               return (
                 <Card key={label}>
                   <p className="text-xs text-gray-400 mb-1">{label}</p>
-                  <p className="text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(act)}</p>
+                  <p className="text-lg md:text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(act)}</p>
                   {plan > 0 || kind === 'net' ? (
                     <p className={`text-xs mt-0.5 tabular-nums ${good ? 'text-emerald-600' : 'text-red-600'}`}>
                       plan {formatCurrency(plan)} · {formatCurrency(diff, true)}
@@ -347,10 +365,10 @@ export function ReconcileView() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                    <th className="text-left px-5 py-2">Kategori</th>
-                    <th className="text-right px-5 py-2">Plan</th>
-                    <th className="text-right px-5 py-2">Utfall</th>
-                    <th className="text-right px-5 py-2">Diff</th>
+                    <th className="text-left px-3 md:px-5 py-2">Kategori</th>
+                    <th className="text-right px-3 md:px-5 py-2">Plan</th>
+                    <th className="text-right px-3 md:px-5 py-2">Utfall</th>
+                    <th className="text-right px-3 md:px-5 py-2">Diff</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -359,15 +377,15 @@ export function ReconcileView() {
                     const over = r.cat.type === 'expense' && r.budget > 0 && diff > 0
                     return (
                       <tr key={r.cat.id} className="border-t border-warm-100">
-                        <td className="px-5 py-2.5">
+                        <td className="px-3 md:px-5 py-2.5">
                           <span className="inline-flex items-center gap-2">
                             <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: r.cat.color ?? '#94a3b8' }} />
                             <span className="text-gray-800">{r.cat.name}</span>
                           </span>
                         </td>
-                        <td className="px-5 py-2.5 text-right tabular-nums text-gray-500">{r.budget > 0 ? formatCurrency(r.budget) : '–'}</td>
-                        <td className="px-5 py-2.5 text-right tabular-nums text-gray-800">{formatCurrency(r.actual)}</td>
-                        <td className={`px-5 py-2.5 text-right tabular-nums font-medium ${over ? 'text-red-600' : 'text-gray-500'}`}>
+                        <td className="px-3 md:px-5 py-2.5 text-right tabular-nums text-gray-500">{r.budget > 0 ? formatCurrency(r.budget) : '–'}</td>
+                        <td className="px-3 md:px-5 py-2.5 text-right tabular-nums text-gray-800">{formatCurrency(r.actual)}</td>
+                        <td className={`px-3 md:px-5 py-2.5 text-right tabular-nums font-medium ${over ? 'text-red-600' : 'text-gray-500'}`}>
                           {r.budget > 0 ? formatCurrency(diff, true) : '–'}
                         </td>
                       </tr>
@@ -502,8 +520,8 @@ function WaterfallCard({ data }: { data: CashflowData }) {
           const isResult = s.id === 'net'
 
           return (
-            <div key={s.id} className={`flex items-center gap-3 ${isResult ? 'mt-1 pt-2 border-t border-warm-200' : ''}`}>
-              <span className={`text-xs w-24 md:w-28 text-right flex-shrink-0 truncate ${isResult ? `font-semibold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}` : 'text-gray-500'}`} title={s.label}>
+            <div key={s.id} className={`flex items-center gap-2 md:gap-3 ${isResult ? 'mt-1 pt-2 border-t border-warm-200' : ''}`}>
+              <span className={`text-xs w-16 md:w-28 text-right flex-shrink-0 truncate ${isResult ? `font-semibold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}` : 'text-gray-500'}`} title={s.label}>
                 {s.label}
               </span>
 
@@ -530,7 +548,7 @@ function WaterfallCard({ data }: { data: CashflowData }) {
                 />
               </div>
 
-              <span className={`text-sm w-24 text-right flex-shrink-0 tabular-nums ${isResult ? `font-bold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}` : 'font-medium text-gray-800'}`}>
+              <span className={`text-sm w-20 md:w-24 text-right flex-shrink-0 tabular-nums ${isResult ? `font-bold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}` : 'font-medium text-gray-800'}`}>
                 {s.sign}{formatCurrency(s.displayValue)}
               </span>
             </div>
@@ -539,7 +557,7 @@ function WaterfallCard({ data }: { data: CashflowData }) {
       </div>
 
       {net < 0 && (
-        <p className="text-xs text-gray-400 mt-3 ml-[6.75rem] md:ml-[7.75rem]">
+        <p className="text-xs text-gray-400 mt-3 ml-0 md:ml-[7.75rem]">
           Utgifter och sparande översteg inkomsten med {formatCurrency(Math.abs(net))} denna månad.
         </p>
       )}
@@ -564,8 +582,8 @@ function WaterfallCard({ data }: { data: CashflowData }) {
             {selected.balances
               ? selected.balances.map((b) => (
                   <div key={b.accountId} className="flex items-center gap-3 px-3 py-2">
-                    <span className="flex-1 truncate text-sm text-gray-700" title={b.accountName}>{b.accountName}</span>
-                    <span className="text-xs text-gray-400 tabular-nums shrink-0">{formatCurrency(b.opening)} → {formatCurrency(b.closing)}</span>
+                    <span className="flex-1 min-w-0 truncate text-sm text-gray-700" title={b.accountName}>{b.accountName}</span>
+                    <span className="hidden sm:inline text-xs text-gray-400 tabular-nums shrink-0">{formatCurrency(b.opening)} → {formatCurrency(b.closing)}</span>
                     <span className={`text-xs tabular-nums shrink-0 w-24 text-right font-medium ${b.delta < 0 ? 'text-gray-700' : 'text-emerald-600'}`}>{formatCurrency(b.delta, true)}</span>
                   </div>
                 ))

@@ -11,6 +11,7 @@ import type {
   MonthlyActuals,
   LiquidityPlan,
   ZlantarImport,
+  ZlantarTransaction,
   CategoryDef,
   Account,
   RecurringItem,
@@ -28,6 +29,7 @@ import type {
   TxConflict,
   MonthClose,
   WealthForecastSnapshot,
+  CoachReview,
 } from '@/types'
 import {
   extractOwner,
@@ -35,9 +37,10 @@ import {
   buildAccountBalances,
   mergeAccountBalances,
   accountBalancesEqual,
+  resolveTxCategory,
 } from '@/utils/zlantarParser'
 import { txKey, reconciledKeysFromRecords } from '@/utils/transferReconciliation'
-import { getMonthIdForDate } from '@/utils/periodUtils'
+import { getMonthIdForDate, bucketKindForCategory } from '@/utils/periodUtils'
 import { getSalaryAnchors } from '@/utils/salaryDetection'
 import { computeFrozenElapsed, currentMonthId, snapshotMonthBudget } from '@/utils/projection'
 import { DEFAULT_CATEGORIES, DEFAULT_ZLANTAR_RULES, GROCERY_LEVEL3 } from './defaultCategories'
@@ -461,6 +464,22 @@ function migrateV12(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, wealthForecasts: (raw.wealthForecasts as Record<string, unknown>) ?? {} }
 }
 
+// v13 → v14: dual reconciliation boundary + one-month label shift for salary-
+// anchored users. Field-add only; the actual re-bucketing of actuals happens on
+// rehydrate via rebucketActuals() (guarded by salaryAnchoredMonths) so the labels
+// shift consistently with the transactions.
+function migrateV13(raw: Record<string, unknown>): Record<string, unknown> {
+  const settings = { ...(raw.settings as Record<string, unknown> | undefined) }
+  if (settings.incomeCutDay === undefined) settings.incomeCutDay = 20
+  if (settings.expectedSalaryDay === undefined) settings.expectedSalaryDay = 25
+  return { ...raw, settings }
+}
+
+// v14 → v15: add coachReviews map for the AI financial coach.
+function migrateV14(raw: Record<string, unknown>): Record<string, unknown> {
+  return { ...raw, coachReviews: (raw.coachReviews as Record<string, CoachReview>) ?? {} }
+}
+
 // Rebuild one already-imported month's actuals from allTransactions + overrides,
 // preserving the snapshot's accountBalances / importedAt. Runs after every
 // re-categorization so aggregated budget totals stay in sync with the transactions.
@@ -475,17 +494,47 @@ function recomputeMonth(
   if (!existing) return state.actuals
   const { settings } = state
   const reconciled = reconciledKeysFromRecords(state.reconciliations)
-  // Use the incoming overrides so anchors reflect the same data as the entries.
-  const { anchors } = getSalaryAnchors({
+  // Use the incoming overrides so the period config reflects the same data as the entries.
+  const { config } = getSalaryAnchors({
     allTransactions: state.allTransactions,
     settings,
     transactionOverrides: overrides,
   })
   const entries = buildMonthEntries(
     state.allTransactions, monthId, settings.categories, settings.zlantarCategoryRules,
-    overrides, reconciled, settings.monthStartDay, settings.monthStartBusinessDay, anchors
+    overrides, reconciled, settings.monthStartDay, settings.monthStartBusinessDay, config
   )
   return { ...state.actuals, [monthId]: { ...existing, entries } }
+}
+
+// Which reconciliation month a single transaction lands in, given a set of
+// overrides. Salary anchoring makes this depend on the resolved category (listed
+// income vs. other), so a re-categorization can move a tx across the period seam.
+function txMonthId(
+  settings: AppSettings,
+  allTransactions: ZlantarTransaction[],
+  overrides: Record<string, TxOverride>,
+  tx: ZlantarTransaction
+): string {
+  const { config } = getSalaryAnchors({ allTransactions, settings, transactionOverrides: overrides })
+  const { catId, subId } = resolveTxCategory(tx, settings.categories, settings.zlantarCategoryRules, overrides)
+  const kind = bucketKindForCategory(catId, subId, tx.category ?? '')
+  return getMonthIdForDate(tx.date, settings.monthStartDay, settings.monthStartBusinessDay, config, kind)
+}
+
+// Rebuild the months a tx touches after its override changed. A category change
+// can shift the tx across the salary/income seam, so BOTH the old and new label
+// need rebuilding or a stale entry lingers in the old month.
+function recomputeTxMonths(
+  state: AppState,
+  tx: ZlantarTransaction,
+  newOverrides: Record<string, TxOverride>
+): Record<string, MonthlyActuals> {
+  const newMonth = txMonthId(state.settings, state.allTransactions, newOverrides, tx)
+  const oldMonth = txMonthId(state.settings, state.allTransactions, state.transactionOverrides, tx)
+  let actuals = recomputeMonth(state, newMonth, newOverrides)
+  if (oldMonth !== newMonth) actuals = recomputeMonth({ ...state, actuals }, oldMonth, newOverrides)
+  return actuals
 }
 
 // Rebuild all imported actuals from allTransactions using new settings.
@@ -500,17 +549,20 @@ function recomputeAllActuals(
   if (state.allTransactions.length === 0) return state.actuals
 
   const reconciled = reconciledKeysFromRecords(state.reconciliations)
-  const { anchors } = getSalaryAnchors({
+  const { config } = getSalaryAnchors({
     allTransactions: state.allTransactions,
     settings: newSettings,
     transactionOverrides: state.transactionOverrides,
   })
 
-  // Months that will have transactions under the new period settings
+  // Months that will have transactions under the new period settings. Bucket with
+  // the same per-tx kind as buildMonthEntries so a shifted boundary tx isn't dropped.
   const newMonthIds = new Set<string>()
   for (const tx of state.allTransactions) {
     if (!tx.date || tx.transaction_type === 'transfer') continue
-    newMonthIds.add(getMonthIdForDate(tx.date, newSettings.monthStartDay, newSettings.monthStartBusinessDay, anchors))
+    const { catId, subId } = resolveTxCategory(tx, newSettings.categories, newSettings.zlantarCategoryRules, state.transactionOverrides)
+    const kind = bucketKindForCategory(catId, subId, tx.category ?? '')
+    newMonthIds.add(getMonthIdForDate(tx.date, newSettings.monthStartDay, newSettings.monthStartBusinessDay, config, kind))
   }
 
   // Union old + new month IDs so a period shift doesn't silently drop data
@@ -527,7 +579,7 @@ function recomputeAllActuals(
     const existing = state.actuals[monthId]
     const entries = buildMonthEntries(
       state.allTransactions, monthId, newSettings.categories, newSettings.zlantarCategoryRules,
-      state.transactionOverrides, reconciled, newSettings.monthStartDay, newSettings.monthStartBusinessDay, anchors
+      state.transactionOverrides, reconciled, newSettings.monthStartDay, newSettings.monthStartBusinessDay, config
     )
     if (entries.length === 0) continue
     const [yearStr, monthStr] = monthId.split('-')
@@ -550,8 +602,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   monthStartDay: 1,
   monthStartBusinessDay: false,
   salaryAnchoredMonths: false,
-  salaryDetectionWindowDays: 6,
-  salaryMinAmount: 5000,
+  salaryMinAmount: 20000,
+  salaryAmountTolerancePct: 20,
+  salaryMinRecurringMonths: 2,
+  incomeCutDay: 20,
+  expectedSalaryDay: 25,
   categories: DEFAULT_CATEGORIES,
   accounts: [],
   recurringItems: [],
@@ -581,6 +636,7 @@ interface AppStore extends AppState {
   setMonthOverride: (monthId: string, categoryId: string, amount: number | null) => void
   // Freeze the plan of every elapsed month into budgetHistory (run on hydration).
   freezeElapsedBudgets: () => void
+  rebucketActuals: () => void
   // Plan grid layout (visible rows/columns). null resets to the rolling default.
   setPlanGrid: (config: PlanGridConfig | null) => void
 
@@ -618,6 +674,9 @@ interface AppStore extends AppState {
   // Wealth forecast snapshots (Rapport: this month's outlook vs last month's)
   captureWealthForecast: (snapshot: WealthForecastSnapshot) => void
 
+  // AI coach reviews (one saved review per assessed period)
+  saveCoachReview: (review: CoachReview) => void
+
   // Grocery receipts
   addGroceryReceipt: (receipt: GroceryReceipt) => void
   removeGroceryReceipt: (id: string) => void
@@ -646,6 +705,7 @@ export const useAppStore = create<AppStore>()(
       importConflicts: [],
       monthCloses: {},
       wealthForecasts: {},
+      coachReviews: {},
 
       updateSettings: (s) =>
         set((state) => {
@@ -654,8 +714,11 @@ export const useAppStore = create<AppStore>()(
             (s.monthStartDay !== undefined && s.monthStartDay !== state.settings.monthStartDay) ||
             (s.monthStartBusinessDay !== undefined && s.monthStartBusinessDay !== state.settings.monthStartBusinessDay) ||
             (s.salaryAnchoredMonths !== undefined && s.salaryAnchoredMonths !== state.settings.salaryAnchoredMonths) ||
-            (s.salaryDetectionWindowDays !== undefined && s.salaryDetectionWindowDays !== state.settings.salaryDetectionWindowDays) ||
-            (s.salaryMinAmount !== undefined && s.salaryMinAmount !== state.settings.salaryMinAmount)
+            (s.salaryMinAmount !== undefined && s.salaryMinAmount !== state.settings.salaryMinAmount) ||
+            (s.salaryAmountTolerancePct !== undefined && s.salaryAmountTolerancePct !== state.settings.salaryAmountTolerancePct) ||
+            (s.salaryMinRecurringMonths !== undefined && s.salaryMinRecurringMonths !== state.settings.salaryMinRecurringMonths) ||
+            (s.incomeCutDay !== undefined && s.incomeCutDay !== state.settings.incomeCutDay) ||
+            (s.expectedSalaryDay !== undefined && s.expectedSalaryDay !== state.settings.expectedSalaryDay)
           if (periodChanged) {
             return { settings: newSettings, actuals: recomputeAllActuals(state, newSettings) }
           }
@@ -756,6 +819,12 @@ export const useAppStore = create<AppStore>()(
           return frozen ? { budgetHistory: frozen } : {}
         }),
 
+      // Re-bucket every actuals month from the raw transactions under the current
+      // settings. Run on load for salary-anchored users so period-label changes
+      // (e.g. the +1 reconciliation shift) re-key old snapshots correctly.
+      rebucketActuals: () =>
+        set((state) => ({ actuals: recomputeAllActuals(state, state.settings) })),
+
       setPlanGrid: (config) => set(() => ({ planGrid: config ?? undefined })),
 
       upsertActuals: (actuals) =>
@@ -838,8 +907,25 @@ export const useAppStore = create<AppStore>()(
 
       setZlantarImport: (imp) =>
         set((state) => {
-          const existingKeys = new Set(state.allTransactions.map(txKey))
-          const newTxs = imp.transactions.filter((tx) => !existingKeys.has(txKey(tx)))
+          // A plain Set can't tell "already imported" apart from "a second,
+          // genuinely distinct transaction that happens to share a txKey"
+          // (e.g. two same-day, same-amount "SL" top-ups) — undercounting
+          // drops the second one forever. Count occurrences instead, so a
+          // re-import only skips as many matches per key as already exist.
+          const existingCounts = new Map<string, number>()
+          for (const tx of state.allTransactions) {
+            const key = txKey(tx)
+            existingCounts.set(key, (existingCounts.get(key) ?? 0) + 1)
+          }
+          const newTxs = imp.transactions.filter((tx) => {
+            const key = txKey(tx)
+            const remaining = existingCounts.get(key) ?? 0
+            if (remaining > 0) {
+              existingCounts.set(key, remaining - 1)
+              return false
+            }
+            return true
+          })
 
           // Account balances carried by this upload (empty for a tx-only import).
           const incomingBalances = buildAccountBalances(imp.data)
@@ -880,9 +966,7 @@ export const useAppStore = create<AppStore>()(
           const transactionOverrides = { ...state.transactionOverrides, [txId]: override }
           const tx = state.allTransactions.find((t) => txKey(t) === txId)
           if (!tx?.date) return { transactionOverrides }
-          const { anchors } = getSalaryAnchors({ allTransactions: state.allTransactions, settings: state.settings, transactionOverrides })
-          const monthId = getMonthIdForDate(tx.date, state.settings.monthStartDay, state.settings.monthStartBusinessDay, anchors)
-          return { transactionOverrides, actuals: recomputeMonth(state, monthId, transactionOverrides) }
+          return { transactionOverrides, actuals: recomputeTxMonths(state, tx, transactionOverrides) }
         }),
 
       clearTransactionOverride: (txId) =>
@@ -890,9 +974,7 @@ export const useAppStore = create<AppStore>()(
           const { [txId]: _removed, ...transactionOverrides } = state.transactionOverrides
           const tx = state.allTransactions.find((t) => txKey(t) === txId)
           if (!tx?.date) return { transactionOverrides }
-          const { anchors } = getSalaryAnchors({ allTransactions: state.allTransactions, settings: state.settings, transactionOverrides })
-          const monthId = getMonthIdForDate(tx.date, state.settings.monthStartDay, state.settings.monthStartBusinessDay, anchors)
-          return { transactionOverrides, actuals: recomputeMonth(state, monthId, transactionOverrides) }
+          return { transactionOverrides, actuals: recomputeTxMonths(state, tx, transactionOverrides) }
         }),
 
       addReconciliationRecord: (record) =>
@@ -925,6 +1007,11 @@ export const useAppStore = create<AppStore>()(
           wealthForecasts: { ...state.wealthForecasts, [snapshot.takenForPeriod]: snapshot },
         })),
 
+      saveCoachReview: (review) =>
+        set((state) => ({
+          coachReviews: { ...state.coachReviews, [review.monthId]: review },
+        })),
+
       addGroceryReceipt: (receipt) =>
         set((state) => ({ groceryReceipts: [...state.groceryReceipts, receipt] })),
 
@@ -951,7 +1038,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 13,
+      version: 15,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
@@ -967,11 +1054,15 @@ export const useAppStore = create<AppStore>()(
         if (version < 11) state = migrateV10(state)
         if (version < 12) state = migrateV11(state)
         if (version < 13) state = migrateV12(state)
+        if (version < 14) state = migrateV13(state)
+        if (version < 15) state = migrateV14(state)
         return state
       },
-      // On load, lock in the plan for any month that has already elapsed so later
-      // baseline edits can't rewrite history. Idempotent — only adds missing months.
+      // On load: for salary-anchored users re-bucket actuals first (period labels
+      // may have shifted), THEN lock in the plan for elapsed months. Both are
+      // idempotent — safe to run every load.
       onRehydrateStorage: () => (state) => {
+        if (state?.settings.salaryAnchoredMonths) state.rebucketActuals()
         state?.freezeElapsedBudgets()
       },
     }

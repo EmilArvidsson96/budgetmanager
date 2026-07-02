@@ -40,7 +40,7 @@ export function BaselineEditor() {
   return (
     <div>
       {/* Planned-month summary */}
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-4">
         <SummaryStat label="Inkomst / mån" value={planned.income} tone="income" />
         <SummaryStat label="Utgifter / mån" value={-planned.expense} tone="expense" />
         <SummaryStat label="Kvar / mån" value={planned.net} tone={planned.net >= 0 ? 'income' : 'expense'} />
@@ -64,7 +64,7 @@ function SummaryStat({ label, value, tone }: { label: string; value: number; ton
   return (
     <div className="bg-white border border-warm-200 rounded-xl px-3 py-2.5">
       <p className="text-[11px] text-gray-400 mb-0.5">{label}</p>
-      <p className={`text-base font-semibold tabular-nums ${tone === 'income' ? 'text-emerald-700' : 'text-gray-900'}`}>
+      <p className={`text-sm sm:text-base font-semibold tabular-nums ${tone === 'income' ? 'text-emerald-700' : 'text-gray-900'}`}>
         {formatCurrency(value)}
       </p>
     </div>

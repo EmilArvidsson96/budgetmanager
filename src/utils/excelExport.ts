@@ -274,10 +274,11 @@ function addLiquiditySheet(
     { header: 'Saldo (kr)', key: 'balance', width: 16 },
     { header: 'Konto', key: 'account', width: 18 },
     { header: 'Bekräftad', key: 'confirmed', width: 12 },
+    { header: 'I prognos', key: 'inProjection', width: 12 },
     { header: 'Noteringar', key: 'notes', width: 28 },
   ]
 
-  ws.mergeCells('A1:H1')
+  ws.mergeCells('A1:I1')
   const t = ws.getCell('A1')
   t.value = `Likviditetsplanering ${plan.year}`
   t.font = { size: 14, bold: true, color: { argb: 'FF0E90E3' } }
@@ -285,7 +286,7 @@ function addLiquiditySheet(
   ws.getRow(1).height = 28
 
   const hRow = ws.getRow(2)
-  hRow.values = ['Datum', 'Beskrivning', 'Typ', 'Belopp (kr)', 'Saldo (kr)', 'Konto', 'Bekräftad', 'Noteringar']
+  hRow.values = ['Datum', 'Beskrivning', 'Typ', 'Belopp (kr)', 'Saldo (kr)', 'Konto', 'Bekräftad', 'I prognos', 'Noteringar']
   styleHeaderRow(hRow)
 
   // Starting balances section
@@ -296,7 +297,7 @@ function addLiquiditySheet(
     sbRow.getCell(1).font = { bold: true, italic: true }
     for (const b of plan.startingBalances) {
       const r = ws.getRow(rowIdx++)
-      r.values = ['', b.accountName, 'Ingående saldo', b.balance, '', '', '', '']
+      r.values = ['', b.accountName, 'Ingående saldo', b.balance, '', '', '', '', '']
       setCurrencyFormat(r.getCell(4))
     }
     rowIdx++
@@ -307,7 +308,8 @@ function addLiquiditySheet(
   let runningBalance = plan.startingBalances.reduce((s, b) => s + b.balance, 0)
 
   for (const entry of sorted) {
-    runningBalance += entry.amount
+    const includedInProjection = entry.includeInProjection !== false
+    if (includedInProjection) runningBalance += entry.amount
     const r = ws.getRow(rowIdx++)
     const typeLabel = {
       income: 'Inkomst',
@@ -324,6 +326,7 @@ function addLiquiditySheet(
       runningBalance,
       '',
       entry.isConfirmed ? 'Ja' : 'Nej',
+      includedInProjection ? 'Ja' : 'Nej',
       '',
     ]
     setCurrencyFormat(r.getCell(4))

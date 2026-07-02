@@ -6,10 +6,10 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Select } from '@/components/ui/Select'
 import { Badge } from '@/components/ui/Badge'
-import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories, buildAccountBalances, diffAccountBalances } from '@/utils/zlantarParser'
+import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories, buildAccountBalances, diffAccountBalances, resolveTxCategory } from '@/utils/zlantarParser'
 import type { AccountBalanceChange } from '@/utils/zlantarParser'
 import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
-import { getMonthIdForDate } from '@/utils/periodUtils'
+import { getMonthIdForDate, bucketKindForCategory } from '@/utils/periodUtils'
 import { getSalaryAnchors } from '@/utils/salaryDetection'
 import { formatCurrency } from '@/utils/budgetHelpers'
 import { uniqueSlug } from '@/utils/slug'
@@ -133,9 +133,9 @@ export function ImportView() {
       // (not already in allTransactions). Months where only existing transactions
       // changed are treated as conflicts, not re-importable.
       const existingKeys = new Set(store.allTransactions.map(txKey))
-      // Detect salary anchors over existing + incoming so the imported months
-      // bucket on the real payday, not the nominal day.
-      const { anchors: importAnchors } = getSalaryAnchors({
+      // Detect the salary-period config over existing + incoming so the imported
+      // months bucket on the real payday (and shifted label), not the nominal day.
+      const { config: importConfig } = getSalaryAnchors({
         allTransactions: [...store.allTransactions, ...imp.transactions],
         settings: store.settings,
         transactionOverrides: store.transactionOverrides,
@@ -144,7 +144,9 @@ export function ImportView() {
       for (const tx of imp.transactions) {
         if (!tx.date || tx.transaction_type === 'transfer') continue
         if (!existingKeys.has(txKey(tx))) {
-          newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay, importAnchors))
+          const { catId, subId } = resolveTxCategory(tx, store.settings.categories, store.settings.zlantarCategoryRules, store.transactionOverrides)
+          const kind = bucketKindForCategory(catId, subId, tx.category ?? '')
+          newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay, importConfig, kind))
         }
       }
       const initialAccepted = new Set<string>(previouslyReconciled)
@@ -160,7 +162,7 @@ export function ImportView() {
         store.settings.monthStartBusinessDay,
         initialAccepted,
         undefined,
-        importAnchors
+        importConfig
       )
       const initialMonths = new Set<string>()
       for (const ym of Object.keys(fullActuals)) {
@@ -192,7 +194,7 @@ export function ImportView() {
 
   const { preview, unchangedMonthCount } = useMemo(() => {
     if (!parsedImport) return { preview: null as Record<string, MonthlyActuals> | null, unchangedMonthCount: 0 }
-    const { anchors } = getSalaryAnchors({
+    const { config } = getSalaryAnchors({
       allTransactions: [...store.allTransactions, ...parsedImport.transactions],
       settings: store.settings,
       transactionOverrides: store.transactionOverrides,
@@ -205,7 +207,7 @@ export function ImportView() {
       store.settings.monthStartBusinessDay,
       acceptedKeys,
       undefined,
-      anchors
+      config
     )
     // Only show months that contain at least one new transaction
     const existingKeys = new Set(store.allTransactions.map(txKey))
@@ -213,7 +215,9 @@ export function ImportView() {
     for (const tx of parsedImport.transactions) {
       if (!tx.date || tx.transaction_type === 'transfer') continue
       if (!existingKeys.has(txKey(tx))) {
-        newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay, anchors))
+        const { catId, subId } = resolveTxCategory(tx, store.settings.categories, store.settings.zlantarCategoryRules, store.transactionOverrides)
+        const kind = bucketKindForCategory(catId, subId, tx.category ?? '')
+        newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay, config, kind))
       }
     }
     const filtered: Record<string, MonthlyActuals> = {}
@@ -226,7 +230,7 @@ export function ImportView() {
       filtered[ym] = candidate
     }
     return { preview: filtered, unchangedMonthCount: unchanged }
-  }, [parsedImport, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay, store.settings.salaryAnchoredMonths, store.settings.salaryDetectionWindowDays, store.settings.salaryMinAmount, store.transactionOverrides, acceptedKeys, store.allTransactions])
+  }, [parsedImport, store.settings.categories, store.settings.zlantarCategoryRules, store.settings.monthStartDay, store.settings.monthStartBusinessDay, store.settings.salaryAnchoredMonths, store.settings.salaryMinAmount, store.settings.salaryAmountTolerancePct, store.settings.salaryMinRecurringMonths, store.transactionOverrides, acceptedKeys, store.allTransactions])
 
   // Unmapped categories among the new transactions, grouped by raw category, with a
   // suggested Swedish name. Recomputes as the user creates/maps categories below.
@@ -395,7 +399,7 @@ export function ImportView() {
       />
 
       {/* Step indicator */}
-      <div className="flex items-center gap-2 mb-6">
+      <div className="flex flex-wrap items-center gap-2 gap-y-2 mb-6">
         {(['upload', 'preview', 'done'] as Step[]).map((s, i) => (
           <div key={s} className="flex items-center gap-2">
             <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold
@@ -405,7 +409,7 @@ export function ImportView() {
             <span className={`text-sm ${step === s ? 'font-semibold text-gray-900' : 'text-gray-400'}`}>
               {s === 'upload' ? 'Välj filer' : s === 'preview' ? 'Granska' : 'Klart'}
             </span>
-            {i < 2 && <div className="w-8 h-px bg-gray-200" />}
+            {i < 2 && <div className="w-8 h-px bg-gray-200 hidden sm:block" />}
           </div>
         ))}
       </div>
@@ -731,18 +735,18 @@ export function ImportView() {
                         const isChecked = !deselectedCatKeys.has(catKey)
                         return (
                           <label key={cat.id} className="flex items-center justify-between pl-7 py-1.5 rounded hover:bg-gray-50 cursor-pointer">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
                               <input
                                 type="checkbox"
                                 checked={isChecked}
                                 onChange={() => toggleCatKey(catKey)}
                                 className="rounded"
                               />
-                              <span className={`text-sm ${isChecked ? 'text-gray-700' : 'text-gray-400 line-through'}`}>
+                              <span className={`text-sm truncate ${isChecked ? 'text-gray-700' : 'text-gray-400 line-through'}`}>
                                 {cat.name}
                               </span>
                             </div>
-                            <span className={`text-sm ${isChecked ? 'text-gray-500' : 'text-gray-300'}`}>
+                            <span className={`text-sm shrink-0 ${isChecked ? 'text-gray-500' : 'text-gray-300'}`}>
                               {formatCurrency(cat.total)}
                             </span>
                           </label>
@@ -1018,7 +1022,7 @@ function ConflictRow({
             {incoming.date} · {formatCurrency(incoming.amount)}
           </span>
           {incoming.description && (
-            <span className="text-xs text-gray-400 ml-2 truncate">{incoming.description}</span>
+            <span className="text-xs text-gray-400 ml-2 inline-block max-w-full align-bottom truncate">{incoming.description}</span>
           )}
           <span className="text-xs text-gray-300 ml-2">{incoming.account_name}</span>
         </div>
@@ -1030,23 +1034,23 @@ function ConflictRow({
       </div>
       <div className="flex flex-wrap gap-3 text-xs">
         {categoryChanged && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-gray-400">Kategori:</span>
-            <code className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-100">
+            <code className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-100 break-all">
               {[stored.category, stored.subcategory].filter(Boolean).join(' / ') || '—'}
             </code>
             <span className="text-gray-300">→</span>
-            <code className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100">
+            <code className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100 break-all">
               {[incoming.category, incoming.subcategory].filter(Boolean).join(' / ') || '—'}
             </code>
           </div>
         )}
         {typeChanged && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-gray-400">Typ:</span>
-            <code className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-100">{stored.transaction_type}</code>
+            <code className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-100 break-all">{stored.transaction_type}</code>
             <span className="text-gray-300">→</span>
-            <code className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100">{incoming.transaction_type}</code>
+            <code className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100 break-all">{incoming.transaction_type}</code>
           </div>
         )}
       </div>
@@ -1095,7 +1099,7 @@ function BalanceChangeRow({ change }: { change: AccountBalanceChange }) {
         <span className="text-sm font-medium text-gray-800">{change.accountName}</span>
         {isNew && <span className="ml-2"><Badge variant="green" size="sm">Nytt</Badge></span>}
       </div>
-      <div className="flex items-center gap-3 shrink-0">
+      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 shrink-0">
         {!isNew && (
           <span className="text-xs text-gray-400">
             {formatCurrency(change.oldBalance!)} <span className="text-gray-300">→</span>
@@ -1212,19 +1216,19 @@ function ReconciliationCard({
                   )}
                 </div>
                 <div className="text-xs text-gray-500 space-y-0.5">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     <span className="text-red-500">−</span>
                     <span className="font-medium text-gray-700">{m.ownerA}</span>
                     <span className="text-gray-400">·</span>
                     <span>{m.accountAName}</span>
-                    {m.descriptionA && <span className="text-gray-400 truncate">— {m.descriptionA}</span>}
+                    {m.descriptionA && <span className="text-gray-400 min-w-0 truncate">— {m.descriptionA}</span>}
                   </div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     <span className="text-emerald-600">+</span>
                     <span className="font-medium text-gray-700">{m.ownerB}</span>
                     <span className="text-gray-400">·</span>
                     <span>{m.accountBName}</span>
-                    {m.descriptionB && <span className="text-gray-400 truncate">— {m.descriptionB}</span>}
+                    {m.descriptionB && <span className="text-gray-400 min-w-0 truncate">— {m.descriptionB}</span>}
                   </div>
                 </div>
               </div>

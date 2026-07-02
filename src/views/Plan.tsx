@@ -6,13 +6,14 @@ import {
   ComposedChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot,
 } from 'recharts'
 import { useAppStore } from '@/store'
+import { useIsMobile, MOBILE_TOOLTIP_POSITION } from '@/hooks/useIsMobile'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { formatCurrency } from '@/utils/budgetHelpers'
-import { getMonthIdForDate } from '@/utils/periodUtils'
+import { getMonthIdForDate, bucketKindForEntry } from '@/utils/periodUtils'
 import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
-import { buildProjection } from '@/utils/projection'
+import { buildProjection, buildLiquidityHistory } from '@/utils/projection'
 import { exportToExcel } from '@/utils/excelExport'
 import { buildAiBriefing } from '@/utils/aiExport'
 import { BaselineEditor } from '@/components/budget/BaselineEditor'
@@ -92,6 +93,7 @@ function tickFmt(v: number): string {
 }
 
 const LARGE_TX_THRESHOLD = 10_000
+const LIQUIDITY_HISTORY_MONTHS = 2
 
 function newId() {
   return `liq-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -112,7 +114,7 @@ function LiquidityTooltip({
   const flagPlanned = planned.get(label) ?? []
   const total = payload.reduce((s, p) => s + (p.value ?? 0), 0)
   return (
-    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[180px]">
+    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[8rem] max-w-[75vw] md:min-w-[180px] md:max-w-none">
       <p className="font-semibold text-gray-800 mb-1">{label}</p>
       {stacked && payload.length > 1 ? (
         <>
@@ -216,8 +218,9 @@ export function PlanView() {
   const [exporting, setExporting] = useState(false)
   const [copied, setCopied] = useState(false)
   const store = useAppStore()
+  const isMobile = useIsMobile()
   const { settings } = store
-  const { anchors } = useSalaryAnchors()
+  const { config } = useSalaryAnchors()
 
   const handleExport = async () => {
     setExporting(true)
@@ -257,18 +260,29 @@ export function PlanView() {
 
   const today = new Date()
   const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-  const startMonthId = getMonthIdForDate(todayIso, settings.monthStartDay, settings.monthStartBusinessDay, anchors)
+  const startMonthId = getMonthIdForDate(todayIso, settings.monthStartDay, settings.monthStartBusinessDay, config, 'neutral')
 
   const projection = useMemo(
     () => buildProjection({ state: store, startMonthId, horizon }),
     // recompute when inputs that affect the projection change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [store.settings.accounts, store.monthlyBudgets, store.yearlyBudgets, store.liquidityPlans, store.importSnapshots, startMonthId, horizon, anchors]
+    [store.settings.accounts, store.monthlyBudgets, store.yearlyBudgets, store.liquidityPlans, store.importSnapshots, startMonthId, horizon, config]
   )
 
   const { months, accounts } = projection
   const now = months[0]
   const end = months[months.length - 1]
+
+  // Past months prepended to the liquidity chart only, so large non-recurring
+  // transactions from before "now" can be flagged (the forward projection in
+  // `months` never contains elapsed periods). Built from actual closing balances,
+  // not simulated. Other tabs/KPIs keep using `months` unchanged.
+  const liquidityHistory = useMemo(
+    () => buildLiquidityHistory(store, startMonthId, LIQUIDITY_HISTORY_MONTHS),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [store.actuals, store.settings.accounts, startMonthId]
+  )
+  const liquidityMonths = useMemo(() => [...liquidityHistory, ...months], [liquidityHistory, months])
 
   // Lowest projected liquidity over the horizon (skip baseline).
   const trough = months.slice(1).reduce(
@@ -314,14 +328,20 @@ export function PlanView() {
     return { label: m.label, _wealth: totalAssets, _liquid: liquid, _assetSegs: assetSegs, _liabSegs: liabSegs, Nettoförmögenhet: Math.round(m.netWorth) }
   })
 
-  const liquidityData = months.map((m) => ({ label: m.label, Likviditet: Math.round(m.liquidity) }))
+  const liquidityData = liquidityMonths.map((m) => ({ label: m.label, Likviditet: Math.round(m.liquidity) }))
 
-  // Per-account stacked data: proportional share of total liquidity based on starting balances.
+  // Per-account stacked data. History months use the real per-account balance from
+  // that month's import; projected months split the total proportionally based on
+  // starting balances (their per-account values are frozen — see buildProjection).
   // When total goes negative we zero-out the stack (the red reference line + alert cover that case).
   const liquidityStackData = useMemo(() => {
     if (!useStackedLiquidity) return liquidityData
-    return months.map((m) => {
+    return liquidityMonths.map((m) => {
       const row: Record<string, string | number> = { label: m.label }
+      if (m.isHistory) {
+        for (const a of posLiquidAccounts) row[a.name] = Math.max(0, Math.round(m.values[a.id] ?? 0))
+        return row
+      }
       const total = Math.round(m.liquidity)
       if (total <= 0) {
         for (const a of posLiquidAccounts) row[a.name] = 0
@@ -337,7 +357,7 @@ export function PlanView() {
       return row
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [months, posLiquidAccounts, posLiquidTotal, useStackedLiquidity, liquidityData])
+  }, [liquidityMonths, posLiquidAccounts, posLiquidTotal, useStackedLiquidity, liquidityData])
 
   const liquidityGoesNegative = trough && trough.liquidity < 0
 
@@ -354,7 +374,7 @@ export function PlanView() {
   const carryForward = lastBudgetYear != null && endYear > lastBudgetYear
 
   // ── One-off entry handling (reuses liquidityPlans) ──────────────────────────
-  const [form, setForm] = useState<Partial<LiquidityEntry>>({ type: 'expense', date: todayIso })
+  const [form, setForm] = useState<Partial<LiquidityEntry>>({ type: 'expense', date: todayIso, includeInProjection: true })
   const addEntry = () => {
     if (!form.description || !form.date || !form.amount) return
     const year = form.date.slice(0, 4)
@@ -365,13 +385,14 @@ export function PlanView() {
       amount: form.type === 'expense' || form.type === 'loan_payment' ? -Math.abs(form.amount) : Math.abs(form.amount),
       type: form.type ?? 'expense',
       isConfirmed: false,
+      includeInProjection: form.includeInProjection === false ? false : undefined,
     }
     if (!store.liquidityPlans[year]) {
       const plan: LiquidityPlan = { id: year, year: Number(year), entries: [], startingBalances: [], startingBalanceMode: 'computed' }
       store.upsertLiquidityPlan(plan)
     }
     store.upsertLiquidityEntry(year, entry)
-    setForm({ type: 'expense', date: form.date })
+    setForm({ type: 'expense', date: form.date, includeInProjection: true })
     setShowForm(false)
   }
 
@@ -382,24 +403,28 @@ export function PlanView() {
     for (const plan of Object.values(store.liquidityPlans)) {
       for (const e of plan.entries) {
         if (!e.date) continue
-        const mid = getMonthIdForDate(e.date, settings.monthStartDay, settings.monthStartBusinessDay, anchors)
+        const mid = getMonthIdForDate(e.date, settings.monthStartDay, settings.monthStartBusinessDay, config, bucketKindForEntry(e.type))
         if (mid >= startMonthId && mid <= horizonEnd) list.push({ planYear: plan.id, entry: e })
       }
     }
     return list.sort((a, b) => a.entry.date.localeCompare(b.entry.date))
-  }, [store.liquidityPlans, settings.monthStartDay, settings.monthStartBusinessDay, anchors, startMonthId, horizonEnd])
+  }, [store.liquidityPlans, settings.monthStartDay, settings.monthStartBusinessDay, config, startMonthId, horizonEnd])
 
   // Flags: large non-recurring actual transactions grouped by chart label.
+  // Uses liquidityMonths (history + projection) so transactions from the past
+  // months shown on the liquidity chart get flagged too, not just future ones.
   const largeNonRecurringByLabel = useMemo(() => {
     const recurringAmounts = settings.recurringItems.map((r) => Math.abs(r.amount))
     const byLabel = new Map<string, { amount: number; description: string }[]>()
-    for (const m of months) {
+    for (const m of liquidityMonths) {
       const txs = store.allTransactions.filter((tx) => {
         if (Math.abs(tx.amount) < LARGE_TX_THRESHOLD) return false
         if (tx.transaction_type === 'transfer') return false
         if (tx.category === 'salary') return false
         if (recurringAmounts.some((r) => r > 0 && Math.abs(Math.abs(tx.amount) - r) / r < 0.15)) return false
-        const mid = getMonthIdForDate(tx.date, settings.monthStartDay, settings.monthStartBusinessDay, anchors)
+        // Chart annotation — salary already excluded above; use the 'other'
+        // (salary-date) frame so flags line up with the chart's month axis.
+        const mid = getMonthIdForDate(tx.date, settings.monthStartDay, settings.monthStartBusinessDay, config, 'other')
         return mid === m.monthId
       })
       if (txs.length > 0) {
@@ -407,20 +432,21 @@ export function PlanView() {
       }
     }
     return byLabel
-  }, [store.allTransactions, months, settings.recurringItems, settings.monthStartDay, settings.monthStartBusinessDay, anchors])
+  }, [store.allTransactions, liquidityMonths, settings.recurringItems, settings.monthStartDay, settings.monthStartBusinessDay, config])
 
   // Flags: planned one-off entries grouped by chart label.
   const plannedByLabel = useMemo(() => {
     const byLabel = new Map<string, LiquidityEntry[]>()
     for (const { entry } of upcomingEntries) {
-      const mid = getMonthIdForDate(entry.date, settings.monthStartDay, settings.monthStartBusinessDay, anchors)
+      if (entry.includeInProjection === false) continue
+      const mid = getMonthIdForDate(entry.date, settings.monthStartDay, settings.monthStartBusinessDay, config, bucketKindForEntry(entry.type))
       const m = months.find((mo) => mo.monthId === mid)
       if (!m) continue
       if (!byLabel.has(m.label)) byLabel.set(m.label, [])
       byLabel.get(m.label)!.push(entry)
     }
     return byLabel
-  }, [upcomingEntries, months, settings.monthStartDay, settings.monthStartBusinessDay, anchors])
+  }, [upcomingEntries, months, settings.monthStartDay, settings.monthStartBusinessDay, config])
 
   if (accounts.length === 0) {
     return (
@@ -440,7 +466,7 @@ export function PlanView() {
         title="Plan"
         subtitle="Likviditet & förmögenhet framåt"
         actions={
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2">
             <Button variant="secondary" size="sm" onClick={handleExport} loading={exporting}>
               <Download className="w-4 h-4" /> Exportera
             </Button>
@@ -450,12 +476,12 @@ export function PlanView() {
             <Button variant="secondary" size="sm" onClick={handleAiCopy} title="Kopiera AI-underlaget till urklipp">
               {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />} {copied ? 'Kopierad' : 'Kopiera'}
             </Button>
-            <div className="flex rounded-lg border border-warm-300 overflow-hidden text-sm">
+            <div className="flex rounded-lg border border-warm-300 overflow-x-auto max-w-full text-xs sm:text-sm">
               {VIEWS.map((v) => (
                 <button
                   key={v.id}
                   onClick={() => setView(v.id)}
-                  className={`px-3 py-1.5 font-medium transition-colors ${v.id !== VIEWS[0].id ? 'border-l border-warm-300' : ''} ${
+                  className={`px-2 sm:px-3 py-1.5 font-medium transition-colors whitespace-nowrap ${v.id !== VIEWS[0].id ? 'border-l border-warm-300' : ''} ${
                     view === v.id ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-warm-50'
                   }`}
                 >
@@ -464,12 +490,12 @@ export function PlanView() {
               ))}
             </div>
             {view !== 'history' && (
-              <div className="flex rounded-lg border border-warm-300 overflow-hidden text-sm">
+              <div className="flex rounded-lg border border-warm-300 overflow-x-auto text-xs sm:text-sm">
                 {HORIZONS.map((h) => (
                   <button
                     key={h}
                     onClick={() => setHorizon(h)}
-                    className={`px-3 py-1.5 font-medium transition-colors ${h !== HORIZONS[0] ? 'border-l border-warm-300' : ''} ${
+                    className={`px-2 sm:px-3 py-1.5 font-medium transition-colors whitespace-nowrap ${h !== HORIZONS[0] ? 'border-l border-warm-300' : ''} ${
                       horizon === h ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-warm-50'
                     }`}
                   >
@@ -492,11 +518,11 @@ export function PlanView() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Card>
             <p className="text-xs text-gray-400 mb-1">Nettoförmögenhet idag</p>
-            <p className="text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(now.netWorth)}</p>
+            <p className="text-lg sm:text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(now.netWorth)}</p>
           </Card>
           <Card>
             <p className="text-xs text-gray-400 mb-1">Om {horizon} mån</p>
-            <p className="text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(end.netWorth)}</p>
+            <p className="text-lg sm:text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(end.netWorth)}</p>
             <p className={`text-xs mt-0.5 flex items-center gap-1 ${netWorthDelta >= 0 ? 'text-green-600' : 'text-red-600'}`}>
               {netWorthDelta >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
               {formatCurrency(netWorthDelta, true)}
@@ -504,11 +530,11 @@ export function PlanView() {
           </Card>
           <Card>
             <p className="text-xs text-gray-400 mb-1">Likviditet idag</p>
-            <p className="text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(now.liquidity)}</p>
+            <p className="text-lg sm:text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(now.liquidity)}</p>
           </Card>
           <Card className={liquidityGoesNegative ? 'border-red-300 bg-red-50' : ''}>
             <p className="text-xs text-gray-400 mb-1">Lägsta likviditet</p>
-            <p className={`text-xl font-semibold tabular-nums ${liquidityGoesNegative ? 'text-red-600' : 'text-gray-900'}`}>
+            <p className={`text-lg sm:text-xl font-semibold tabular-nums ${liquidityGoesNegative ? 'text-red-600' : 'text-gray-900'}`}>
               {formatCurrency(trough.liquidity)}
             </p>
             <p className="text-xs text-gray-400 mt-0.5">{trough.label}</p>
@@ -538,11 +564,12 @@ export function PlanView() {
                 tick={{ fontSize: 11 }}
               />
               <Tooltip
+                position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
                 content={({ active, payload, label }) => {
                   if (!active || !payload?.length) return null
                   const d = payload[0].payload
                   return (
-                    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[200px]">
+                    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[8rem] max-w-[75vw] md:min-w-[200px] md:max-w-none">
                       <p className="font-semibold text-gray-800 mb-2">{label}</p>
                       {d._liquid > 0 && (
                         <div className="flex justify-between gap-8">
@@ -592,13 +619,13 @@ export function PlanView() {
         {/* Liquidity */}
         {view === 'liquidity' && (
         <Card>
-          <CardHeader title="Likviditet över tid" subtitle="Kassa månad för månad — per konto" />
+          <CardHeader title="Likviditet över tid" subtitle="Kassa månad för månad — per konto, inkl. de senaste 2 månaderna" />
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={liquidityStackData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
               <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} />
-              <Tooltip content={(props: any) => (
+              <Tooltip position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined} content={(props: any) => (
                 <LiquidityTooltip
                   active={props.active}
                   payload={props.payload}
@@ -609,6 +636,14 @@ export function PlanView() {
                 />
               )} />
               <ReferenceLine y={0} stroke="#dc2626" strokeDasharray="3 3" />
+              {liquidityHistory.length > 0 && (
+                <ReferenceLine
+                  x={now.label}
+                  stroke="#9ca3af"
+                  strokeDasharray="2 2"
+                  label={{ value: 'Idag', position: 'insideTopRight', fontSize: 10, fill: '#9ca3af' }}
+                />
+              )}
               {useStackedLiquidity
                 ? posLiquidAccounts.map((a, i) => (
                     <Area
@@ -693,7 +728,7 @@ export function PlanView() {
             </Link>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                   <th className="text-left px-4 py-2">Konto</th>
@@ -826,6 +861,17 @@ export function PlanView() {
                     onChange={(e) => setForm((f) => ({ ...f, amount: parseFloat(e.target.value) }))}
                     className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
                 </div>
+                <div className="flex items-end gap-2">
+                  <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer pb-1.5">
+                    <input
+                      type="checkbox"
+                      checked={form.includeInProjection ?? true}
+                      onChange={(e) => setForm((f) => ({ ...f, includeInProjection: e.target.checked }))}
+                      className="rounded"
+                    />
+                    Ingår i likviditetsprognos
+                  </label>
+                </div>
               </div>
               <div className="flex gap-2">
                 <Button size="sm" onClick={addEntry}>Lägg till</Button>
@@ -835,19 +881,20 @@ export function PlanView() {
           )}
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[560px] text-sm">
               <thead>
                 <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                   <th className="text-left px-4 py-2">Datum</th>
                   <th className="text-left px-4 py-2">Beskrivning</th>
                   <th className="text-left px-4 py-2">Typ</th>
                   <th className="text-right px-4 py-2">Belopp</th>
+                  <th className="text-center px-4 py-2">Prognos</th>
                   <th className="px-4 py-2"></th>
                 </tr>
               </thead>
               <tbody>
                 {upcomingEntries.length === 0 && (
-                  <tr><td colSpan={5} className="text-center text-gray-400 py-8">Inga planerade engångsposter inom horisonten</td></tr>
+                  <tr><td colSpan={6} className="text-center text-gray-400 py-8">Inga planerade engångsposter inom horisonten</td></tr>
                 )}
                 {upcomingEntries.map(({ planYear, entry }) => (
                   <tr key={entry.id} className="border-t border-gray-100 hover:bg-gray-50">
@@ -860,6 +907,20 @@ export function PlanView() {
                     </td>
                     <td className={`px-4 py-2.5 text-right font-medium ${entry.amount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {formatCurrency(entry.amount, true)}
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      <input
+                        type="checkbox"
+                        checked={entry.includeInProjection !== false}
+                        onChange={(e) =>
+                          store.upsertLiquidityEntry(planYear, {
+                            ...entry,
+                            includeInProjection: e.target.checked ? undefined : false,
+                          })
+                        }
+                        className="rounded"
+                        title="Ingår i likviditetsprognos"
+                      />
                     </td>
                     <td className="px-4 py-2.5">
                       <button onClick={() => store.removeLiquidityEntry(planYear, entry.id)} className="text-gray-300 hover:text-red-500 transition-colors">

@@ -55,7 +55,7 @@ function StatCard({
         {icon}
         <span className="text-xs font-medium">{label}</span>
       </div>
-      <p className="text-2xl font-bold tabular-nums leading-none" style={{ color }}>
+      <p className="text-xl sm:text-2xl font-bold tabular-nums leading-none" style={{ color }}>
         {value}
       </p>
       {delta}
@@ -113,11 +113,11 @@ export function MonthlyReportCard({ report, summary }: { report: MonthlyReport; 
           {summary}
         </p>
 
-        <div className="mt-6 flex items-end gap-3">
+        <div className="mt-6 flex flex-wrap items-end gap-3">
           <div>
             <p className="text-xs font-medium text-warm-600 mb-1">Resultat</p>
             <p
-              className="text-4xl md:text-5xl font-extrabold tabular-nums leading-none"
+              className="text-3xl sm:text-4xl md:text-5xl font-extrabold tabular-nums leading-none"
               style={{ color: positive ? INCOME : '#dc2626' }}
             >
               {formatCurrency(report.net.actual, true)}
@@ -321,12 +321,12 @@ export function MonthlyReportCard({ report, summary }: { report: MonthlyReport; 
               <p className="text-xs font-medium text-gray-400 mb-2">Största utgifter i perioden</p>
               <ul className="space-y-2">
                 {report.liquidity.markers.map((m, i) => (
-                  <li key={i} className="flex items-center gap-2 text-sm min-w-0">
+                  <li key={i} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm min-w-0">
                     <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: m.kind === 'happened' ? '#dc2626' : '#d97706' }} />
                     <span className="text-gray-600 truncate flex-1 min-w-0">{m.description}</span>
                     <span className="text-gray-400 text-xs shrink-0 tabular-nums">{m.label}</span>
                     <span className="text-gray-900 font-medium tabular-nums shrink-0">{formatCurrency(m.amount)}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${m.kind === 'happened' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
+                    <span className={`hidden sm:inline-flex text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${m.kind === 'happened' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
                       {m.kind === 'happened' ? 'Skedd' : 'Planerad'}
                     </span>
                   </li>

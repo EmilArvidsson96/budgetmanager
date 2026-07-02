@@ -178,7 +178,8 @@ function labelLong(monthId: string): string {
 //
 // Loans are stored negative → result is a plain signed sum. Honors includeInNetWorth
 // (default included). A month gets a value once ≥1 net-worth account is known by then.
-function netWorthByMonth(state: AppState): Map<string, number> {
+// Exported so the AI coach digest can read the same net-worth series the report uses.
+export function netWorthByMonth(state: AppState): Map<string, number> {
   const included = new Map(state.settings.accounts.map((a) => [a.id, a.includeInNetWorth !== false]))
   const carried = new Map<string, number>()   // accountId -> latest known balance
   const out = new Map<string, number>()
@@ -243,15 +244,16 @@ function buildWealthOutlook(state: AppState, proj: ProjectionResult, start: stri
 // transactions in the past window + biggest planned one-offs in the coming window.
 function largeExpenses(state: AppState, start: string): LargeExpense[] {
   const { monthStartDay, monthStartBusinessDay } = state.settings
-  const { anchors } = getSalaryAnchors(state)
+  const { config } = getSalaryAnchors(state)
   const pastWindow = new Set(Array.from({ length: LIQ_PAST }, (_, i) => shiftMonth(start, -(i + 1))))
   const futureEnd = shiftMonth(start, LIQ_FUTURE - 1)
 
   const out: LargeExpense[] = []
 
+  // Only expenses/loan payments flow through here → the 'other' (salary) boundary.
   for (const tx of state.allTransactions) {
     if (tx.transaction_type !== 'expense' || !tx.date) continue
-    const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors)
+    const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, config, 'other')
     if (!pastWindow.has(mid)) continue
     const amount = Math.abs(tx.amount)
     if (amount <= 0) continue
@@ -261,7 +263,8 @@ function largeExpenses(state: AppState, start: string): LargeExpense[] {
   for (const plan of Object.values(state.liquidityPlans)) {
     for (const e of plan.entries) {
       if (!e.date || e.amount >= 0) continue   // only expenses/loan payments
-      const mid = getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, anchors)
+      if (e.includeInProjection === false) continue
+      const mid = getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, config, 'other')
       if (mid < start || mid > futureEnd) continue
       out.push({ monthId: mid, label: labelShort(mid), amount: Math.abs(e.amount), description: e.description || 'Planerad utgift', kind: 'planned' })
     }

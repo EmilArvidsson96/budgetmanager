@@ -8,6 +8,7 @@ import {
   PieChart, Pie, Cell,
 } from 'recharts'
 import { useAppStore } from '@/store'
+import { useIsMobile, MOBILE_TOOLTIP_POSITION } from '@/hooks/useIsMobile'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -221,7 +222,7 @@ function AreaTooltipContent({
     .filter((p) => ((orig[p.dataKey] as number) ?? 0) > 0)
 
   return (
-    <div className="bg-white border border-warm-200 rounded-xl shadow-lg p-3 text-xs space-y-1 max-h-72 overflow-auto">
+    <div className="bg-white border border-warm-200 rounded-xl shadow-lg p-3 text-xs space-y-1 max-h-72 overflow-auto max-w-[75vw] md:max-w-none">
       <p className="font-semibold text-gray-800 mb-1">{label}</p>
       {visible.map((p) => {
         const abs = (orig[p.dataKey] as number) ?? 0
@@ -256,7 +257,7 @@ function PieTooltipContent({
   if (!active || !payload?.length) return null
   const entry = payload[0]
   return (
-    <div className="bg-white border border-warm-200 rounded-xl shadow-lg p-3 text-xs">
+    <div className="bg-white border border-warm-200 rounded-xl shadow-lg p-3 text-xs max-w-[75vw] md:max-w-none">
       <p className="font-semibold mb-1" style={{ color: CHART_COLORS[entry.payload.cat] }}>
         {entry.name}
       </p>
@@ -297,7 +298,7 @@ function CategoryPill({
         <ChevronDown className="w-3 h-3" />
       </button>
       {open && (
-        <div className="absolute z-10 top-6 left-0 bg-white border border-warm-200 rounded-xl shadow-lg py-1 min-w-max max-h-60 overflow-y-auto">
+        <div className="absolute z-10 top-6 right-0 min-w-[10rem] max-w-[calc(100vw-2rem)] bg-white border border-warm-200 rounded-xl shadow-lg py-1 max-h-60 overflow-y-auto">
           {ALL_GROCERY_CATEGORIES.map((cat) => (
             <button
               key={cat}
@@ -370,7 +371,7 @@ function TransactionBadge({
         Koppla transaktion
       </button>
       {open && (
-        <div className="absolute z-10 top-7 left-0 bg-white border border-warm-200 rounded-xl shadow-lg py-1 min-w-[260px] max-h-56 overflow-y-auto">
+        <div className="absolute z-10 top-7 left-0 bg-white border border-warm-200 rounded-xl shadow-lg py-1 w-64 max-w-[calc(100vw-2rem)] max-h-56 overflow-y-auto">
           {candidates.length === 0 ? (
             <p className="text-xs text-gray-400 px-3 py-2">Inga matchande transaktioner</p>
           ) : (
@@ -413,7 +414,7 @@ function ReceiptCard({ receipt }: { receipt: GroceryReceipt }) {
   const store = useAppStore()
 
   return (
-    <Card padding={false} className="overflow-hidden">
+    <Card padding={false} className="overflow-visible">
       <div
         className="flex items-start gap-3 p-4 cursor-pointer hover:bg-warm-50 select-none"
         onClick={() => setExpanded((v) => !v)}
@@ -499,7 +500,7 @@ function MonthlyBreakdown({ receipts }: { receipts: GroceryReceipt[] }) {
     <div className="space-y-2.5">
       {totals.map(({ cat, amount }) => (
         <div key={cat} className="flex items-center gap-3">
-          <div className="w-32 shrink-0">
+          <div className="w-20 sm:w-32 shrink-0">
             <span className={`text-xs font-medium rounded-full px-2 py-0.5 ${CATEGORY_COLORS[cat]}`}>
               {GROCERY_CATEGORY_LABELS[cat]}
             </span>
@@ -510,7 +511,7 @@ function MonthlyBreakdown({ receipts }: { receipts: GroceryReceipt[] }) {
               style={{ width: `${(Math.abs(amount) / maxAbs) * 100}%` }}
             />
           </div>
-          <span className="text-sm text-gray-700 w-20 text-right shrink-0">
+          <span className="text-sm text-gray-700 w-16 sm:w-20 text-right shrink-0">
             {formatCurrency(amount)}
           </span>
         </div>
@@ -527,6 +528,7 @@ function MonthlyBreakdown({ receipts }: { receipts: GroceryReceipt[] }) {
 
 function SpendAnalytics({ receipts }: { receipts: GroceryReceipt[] }) {
   const store = useAppStore()
+  const isMobile = useIsMobile()
   const [includeUnmatched, setIncludeUnmatched] = useState(false)
   const [areaMode, setAreaMode] = useState<'absolute' | 'percent'>('absolute')
   const [startMonth, setStartMonth] = useState('')
@@ -650,6 +652,7 @@ function SpendAnalytics({ receipts }: { receipts: GroceryReceipt[] }) {
               }
             />
             <Tooltip
+              position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
               content={(props) => (
                 <AreaTooltipContent
                   active={props.active}
@@ -720,7 +723,7 @@ function SpendAnalytics({ receipts }: { receipts: GroceryReceipt[] }) {
         </div>
 
         {months.length > 1 && (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1">
               <div className="flex justify-between text-xs text-gray-400">
                 <span>Från</span>
@@ -774,6 +777,7 @@ function SpendAnalytics({ receipts }: { receipts: GroceryReceipt[] }) {
                 ))}
               </Pie>
               <Tooltip
+                position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
                 content={(props) => (
                   <PieTooltipContent
                     active={props.active}
@@ -955,7 +959,7 @@ export function GroceryReceiptsView() {
 
       {mode === 'file' && (
         <div
-          className={`mb-6 border-2 border-dashed rounded-2xl p-8 text-center transition-colors
+          className={`mb-6 border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center transition-colors
             ${noApiKey
               ? 'border-warm-200 bg-warm-50 opacity-60 pointer-events-none'
               : 'border-warm-300 bg-warm-50 hover:border-brand-400 hover:bg-brand-50 cursor-pointer'}`}
