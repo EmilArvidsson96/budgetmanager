@@ -189,7 +189,7 @@ export function FlowView() {
       if (reconciledKeys.has(txKey(tx))) continue
       if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) continue
       if (searchLower) {
-        const hay = `${tx.description ?? ''} ${tx.account_name ?? ''}`.toLowerCase()
+        const hay = (tx.description ?? '').toLowerCase()
         if (!hay.includes(searchLower)) continue
       }
       const { catId, subId } = resolveCategory(
@@ -256,7 +256,7 @@ export function FlowView() {
         }
         if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) return false
         if (searchLower) {
-          const hay = `${tx.description ?? ''} ${tx.account_name ?? ''}`.toLowerCase()
+          const hay = (tx.description ?? '').toLowerCase()
           if (!hay.includes(searchLower)) return false
         }
         return true
@@ -394,7 +394,7 @@ export function FlowView() {
       const mid = getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors)
       if (!monthSet.has(mid)) continue
       if (searchLower) {
-        const hay = `${tx.description ?? ''} ${tx.account_name ?? ''}`.toLowerCase()
+        const hay = (tx.description ?? '').toLowerCase()
         if (!hay.includes(searchLower)) continue
       }
       const { catId } = resolveCategory(
@@ -677,7 +677,7 @@ export function FlowView() {
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Sök i beskrivning eller konto"
+          placeholder="Sök i beskrivning"
           className="w-full pl-9 pr-9 py-2 text-sm rounded-lg border border-warm-300 bg-white focus:outline-none focus:border-brand-400 transition-colors"
         />
         {search && (
