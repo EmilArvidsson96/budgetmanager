@@ -17,6 +17,11 @@ let _lastSyncedAt: string | null = null
 let _currentSha: string | null = null
 let _debounceTimer: ReturnType<typeof setTimeout> | null = null
 let _suppressNextPush = false  // set true while loading from GitHub to skip echo push
+// Blocks all pushes until the initial pull-and-decide has finished. Without this,
+// a device that already has local data could push it and clobber the remote file
+// before it has even read what's there. Only released once the startup flow
+// decides the local copy is the one to keep.
+let _initialSyncDone = false
 
 const _listeners = new Set<() => void>()
 
@@ -59,6 +64,12 @@ async function doPush(): Promise<void> {
 }
 
 export async function triggerManualSync(): Promise<void> {
+  // Refuse to push before the initial pull succeeded — pushing stale local data
+  // here could overwrite a populated remote file this device never read.
+  if (!_initialSyncDone) {
+    setStatus('error', 'Kan inte synka: den första hämtningen från GitHub är inte klar. Ladda om sidan och försök igen.')
+    return
+  }
   if (_debounceTimer) {
     clearTimeout(_debounceTimer)
     _debounceTimer = null
@@ -82,13 +93,17 @@ export function useGitHubSync() {
       try {
         const result = await fetchFromGitHub(config)
 
-        if (!result) {
-          // Repo file doesn't exist yet — upload current local data
+        if (!result || !result.file) {
+          // File doesn't exist (result null) or is genuinely empty (size 0). Only
+          // in these cases is it safe to upload local data — fetchFromGitHub throws
+          // rather than returning here for a populated-but-unreadable file, so a
+          // device can never clobber real remote data it merely failed to read.
           const state = extractAppStateForSync(useAppStore.getState() as unknown as Record<string, unknown>)
           const pushedAt = new Date().toISOString()
-          const sha = await pushToGitHub(config, state, null, pushedAt)
+          const sha = await pushToGitHub(config, state, result?.sha ?? null, pushedAt)
           _currentSha = sha
           updateSyncMeta({ lastPushedAt: pushedAt, lastFileSha: sha })
+          _initialSyncDone = true
           setStatus('ok', undefined, pushedAt)
           return
         }
@@ -98,7 +113,9 @@ export function useGitHubSync() {
         const lastPushedAt = config.lastPushedAt
 
         if (!lastPushedAt || file.pushedAt > lastPushedAt) {
-          // GitHub has newer data — merge into store
+          // GitHub has data this device hasn't seen (never synced, or remote is
+          // newer) — load it into the store. This is the path a fresh phone takes:
+          // it pulls the desktop's data instead of pushing its own stale copy.
           _suppressNextPush = true
           const incoming = file.state as Record<string, unknown>
 
@@ -113,17 +130,22 @@ export function useGitHubSync() {
 
           useAppStore.setState(incoming, false)
           updateSyncMeta({ lastPushedAt: file.pushedAt, lastFileSha: result.sha })
+          _initialSyncDone = true
           setStatus('ok', undefined, file.pushedAt)
         } else {
-          // Our local data is at least as fresh — push it to refresh SHA
+          // This device previously pushed and the remote hasn't moved since — our
+          // local copy is authoritative. Refresh the SHA with a no-op-ish push.
           const state = extractAppStateForSync(useAppStore.getState() as unknown as Record<string, unknown>)
           const pushedAt = new Date().toISOString()
           const sha = await pushToGitHub(config, state, _currentSha, pushedAt)
           _currentSha = sha
           updateSyncMeta({ lastPushedAt: pushedAt, lastFileSha: sha })
+          _initialSyncDone = true
           setStatus('ok', undefined, pushedAt)
         }
       } catch (err) {
+        // Leave _initialSyncDone false so no auto-push fires after a failed read —
+        // a device that couldn't read the remote must never overwrite it.
         setStatus('error', String(err))
       }
     })()
@@ -136,6 +158,10 @@ export function useGitHubSync() {
         _suppressNextPush = false
         return
       }
+      // Never auto-push before the initial pull has completed successfully —
+      // otherwise a device with stale local data could overwrite the remote
+      // file before it has read it.
+      if (!_initialSyncDone) return
       const config = loadSyncConfig()
       if (!config?.token) return
 

@@ -54,10 +54,25 @@ export function clearSyncConfig() {
   localStorage.removeItem(SYNC_CONFIG_KEY)
 }
 
+function decodeBase64Utf8(b64: string): string {
+  return decodeURIComponent(escape(atob(b64.replace(/\s/g, ''))))
+}
+
+// Fetches the sync file from GitHub.
+//   - Returns null when the file does not exist at all (404).
+//   - Returns { file: null, sha } ONLY when the file is genuinely empty (size 0) —
+//     the one case where it is safe to overwrite it with local data.
+//   - Returns { file, sha } with parsed contents otherwise.
+//   - THROWS when the file exists with real content that cannot be retrieved or
+//     parsed. Never silently returns null for a non-empty file, so a device can
+//     never clobber a populated remote file it merely failed to read.
+//
+// The Contents API only inlines base64 `content` for files under ~1 MB; larger
+// files come back with an empty content field, so we refetch the raw bytes.
 export async function fetchFromGitHub(
   config: SyncConfig
-): Promise<{ file: GitHubFileContent; sha: string } | null> {
-  const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${config.path}`
+): Promise<{ file: GitHubFileContent | null; sha: string } | null> {
+  const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${encodeURIComponent(config.path)}`
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${config.token}`,
@@ -69,9 +84,38 @@ export async function fetchFromGitHub(
     const body = await res.json().catch(() => ({})) as { message?: string }
     throw new Error(`GitHub: ${res.status} ${body.message ?? res.statusText}`)
   }
-  const raw = await res.json() as { content: string; sha: string }
-  const decoded = decodeURIComponent(escape(atob(raw.content.replace(/\n/g, ''))))
-  return { file: JSON.parse(decoded) as GitHubFileContent, sha: raw.sha }
+  const raw = await res.json() as { content?: string; sha: string; size?: number; encoding?: string }
+
+  // A truly empty file (size 0) is the only safe-to-overwrite case.
+  if ((raw.size ?? 0) === 0) return { file: null, sha: raw.sha }
+
+  // Get the text: inline base64 when present, otherwise refetch raw (large files).
+  let text = ''
+  if (raw.content && raw.encoding === 'base64') {
+    text = decodeBase64Utf8(raw.content)
+  } else {
+    const rawRes = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        Accept: 'application/vnd.github.raw',
+      },
+    })
+    if (!rawRes.ok) {
+      throw new Error(`GitHub: kunde inte hämta filinnehåll (${rawRes.status}). Filen finns och lämnas orörd.`)
+    }
+    text = await rawRes.text()
+  }
+
+  const trimmed = text.trim()
+  if (!trimmed) {
+    // Non-zero size but blank content — ambiguous. Do NOT overwrite; surface it.
+    throw new Error('GitHub: filen finns men innehållet kunde inte läsas. Lämnar den orörd för säkerhets skull.')
+  }
+  try {
+    return { file: JSON.parse(trimmed) as GitHubFileContent, sha: raw.sha }
+  } catch {
+    throw new Error('GitHub: filen innehåller ogiltig JSON. Lämnar den orörd för säkerhets skull.')
+  }
 }
 
 export async function pushToGitHub(
