@@ -309,7 +309,7 @@ export function TransactionListView() {
       if (dateFrom && tx.date < dateFrom) continue
       if (dateTo && tx.date > dateTo) continue
       if (searchLower) {
-        const hay = `${tx.description ?? ''} ${tx.account_name ?? ''}`.toLowerCase()
+        const hay = (tx.description ?? '').toLowerCase()
         if (!hay.includes(searchLower)) continue
       }
       const abs = Math.abs(tx.amount)
@@ -411,7 +411,7 @@ export function TransactionListView() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Sök beskrivning eller konto…"
+              placeholder="Sök beskrivning…"
               className="w-full pl-9 pr-8 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
             />
             {search && (
