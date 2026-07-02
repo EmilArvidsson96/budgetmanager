@@ -34,6 +34,7 @@ export interface ProjectionMonth {
   monthId: string                          // 'YYYY-MM'
   label: string                            // e.g. "Jun 26"
   isBaseline: boolean                      // true for the leading "now" anchor
+  isHistory?: boolean                      // true for actual (already-elapsed) months prepended before the baseline
   liquidity: number
   netWorth: number
   netCashflow: number                      // planned net flow into liquidity this month
@@ -64,6 +65,15 @@ function nextMonthId(monthId: string): string {
   return month === 12
     ? `${year + 1}-01`
     : `${year}-${String(month + 1).padStart(2, '0')}`
+}
+
+// Step a 'YYYY-MM' id backward by one month.
+function prevMonthId(monthId: string): string {
+  const year = parseInt(monthId.slice(0, 4))
+  const month = parseInt(monthId.slice(5, 7))
+  return month === 1
+    ? `${year - 1}-12`
+    : `${year}-${String(month - 1).padStart(2, '0')}`
 }
 
 function labelFor(monthId: string): string {
@@ -353,4 +363,65 @@ export function buildProjection({ state, startMonthId, horizon }: ProjectionInpu
   }
 
   return { months, accounts: meta }
+}
+
+// ─── Backward-looking liquidity history ───────────────────────────────────────
+//
+// Prepends already-elapsed months to the chart so the large-non-recurring-
+// transaction flags (which are joined against `months` by monthId) can surface
+// transactions from before "now". Unlike buildProjection, this reads actual
+// closing account balances (state.actuals[monthId].accountBalances) — the real
+// per-account snapshot from each import — rather than simulating forward, since
+// the real numbers are already known for elapsed months.
+//
+// A month is only included when it has an actual balance snapshot; months
+// without imported data (a gap) are silently skipped rather than guessed at.
+export function buildLiquidityHistory(state: AppState, startMonthId: string, count: number): ProjectionMonth[] {
+  const accounts = state.settings.accounts.filter((a) => a.includeInNetWorth !== false)
+  const roleOf = new Map(accounts.map((a) => [a.id, classifyAccount(a)]))
+
+  const monthIds: string[] = []
+  let monthId = startMonthId
+  for (let t = 0; t < count; t++) {
+    monthId = prevMonthId(monthId)
+    monthIds.unshift(monthId)
+  }
+
+  const result: ProjectionMonth[] = []
+  for (const id of monthIds) {
+    const actual = state.actuals[id]
+    if (!actual || actual.accountBalances.length === 0) continue
+    const balanceOf = new Map(actual.accountBalances.map((ab) => [ab.accountId, ab.balance]))
+
+    let liquidity = 0
+    let totalAssets = 0
+    let totalLiabilities = 0
+    const values: Record<string, number> = {}
+    for (const a of accounts) {
+      const bal = balanceOf.get(a.id)
+      if (bal === undefined) continue
+      values[a.id] = bal
+      const role = roleOf.get(a.id)
+      if (role === 'liability') {
+        totalLiabilities += bal
+      } else {
+        if (role === 'liquid') liquidity += bal
+        totalAssets += bal
+      }
+    }
+
+    result.push({
+      monthId: id,
+      label: labelFor(id),
+      isBaseline: false,
+      isHistory: true,
+      liquidity,
+      netWorth: totalAssets + totalLiabilities,
+      netCashflow: 0,
+      totalAssets,
+      totalLiabilities,
+      values,
+    })
+  }
+  return result
 }
