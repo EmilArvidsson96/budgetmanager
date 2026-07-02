@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/Button'
 import { formatCurrency } from '@/utils/budgetHelpers'
 import { getMonthIdForDate } from '@/utils/periodUtils'
 import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
-import { buildProjection } from '@/utils/projection'
+import { buildProjection, buildLiquidityHistory } from '@/utils/projection'
 import { exportToExcel } from '@/utils/excelExport'
 import { buildAiBriefing } from '@/utils/aiExport'
 import { BaselineEditor } from '@/components/budget/BaselineEditor'
@@ -92,6 +92,7 @@ function tickFmt(v: number): string {
 }
 
 const LARGE_TX_THRESHOLD = 10_000
+const LIQUIDITY_HISTORY_MONTHS = 2
 
 function newId() {
   return `liq-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -270,6 +271,17 @@ export function PlanView() {
   const now = months[0]
   const end = months[months.length - 1]
 
+  // Past months prepended to the liquidity chart only, so large non-recurring
+  // transactions from before "now" can be flagged (the forward projection in
+  // `months` never contains elapsed periods). Built from actual closing balances,
+  // not simulated. Other tabs/KPIs keep using `months` unchanged.
+  const liquidityHistory = useMemo(
+    () => buildLiquidityHistory(store, startMonthId, LIQUIDITY_HISTORY_MONTHS),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [store.actuals, store.settings.accounts, startMonthId]
+  )
+  const liquidityMonths = useMemo(() => [...liquidityHistory, ...months], [liquidityHistory, months])
+
   // Lowest projected liquidity over the horizon (skip baseline).
   const trough = months.slice(1).reduce(
     (lo, m) => (m.liquidity < lo.liquidity ? m : lo),
@@ -314,14 +326,20 @@ export function PlanView() {
     return { label: m.label, _wealth: totalAssets, _liquid: liquid, _assetSegs: assetSegs, _liabSegs: liabSegs, Nettoförmögenhet: Math.round(m.netWorth) }
   })
 
-  const liquidityData = months.map((m) => ({ label: m.label, Likviditet: Math.round(m.liquidity) }))
+  const liquidityData = liquidityMonths.map((m) => ({ label: m.label, Likviditet: Math.round(m.liquidity) }))
 
-  // Per-account stacked data: proportional share of total liquidity based on starting balances.
+  // Per-account stacked data. History months use the real per-account balance from
+  // that month's import; projected months split the total proportionally based on
+  // starting balances (their per-account values are frozen — see buildProjection).
   // When total goes negative we zero-out the stack (the red reference line + alert cover that case).
   const liquidityStackData = useMemo(() => {
     if (!useStackedLiquidity) return liquidityData
-    return months.map((m) => {
+    return liquidityMonths.map((m) => {
       const row: Record<string, string | number> = { label: m.label }
+      if (m.isHistory) {
+        for (const a of posLiquidAccounts) row[a.name] = Math.max(0, Math.round(m.values[a.id] ?? 0))
+        return row
+      }
       const total = Math.round(m.liquidity)
       if (total <= 0) {
         for (const a of posLiquidAccounts) row[a.name] = 0
@@ -337,7 +355,7 @@ export function PlanView() {
       return row
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [months, posLiquidAccounts, posLiquidTotal, useStackedLiquidity, liquidityData])
+  }, [liquidityMonths, posLiquidAccounts, posLiquidTotal, useStackedLiquidity, liquidityData])
 
   const liquidityGoesNegative = trough && trough.liquidity < 0
 
@@ -390,10 +408,12 @@ export function PlanView() {
   }, [store.liquidityPlans, settings.monthStartDay, settings.monthStartBusinessDay, anchors, startMonthId, horizonEnd])
 
   // Flags: large non-recurring actual transactions grouped by chart label.
+  // Uses liquidityMonths (history + projection) so transactions from the past
+  // months shown on the liquidity chart get flagged too, not just future ones.
   const largeNonRecurringByLabel = useMemo(() => {
     const recurringAmounts = settings.recurringItems.map((r) => Math.abs(r.amount))
     const byLabel = new Map<string, { amount: number; description: string }[]>()
-    for (const m of months) {
+    for (const m of liquidityMonths) {
       const txs = store.allTransactions.filter((tx) => {
         if (Math.abs(tx.amount) < LARGE_TX_THRESHOLD) return false
         if (tx.transaction_type === 'transfer') return false
@@ -407,7 +427,7 @@ export function PlanView() {
       }
     }
     return byLabel
-  }, [store.allTransactions, months, settings.recurringItems, settings.monthStartDay, settings.monthStartBusinessDay, anchors])
+  }, [store.allTransactions, liquidityMonths, settings.recurringItems, settings.monthStartDay, settings.monthStartBusinessDay, anchors])
 
   // Flags: planned one-off entries grouped by chart label.
   const plannedByLabel = useMemo(() => {
@@ -592,7 +612,7 @@ export function PlanView() {
         {/* Liquidity */}
         {view === 'liquidity' && (
         <Card>
-          <CardHeader title="Likviditet över tid" subtitle="Kassa månad för månad — per konto" />
+          <CardHeader title="Likviditet över tid" subtitle="Kassa månad för månad — per konto, inkl. de senaste 2 månaderna" />
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={liquidityStackData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -609,6 +629,14 @@ export function PlanView() {
                 />
               )} />
               <ReferenceLine y={0} stroke="#dc2626" strokeDasharray="3 3" />
+              {liquidityHistory.length > 0 && (
+                <ReferenceLine
+                  x={now.label}
+                  stroke="#9ca3af"
+                  strokeDasharray="2 2"
+                  label={{ value: 'Idag', position: 'insideTopRight', fontSize: 10, fill: '#9ca3af' }}
+                />
+              )}
               {useStackedLiquidity
                 ? posLiquidAccounts.map((a, i) => (
                     <Area
