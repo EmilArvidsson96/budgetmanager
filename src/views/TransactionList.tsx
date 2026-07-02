@@ -3,7 +3,7 @@ import { Search, X, SlidersHorizontal, ArrowDownUp, Pencil, RotateCcw, ArrowLeft
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { formatCurrency } from '@/utils/budgetHelpers'
-import { txKey } from '@/utils/transferReconciliation'
+import { txKey, findTxKeyCollisions } from '@/utils/transferReconciliation'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import { Select } from '@/components/ui/Select'
 import { Button } from '@/components/ui/Button'
@@ -188,13 +188,15 @@ function CategoryEditDialog({
 // ─── Transaction row ──────────────────────────────────────────────────────────
 
 function TxRow({
-  item, categories, isOverridden, editing, onEdit,
+  item, categories, isOverridden, editing, onEdit, debugMode, collision,
 }: {
   item: ResolvedTx
   categories: CategoryDef[]
   isOverridden: boolean
   editing: boolean
   onEdit: () => void
+  debugMode?: boolean
+  collision?: boolean
 }) {
   const { tx, catId, subId } = item
   const cat = categories.find((c) => c.id === catId)
@@ -212,9 +214,21 @@ function TxRow({
       </span>
 
       {/* Description */}
-      <span className="text-sm text-gray-800 truncate flex items-center gap-1.5 min-w-0" title={tx.description}>
-        <span className="truncate">{tx.description || <span className="text-gray-400 italic">–</span>}</span>
-        {isOverridden && <span title="Omkategoriserad" className="w-1.5 h-1.5 rounded-full bg-brand-500 shrink-0" />}
+      <span className="text-sm text-gray-800 flex flex-col min-w-0 gap-0.5">
+        <span className="flex items-center gap-1.5 min-w-0">
+          <span className="truncate">{tx.description || <span className="text-gray-400 italic">–</span>}</span>
+          {isOverridden && <span title="Omkategoriserad" className="w-1.5 h-1.5 rounded-full bg-brand-500 shrink-0" />}
+          {collision && (
+            <span title="Delar txKey med minst en annan transaktion — kan visas/redigeras fel" className="text-[10px] px-1 rounded bg-amber-100 text-amber-700 shrink-0">
+              dubblett-nyckel
+            </span>
+          )}
+        </span>
+        {debugMode && (
+          <span className="text-[10px] font-mono text-gray-400 truncate">
+            idx={tx.index} · konto={tx.account_number} · bank={tx.bank_name} · namn={tx.account_name} · nyckel={txKey(tx)}
+          </span>
+        )}
       </span>
 
       {/* Account */}
@@ -257,7 +271,7 @@ function TxRow({
 export function TransactionListView() {
   const store = useAppStore()
   const { settings, allTransactions, transactionOverrides } = store
-  const { categories, zlantarCategoryRules, accounts } = settings
+  const { categories, zlantarCategoryRules, accounts, debugMode } = settings
 
   const [search, setSearch] = useState('')
   const [accountFilter, setAccountFilter] = useState('')
@@ -271,8 +285,20 @@ export function TransactionListView() {
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [showAdvanced, setShowAdvanced] = useState(false)
 
-  // txKey of the row whose category modal is open (null = closed).
-  const [editingKey, setEditingKey] = useState<string | null>(null)
+  // The transaction whose category modal is open (null = closed). Tracked by
+  // object reference, not txKey — two distinct transactions (e.g. two same-day
+  // "SL" top-ups) can share a txKey, and a string key can't tell them apart.
+  const [editingTx, setEditingTx] = useState<ZlantarTransaction | null>(null)
+
+  // txKeys shared by more than one transaction. Anything keyed by txKey alone
+  // (React list keys, transactionOverrides, import dedup) can't distinguish
+  // these — flagged here so debug mode can surface it instead of silently
+  // misbehaving (ghost/duplicated rows, overrides applying to the wrong row).
+  const collisionKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const c of findTxKeyCollisions(allTransactions)) keys.add(c.key)
+    return keys
+  }, [allTransactions])
 
   const ruleMap = useMemo(
     () => buildRuleLookup(zlantarCategoryRules ?? DEFAULT_ZLANTAR_RULES),
@@ -392,11 +418,13 @@ export function TransactionListView() {
     return out
   }, [resolved, sortField])
 
-  // The resolved row currently being edited (drives the modal).
+  // The resolved row currently being edited (drives the modal). Matched by
+  // object identity so a txKey collision can't open/highlight the wrong row.
   const editingItem = useMemo(
-    () => (editingKey ? resolved.find((r) => txKey(r.tx) === editingKey) ?? null : null),
-    [editingKey, resolved]
+    () => (editingTx ? resolved.find((r) => r.tx === editingTx) ?? null : null),
+    [editingTx, resolved]
   )
+  const editingKeyStr = editingItem ? txKey(editingItem.tx) : null
 
   return (
     <Layout>
@@ -462,6 +490,19 @@ export function TransactionListView() {
         )}
       </div>
 
+      {/* ── Debug: txKey collision report ── */}
+      {debugMode && collisionKeys.size > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-xs text-amber-800">
+          <p className="font-medium mb-1">
+            {collisionKeys.size} nyckel{collisionKeys.size === 1 ? '' : 'ar'} delas av flera transaktioner ({allTransactions.filter((tx) => collisionKeys.has(txKey(tx))).length} st totalt).
+          </p>
+          <p className="text-amber-700">
+            Dessa transaktioner har identiskt datum, belopp, beskrivning och kontonummer — appen kan inte skilja dem åt.
+            Det kan ge dubbletter/spöktrader i listan och göra att redigera-knappen öppnar fel post. Rader med detta märkta <span className="px-1 rounded bg-amber-100">dubblett-nyckel</span>.
+          </p>
+        </div>
+      )}
+
       {/* ── Summary strip ── */}
       {resolved.length > 0 && (
         <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-500 mb-4 px-1">
@@ -515,12 +556,14 @@ export function TransactionListView() {
               const rowKey = txKey(row.item.tx)
               return (
                 <TxRow
-                  key={rowKey}
+                  key={`${rowKey}::${i}`}
                   item={row.item}
                   categories={categories}
                   isOverridden={!!transactionOverrides[rowKey]}
-                  editing={editingKey === rowKey}
-                  onEdit={() => setEditingKey(rowKey)}
+                  editing={editingTx === row.item.tx}
+                  onEdit={() => setEditingTx(row.item.tx)}
+                  debugMode={debugMode}
+                  collision={collisionKeys.has(rowKey)}
                 />
               )
             })}
@@ -529,20 +572,20 @@ export function TransactionListView() {
       )}
 
       {/* ── Category edit modal (centered, one at a time) ── */}
-      {editingItem && (
+      {editingItem && editingKeyStr && (
         <CategoryEditDialog
           tx={editingItem.tx}
           categories={categories}
           currentCatId={editingItem.catId}
           currentSubId={editingItem.subId}
-          currentLevel3Id={transactionOverrides[editingKey!]?.level3Id}
-          canReset={!!transactionOverrides[editingKey!]}
+          currentLevel3Id={transactionOverrides[editingKeyStr]?.level3Id}
+          canReset={!!transactionOverrides[editingKeyStr]}
           onPick={(c, s, l3) => {
-            store.setTransactionOverride(editingKey!, { categoryId: c, subcategoryId: s, level3Id: l3 })
-            setEditingKey(null)
+            store.setTransactionOverride(editingKeyStr, { categoryId: c, subcategoryId: s, level3Id: l3 })
+            setEditingTx(null)
           }}
-          onReset={() => { store.clearTransactionOverride(editingKey!); setEditingKey(null) }}
-          onClose={() => setEditingKey(null)}
+          onReset={() => { store.clearTransactionOverride(editingKeyStr); setEditingTx(null) }}
+          onClose={() => setEditingTx(null)}
         />
       )}
     </Layout>

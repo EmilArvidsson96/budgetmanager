@@ -16,6 +16,29 @@ export function accountIdForTx(tx: ZlantarTransaction): string {
   return tx.account_number
 }
 
+// Two distinct transactions (e.g. two identical same-day "SL" top-ups) can
+// legitimately share a txKey, since it doesn't include the source `index`.
+// Colliding transactions are indistinguishable to anything keyed by txKey
+// (React list keys, transactionOverrides, import dedup) — this surfaces those
+// groups so debug tooling can flag them instead of silently misbehaving.
+export interface TxKeyCollision {
+  key: string
+  transactions: ZlantarTransaction[]
+}
+
+export function findTxKeyCollisions(transactions: ZlantarTransaction[]): TxKeyCollision[] {
+  const groups = new Map<string, ZlantarTransaction[]>()
+  for (const tx of transactions) {
+    const key = txKey(tx)
+    const group = groups.get(key)
+    if (group) group.push(tx)
+    else groups.set(key, [tx])
+  }
+  return Array.from(groups.entries())
+    .filter(([, txs]) => txs.length > 1)
+    .map(([key, txs]) => ({ key, transactions: txs }))
+}
+
 export function reconciledKeysFromRecords(
   records: ReconciliationRecord[]
 ): Set<string> {

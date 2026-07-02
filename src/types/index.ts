@@ -472,6 +472,9 @@ export interface AppSettings {
   coachModel?: string        // model for the coach; defaults to Sonnet (DEFAULT_COACH_MODEL)
   // Used as an extra keyword when matching swish/bank-transfers between owners.
   partnerName?: string
+  // Shows raw per-transaction identifiers (txKey, index, account fields) in the
+  // transaction list, plus a report of any txKey collisions across allTransactions.
+  debugMode?: boolean
 }
 
 // Per-transaction category override, keyed by txKey (date|amount|description|
