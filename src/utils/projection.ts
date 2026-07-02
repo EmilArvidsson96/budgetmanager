@@ -18,7 +18,7 @@
 
 import type { AppState, Account, AccountType } from '@/types'
 import { MONTH_NAMES_SHORT } from './budgetHelpers'
-import { getMonthIdForDate, type SalaryAnchors } from './periodUtils'
+import { getMonthIdForDate, bucketKindForEntry, type SalaryPeriodConfig } from './periodUtils'
 import { getSalaryAnchors } from './salaryDetection'
 
 export type AccountRole = 'liquid' | 'asset' | 'liability'
@@ -184,8 +184,8 @@ export function budgetedAmount(state: AppState, monthId: string, categoryId: str
 export function currentMonthId(state: AppState): string {
   const t = new Date()
   const iso = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`
-  const { anchors } = getSalaryAnchors(state)
-  return getMonthIdForDate(iso, state.settings.monthStartDay, state.settings.monthStartBusinessDay, anchors)
+  const { config } = getSalaryAnchors(state)
+  return getMonthIdForDate(iso, state.settings.monthStartDay, state.settings.monthStartBusinessDay, config, 'neutral')
 }
 
 // The effective budget for one month: one signed amount per income/expense/savings
@@ -233,14 +233,15 @@ function budgetedFlowForMonth(state: AppState, monthId: string): { income: numbe
 }
 
 // Signed sum of manual one-off entries that fall in the given period.
-function manualNetForMonth(state: AppState, monthId: string, anchors?: SalaryAnchors): number {
+function manualNetForMonth(state: AppState, monthId: string, config?: SalaryPeriodConfig): number {
   const { monthStartDay, monthStartBusinessDay } = state.settings
   let net = 0
   for (const plan of Object.values(state.liquidityPlans)) {
     for (const e of plan.entries) {
       if (!e.date) continue
       if (e.includeInProjection === false) continue
-      if (getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, anchors) === monthId) {
+      const kind = bucketKindForEntry(e.type)
+      if (getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, config, kind) === monthId) {
         net += e.amount
       }
     }
@@ -256,7 +257,7 @@ export interface ProjectionInput {
 
 export function buildProjection({ state, startMonthId, horizon }: ProjectionInput): ProjectionResult {
   const accounts = state.settings.accounts.filter((a) => a.includeInNetWorth !== false)
-  const { anchors } = getSalaryAnchors(state)
+  const { config } = getSalaryAnchors(state)
 
   // Latest import snapshot → map of accountId -> raw-signed balance.
   const snapMap = new Map<string, number>()
@@ -355,7 +356,7 @@ export function buildProjection({ state, startMonthId, horizon }: ProjectionInpu
 
     // Budget-driven operating cashflow + manual one-offs.
     const { income, operatingExpense } = budgetedFlowForMonth(state, monthId)
-    const manualNet = manualNetForMonth(state, monthId, anchors)
+    const manualNet = manualNetForMonth(state, monthId, config)
     const netCashflow = income - operatingExpense - contributions - loanPayments + manualNet
 
     liquidity += netCashflow

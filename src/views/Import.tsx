@@ -6,10 +6,10 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Select } from '@/components/ui/Select'
 import { Badge } from '@/components/ui/Badge'
-import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories, buildAccountBalances, diffAccountBalances } from '@/utils/zlantarParser'
+import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories, buildAccountBalances, diffAccountBalances, resolveTxCategory } from '@/utils/zlantarParser'
 import type { AccountBalanceChange } from '@/utils/zlantarParser'
 import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
-import { getMonthIdForDate } from '@/utils/periodUtils'
+import { getMonthIdForDate, bucketKindForCategory } from '@/utils/periodUtils'
 import { getSalaryAnchors } from '@/utils/salaryDetection'
 import { formatCurrency } from '@/utils/budgetHelpers'
 import { uniqueSlug } from '@/utils/slug'
@@ -133,9 +133,9 @@ export function ImportView() {
       // (not already in allTransactions). Months where only existing transactions
       // changed are treated as conflicts, not re-importable.
       const existingKeys = new Set(store.allTransactions.map(txKey))
-      // Detect salary anchors over existing + incoming so the imported months
-      // bucket on the real payday, not the nominal day.
-      const { anchors: importAnchors } = getSalaryAnchors({
+      // Detect the salary-period config over existing + incoming so the imported
+      // months bucket on the real payday (and shifted label), not the nominal day.
+      const { config: importConfig } = getSalaryAnchors({
         allTransactions: [...store.allTransactions, ...imp.transactions],
         settings: store.settings,
         transactionOverrides: store.transactionOverrides,
@@ -144,7 +144,9 @@ export function ImportView() {
       for (const tx of imp.transactions) {
         if (!tx.date || tx.transaction_type === 'transfer') continue
         if (!existingKeys.has(txKey(tx))) {
-          newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay, importAnchors))
+          const { catId, subId } = resolveTxCategory(tx, store.settings.categories, store.settings.zlantarCategoryRules, store.transactionOverrides)
+          const kind = bucketKindForCategory(catId, subId, tx.category ?? '')
+          newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay, importConfig, kind))
         }
       }
       const initialAccepted = new Set<string>(previouslyReconciled)
@@ -160,7 +162,7 @@ export function ImportView() {
         store.settings.monthStartBusinessDay,
         initialAccepted,
         undefined,
-        importAnchors
+        importConfig
       )
       const initialMonths = new Set<string>()
       for (const ym of Object.keys(fullActuals)) {
@@ -192,7 +194,7 @@ export function ImportView() {
 
   const { preview, unchangedMonthCount } = useMemo(() => {
     if (!parsedImport) return { preview: null as Record<string, MonthlyActuals> | null, unchangedMonthCount: 0 }
-    const { anchors } = getSalaryAnchors({
+    const { config } = getSalaryAnchors({
       allTransactions: [...store.allTransactions, ...parsedImport.transactions],
       settings: store.settings,
       transactionOverrides: store.transactionOverrides,
@@ -205,7 +207,7 @@ export function ImportView() {
       store.settings.monthStartBusinessDay,
       acceptedKeys,
       undefined,
-      anchors
+      config
     )
     // Only show months that contain at least one new transaction
     const existingKeys = new Set(store.allTransactions.map(txKey))
@@ -213,7 +215,9 @@ export function ImportView() {
     for (const tx of parsedImport.transactions) {
       if (!tx.date || tx.transaction_type === 'transfer') continue
       if (!existingKeys.has(txKey(tx))) {
-        newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay, anchors))
+        const { catId, subId } = resolveTxCategory(tx, store.settings.categories, store.settings.zlantarCategoryRules, store.transactionOverrides)
+        const kind = bucketKindForCategory(catId, subId, tx.category ?? '')
+        newTxMonths.add(getMonthIdForDate(tx.date, store.settings.monthStartDay, store.settings.monthStartBusinessDay, config, kind))
       }
     }
     const filtered: Record<string, MonthlyActuals> = {}
