@@ -5,7 +5,7 @@ import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { MONTH_NAMES_LONG, makeMonthId, formatCurrency } from '@/utils/budgetHelpers'
-import { getMonthIdForDate } from '@/utils/periodUtils'
+import { getMonthIdForDate, bucketKindForCategory } from '@/utils/periodUtils'
 import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { budgetedAmount } from '@/utils/projection'
 import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
@@ -69,7 +69,7 @@ export function ReconcileView() {
   const store = useAppStore()
   const { settings, actuals, monthCloses, reconciliations, allTransactions, transactionOverrides } = store
   const { categories, monthStartDay, monthStartBusinessDay, zlantarCategoryRules } = settings
-  const { anchors } = useSalaryAnchors()
+  const { config } = useSalaryAnchors()
 
   const monthId = makeMonthId(year, month)
   const actual = actuals[monthId]
@@ -149,13 +149,14 @@ export function ReconcileView() {
 
     for (const tx of allTransactions) {
       if (!tx.date) continue
-      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) continue
       if (tx.transaction_type === 'transfer') continue   // never counted
 
-      const { catId } = resolveCategory(
+      const { catId, subId } = resolveCategory(
         tx.category ?? '', tx.subcategory ?? '',
         catIds, ruleMap, transactionOverrides[txKey(tx)]
       )
+      const kind = bucketKindForCategory(catId, subId, tx.category ?? '')
+      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, config, kind) !== monthId) continue
       const cat = categories.find((c) => c.id === catId)
       if (!cat) continue
       if (cat.type === 'income') { income += tx.amount; incomeTxs.push(tx) }
@@ -201,7 +202,7 @@ export function ReconcileView() {
     const totalExpenses = expenseGroups.reduce((s, g) => s + g.total, 0)
 
     return { income, incomeTxs, netSavings, savingsAccounts, totalExpenses, expenseGroups }
-  }, [actual, actuals, prevMonthId, allTransactions, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, anchors, monthId])
+  }, [actual, actuals, prevMonthId, allTransactions, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, config, monthId])
 
   // Checklist signals.
   // Only entries in Övrigt WITHOUT a meaningful subcategory count as

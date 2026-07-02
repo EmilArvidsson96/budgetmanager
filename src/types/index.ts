@@ -455,6 +455,11 @@ export interface AppSettings {
   salaryMinAmount?: number              // min positive amount to count as salary (default 20000)
   salaryAmountTolerancePct?: number     // ± band around a recurring amount, e.g. 20 (default 20)
   salaryMinRecurringMonths?: number     // months an amount must recur in to count (default 2)
+  // Dual reconciliation boundary (only when salaryAnchoredMonths is on): listed
+  // income (salary + benefits + savings withdrawals) on/after incomeCutDay rolls to
+  // the next month's reconciliation; expenses roll only at the detected salary date.
+  incomeCutDay?: number                 // day-of-month cutoff for listed income (default 20)
+  expectedSalaryDay?: number            // fallback salary day for months with no detected salary (default 25)
   categories: CategoryDef[]
   accounts: Account[]
   recurringItems: RecurringItem[]

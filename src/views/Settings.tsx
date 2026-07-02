@@ -96,6 +96,12 @@ function GeneralTab() {
   const anchorEntries = Object.entries(salaryInfo.anchors ?? {}).sort((a, b) => b[0].localeCompare(a[0]))
   const fmtPeriod = (id: string) => `${MONTH_NAMES_SHORT[parseInt(id.slice(5, 7)) - 1]} ${id.slice(2, 4)}`
   const fmtDay = (iso: string) => `${parseInt(iso.slice(8, 10))} ${MONTH_NAMES_SHORT[parseInt(iso.slice(5, 7)) - 1].toLowerCase()}`
+  // The salary in calendar month M opens the reconciliation period labelled M+1.
+  const openedPeriod = (calId: string) => {
+    const y = parseInt(calId.slice(0, 4))
+    const m = parseInt(calId.slice(5, 7))
+    return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`
+  }
 
   const save = () => {
     const parsed = parseInt(day)
@@ -181,10 +187,15 @@ function GeneralTab() {
               <div>
                 <span className="text-sm font-medium text-gray-700">Starta perioden när lönen kommer</span>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  Söker igenom hela månaden efter din lön — i första hand en insättning som är
-                  kategoriserad som lön, annars ett återkommande belopp (±&#8202;{store.settings.salaryAmountTolerancePct ?? 20}&#8202;%).
-                  Skatteåterbäring, ränta och bidrag räknas inte som lön. Perioden börjar på det
-                  faktiska lönedatumet; startdagen ovan blir bara reserv för månader där ingen lön hittas.
+                  Lönen som kommer i slutet av en månad öppnar <em>nästa</em> månads avräkning
+                  (lön 22 maj → juni). Lön hittas genom hela månaden — i första hand en insättning
+                  kategoriserad som lön, annars ett återkommande belopp (±&#8202;{store.settings.salaryAmountTolerancePct ?? 20}&#8202;%);
+                  skatteåterbäring, ränta och sparande räknas inte som lön.
+                </p>
+                <p className="text-xs text-gray-400 mt-1.5">
+                  <span className="font-medium text-gray-500">Inkomst</span> (lön, bidrag, sociala ersättningar,
+                  sparuttag) från brytdagen räknas till nästa månad, medan <span className="font-medium text-gray-500">utgifter</span> byter
+                  månad först på det faktiska lönedatumet — så bidrag som kommer strax innan lönen hamnar rätt.
                 </p>
               </div>
             </label>
@@ -192,6 +203,28 @@ function GeneralTab() {
             {salaryAnchoredMonths && (
               <div className="mt-4 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Inkomst-brytdag</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={28}
+                      value={store.settings.incomeCutDay ?? 20}
+                      onChange={(e) => store.updateSettings({ incomeCutDay: Math.max(1, Math.min(28, parseInt(e.target.value) || 20)) })}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 block mb-1">Reserv-lönedag</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={28}
+                      value={store.settings.expectedSalaryDay ?? 25}
+                      onChange={(e) => store.updateSettings({ expectedSalaryDay: Math.max(1, Math.min(28, parseInt(e.target.value) || 25)) })}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+                    />
+                  </div>
                   <div>
                     <label className="text-xs font-medium text-gray-600 block mb-1">Beloppstolerans (±&nbsp;%)</label>
                     <input
@@ -209,7 +242,7 @@ function GeneralTab() {
                       type="number"
                       min={0}
                       step={500}
-                      value={store.settings.salaryMinAmount ?? 5000}
+                      value={store.settings.salaryMinAmount ?? 20000}
                       onChange={(e) => store.updateSettings({ salaryMinAmount: Math.max(0, parseInt(e.target.value) || 0) })}
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
                     />
@@ -230,15 +263,15 @@ function GeneralTab() {
                 {anchorEntries.length > 0 && (
                   <div className="p-3 bg-gray-50 border border-gray-100 rounded-lg">
                     <p className="text-xs font-medium text-gray-600 mb-2">
-                      Identifierade lönedatum ({anchorEntries.length} perioder)
+                      Avräkningsmånader som öppnas av en lön ({anchorEntries.length})
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {anchorEntries.slice(0, 18).map(([id]) => {
                         const m = salaryInfo.matches[id]
                         return (
                           <span key={id} className="inline-flex items-center gap-1 text-[11px] bg-white border border-gray-200 rounded px-2 py-0.5 text-gray-600" title={m?.via === 'tag' ? 'Hittad via lönekategori' : 'Hittad via återkommande belopp'}>
-                            <span className="font-medium text-gray-800">{fmtPeriod(id)}</span>
-                            <span className="text-gray-400">→</span>
+                            <span className="font-medium text-gray-800">{fmtPeriod(openedPeriod(id))}</span>
+                            <span className="text-gray-400">börjar</span>
                             <span>{fmtDay(m?.date ?? '')}</span>
                             {m && <span className="text-gray-400">· {Math.round(m.amount).toLocaleString('sv-SE')}&nbsp;kr</span>}
                           </span>
@@ -250,8 +283,8 @@ function GeneralTab() {
 
                 {salaryInfo.flaggedMonths.length > 0 && (
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
-                    <span className="font-medium">Lön ej hittad i {salaryInfo.flaggedMonths.length} månader</span> —
-                    dessa använder den förväntade startdagen ({monthStartDay}). Kontrollera fönstret/beloppet ovan om det ser fel ut:{' '}
+                    <span className="font-medium">Lön ej hittad för {salaryInfo.flaggedMonths.length} avräkningsmånader</span> —
+                    dessa använder reserv-lönedagen ({store.settings.expectedSalaryDay ?? 25}). Kontrollera beloppet/toleransen ovan om det ser fel ut:{' '}
                     {salaryInfo.flaggedMonths.slice(-6).map(fmtPeriod).join(', ')}
                     {salaryInfo.flaggedMonths.length > 6 ? ' …' : ''}
                   </div>

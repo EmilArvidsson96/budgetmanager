@@ -29,7 +29,7 @@ import type {
   TxOverride,
   AppSettings,
 } from '@/types'
-import type { SalaryAnchors } from '@/utils/periodUtils'
+import type { SalaryAnchors, SalaryPeriodConfig } from '@/utils/periodUtils'
 import { resolveTxCategory } from '@/utils/zlantarParser'
 
 export interface SalaryMatch {
@@ -39,14 +39,16 @@ export interface SalaryMatch {
 }
 
 export interface SalaryAnchorInfo {
-  // Period id "YYYY-MM" → ISO date that period begins. Undefined when the feature
-  // is off or nothing was detected, so callers can pass it straight to the period
-  // helpers (which treat undefined as "use nominal monthStartDay").
+  // The period config to pass to the period helpers, or undefined when the feature
+  // is off (helpers then use legacy calendar/monthStartDay behaviour, no shift).
+  config?: SalaryPeriodConfig
+  // Detected salary dates, keyed by CALENDAR month "YYYY-MM" (not the shifted
+  // reconciliation label). Kept for the UI preview / diagnostics.
   anchors?: SalaryAnchors
-  // Period ids that have activity but no salary could be identified — surfaced in
-  // the UI so the user knows those months fell back to the expected payday.
+  // Calendar months that have activity but no salary could be identified — the
+  // reconciliation periods they open fall back to expectedSalaryDay.
   flaggedMonths: string[]
-  // Per-anchored-period detail (matched amount + how it was found), for the UI.
+  // Per-detected-month detail (matched amount + how it was found), for the UI.
   matches: Record<string, SalaryMatch>
 }
 
@@ -164,7 +166,7 @@ export function getSalaryAnchors(input: {
   const { settings } = input
   if (!settings.salaryAnchoredMonths) return { flaggedMonths: [], matches: {} }
 
-  return detectSalaryAnchors(
+  const detected = detectSalaryAnchors(
     input.allTransactions,
     settings.categories,
     settings.zlantarCategoryRules,
@@ -175,4 +177,19 @@ export function getSalaryAnchors(input: {
       minRecurringMonths: settings.salaryMinRecurringMonths ?? 2,
     }
   )
+
+  const config: SalaryPeriodConfig = {
+    anchors: detected.anchors ?? {},
+    incomeCutDay: settings.incomeCutDay ?? 20,
+    expectedSalaryDay: settings.expectedSalaryDay ?? 25,
+  }
+  // Detection flags CALENDAR months with no salary; the reconciliation period that
+  // then falls back to expectedSalaryDay is the following label (M → M+1). Shift so
+  // flaggedMonths are the period labels the rest of the app compares against.
+  const flaggedMonths = detected.flaggedMonths.map((calId) => {
+    const y = parseInt(calId.slice(0, 4))
+    const m = parseInt(calId.slice(5, 7))
+    return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`
+  })
+  return { config, anchors: detected.anchors, flaggedMonths, matches: detected.matches }
 }

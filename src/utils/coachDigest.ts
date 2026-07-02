@@ -18,7 +18,7 @@ import type { AppState, CoachVerdict } from '@/types'
 import { getMonthlyHistory, averageOf, type MonthHistoryPoint } from './history'
 import { buildProjection, currentMonthId, classifyAccount } from './projection'
 import { netWorthByMonth } from './report'
-import { getMonthIdForDate } from './periodUtils'
+import { getMonthIdForDate, bucketKindForEntry } from './periodUtils'
 import { getSalaryAnchors } from './salaryDetection'
 import { MONTH_NAMES_LONG, MONTH_NAMES_SHORT } from './budgetHelpers'
 
@@ -264,14 +264,16 @@ export function buildCoachDigest(state: AppState, monthId: string): CoachDigest 
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   })()
   const { monthStartDay, monthStartBusinessDay } = state.settings
-  const { anchors } = getSalaryAnchors(state)
+  const { config } = getSalaryAnchors(state)
   const lastProjMonthId = future.length ? future[future.length - 1].monthId : monthId
   const troughDrivers: CoachTroughDriver[] = Object.values(state.liquidityPlans)
     .flatMap((p) => p.entries)
     .filter((e) => {
       if (!e.date || e.amount >= 0 || e.includeInProjection === false) return false
       if (e.date < todayIso) return false
-      const mid = getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, anchors)
+      // Bucket manual one-offs on the salary ('other') boundary, matching how the
+      // projection places them (see report.ts largeExpenses / bucketKindForEntry).
+      const mid = getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, config, bucketKindForEntry(e.type))
       return mid <= lastProjMonthId
     })
     .sort((a, b) => a.amount - b.amount) // most negative first
