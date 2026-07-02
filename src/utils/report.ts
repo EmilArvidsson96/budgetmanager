@@ -261,6 +261,7 @@ function largeExpenses(state: AppState, start: string): LargeExpense[] {
   for (const plan of Object.values(state.liquidityPlans)) {
     for (const e of plan.entries) {
       if (!e.date || e.amount >= 0) continue   // only expenses/loan payments
+      if (e.includeInProjection === false) continue
       const mid = getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, anchors)
       if (mid < start || mid > futureEnd) continue
       out.push({ monthId: mid, label: labelShort(mid), amount: Math.abs(e.amount), description: e.description || 'Planerad utgift', kind: 'planned' })
