@@ -7,6 +7,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import { useAppStore } from '@/store'
+import { useIsMobile, MOBILE_TOOLTIP_POSITION } from '@/hooks/useIsMobile'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
@@ -1328,6 +1329,7 @@ function CategoryPicker({
 // ─── Category donut ───────────────────────────────────────────────────────────
 
 function CategoryDonut({ data, total, onCategoryClick }: { data: DonutSlice[]; total: number; onCategoryClick?: (catId: string) => void }) {
+  const isMobile = useIsMobile()
   return (
     <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr] gap-3 items-center">
       <ResponsiveContainer width="100%" height={200}>
@@ -1352,6 +1354,7 @@ function CategoryDonut({ data, total, onCategoryClick }: { data: DonutSlice[]; t
             ))}
           </Pie>
           <Tooltip
+            position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
             formatter={(v, _name, item) => {
               const num = Number(v ?? 0)
               const pct = total > 0 ? ((num / total) * 100).toFixed(0) : 0
@@ -1400,6 +1403,7 @@ function CategoryTrendBar({
   categories: CategoryDef[]
   onCategoryClick?: (catId: string) => void
 }) {
+  const isMobile = useIsMobile()
   // Only stack categories that have at least one non-zero value to keep the legend tidy.
   const activeCats = categories.filter((c) =>
     data.some((d) => (d[c.id] as number) > 0)
@@ -1419,6 +1423,7 @@ function CategoryTrendBar({
             tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`)}
           />
           <Tooltip
+            position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
             cursor={{ fill: '#f5f1e6' }}
             contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e7e2d3' }}
             formatter={(v, name) => [formatCurrency(Number(v ?? 0)), String(name)]}
@@ -1469,6 +1474,7 @@ function CategoryDetailChart({
   activeSubs: SubTimelineEntry[]
   onClose: () => void
 }) {
+  const isMobile = useIsMobile()
   return (
     <Card padding={false} className="p-3 md:p-5 mb-6">
       <div className="flex items-center justify-between mb-4">
@@ -1500,6 +1506,7 @@ function CategoryDetailChart({
             tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`)}
           />
           <Tooltip
+            position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
             cursor={{ fill: '#f5f1e6' }}
             contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e7e2d3' }}
             formatter={(v, name) => [formatCurrency(Number(v ?? 0)), String(name)]}

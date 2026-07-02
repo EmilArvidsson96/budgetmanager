@@ -8,6 +8,7 @@ import {
   PieChart, Pie, Cell,
 } from 'recharts'
 import { useAppStore } from '@/store'
+import { useIsMobile, MOBILE_TOOLTIP_POSITION } from '@/hooks/useIsMobile'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -527,6 +528,7 @@ function MonthlyBreakdown({ receipts }: { receipts: GroceryReceipt[] }) {
 
 function SpendAnalytics({ receipts }: { receipts: GroceryReceipt[] }) {
   const store = useAppStore()
+  const isMobile = useIsMobile()
   const [includeUnmatched, setIncludeUnmatched] = useState(false)
   const [areaMode, setAreaMode] = useState<'absolute' | 'percent'>('absolute')
   const [startMonth, setStartMonth] = useState('')
@@ -650,6 +652,7 @@ function SpendAnalytics({ receipts }: { receipts: GroceryReceipt[] }) {
               }
             />
             <Tooltip
+              position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
               content={(props) => (
                 <AreaTooltipContent
                   active={props.active}
@@ -774,6 +777,7 @@ function SpendAnalytics({ receipts }: { receipts: GroceryReceipt[] }) {
                 ))}
               </Pie>
               <Tooltip
+                position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
                 content={(props) => (
                   <PieTooltipContent
                     active={props.active}

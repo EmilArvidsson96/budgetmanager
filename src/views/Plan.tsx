@@ -6,6 +6,7 @@ import {
   ComposedChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot,
 } from 'recharts'
 import { useAppStore } from '@/store'
+import { useIsMobile, MOBILE_TOOLTIP_POSITION } from '@/hooks/useIsMobile'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -113,7 +114,7 @@ function LiquidityTooltip({
   const flagPlanned = planned.get(label) ?? []
   const total = payload.reduce((s, p) => s + (p.value ?? 0), 0)
   return (
-    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[180px]">
+    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[8rem] max-w-[75vw] md:min-w-[180px] md:max-w-none">
       <p className="font-semibold text-gray-800 mb-1">{label}</p>
       {stacked && payload.length > 1 ? (
         <>
@@ -217,6 +218,7 @@ export function PlanView() {
   const [exporting, setExporting] = useState(false)
   const [copied, setCopied] = useState(false)
   const store = useAppStore()
+  const isMobile = useIsMobile()
   const { settings } = store
   const { anchors } = useSalaryAnchors()
 
@@ -560,11 +562,12 @@ export function PlanView() {
                 tick={{ fontSize: 11 }}
               />
               <Tooltip
+                position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
                 content={({ active, payload, label }) => {
                   if (!active || !payload?.length) return null
                   const d = payload[0].payload
                   return (
-                    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[200px]">
+                    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[8rem] max-w-[75vw] md:min-w-[200px] md:max-w-none">
                       <p className="font-semibold text-gray-800 mb-2">{label}</p>
                       {d._liquid > 0 && (
                         <div className="flex justify-between gap-8">
@@ -620,7 +623,7 @@ export function PlanView() {
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
               <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} />
-              <Tooltip content={(props: any) => (
+              <Tooltip position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined} content={(props: any) => (
                 <LiquidityTooltip
                   active={props.active}
                   payload={props.payload}

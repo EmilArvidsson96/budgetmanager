@@ -6,6 +6,7 @@ import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Select } from '@/components/ui/Select'
 import { useAppStore } from '@/store'
+import { useIsMobile, MOBILE_TOOLTIP_POSITION } from '@/hooks/useIsMobile'
 import { formatCurrency } from '@/utils/budgetHelpers'
 import { getMonthlyHistory, averageOf, type MonthHistoryPoint } from '@/utils/history'
 
@@ -42,6 +43,7 @@ function lensValue(p: MonthHistoryPoint, lensId: string): { actual: number; plan
 
 export function HistoryCharts() {
   const store = useAppStore()
+  const isMobile = useIsMobile()
   const { categories } = store.settings
 
   const history = useMemo(
@@ -196,7 +198,7 @@ export function HistoryCharts() {
             <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe0" vertical={false} />
             <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
             <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} />
-            <Tooltip content={(props: any) => <OverviewTooltip {...props} />} />
+            <Tooltip position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined} content={(props: any) => <OverviewTooltip {...props} />} />
             <Bar dataKey="Utgifter" fill={EXPENSE_COLOR} fillOpacity={0.85} isAnimationActive={false} />
             <Line type="monotone" dataKey="Utgiftsplan" stroke={PLAN_COLOR} strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
             <Line type="monotone" dataKey="Inkomst" stroke={INCOME_COLOR} strokeWidth={2.5} dot={false} />
@@ -220,7 +222,7 @@ export function HistoryCharts() {
               <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe0" vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
               <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} />
-              <Tooltip content={(props: any) => <CostTooltip {...props} cats={activeExpenseCats} colorMap={colorMap} />} />
+              <Tooltip position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined} content={(props: any) => <CostTooltip {...props} cats={activeExpenseCats} colorMap={colorMap} />} />
               {activeExpenseCats.map((c) => (
                 <Area
                   key={c.id}
@@ -279,7 +281,7 @@ export function HistoryCharts() {
             <CartesianGrid strokeDasharray="3 3" stroke="#f0ebe0" vertical={false} />
             <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
             <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} />
-            <Tooltip content={(props: any) => <DetailTooltip {...props} name={lens.name} />} />
+            <Tooltip position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined} content={(props: any) => <DetailTooltip {...props} name={lens.name} />} />
             <ReferenceLine y={0} stroke="#e5e7eb" />
             <Bar dataKey="Utfall" fill={lens.color} fillOpacity={0.85} isAnimationActive={false} />
             <Line type="monotone" dataKey="Plan" stroke={PLAN_COLOR} strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
@@ -324,7 +326,7 @@ function Stat({ label, value, muted }: { label: string; value: number; muted?: b
 
 function TooltipBox({ label, children }: { label?: string; children: React.ReactNode }) {
   return (
-    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[190px]">
+    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[8rem] max-w-[75vw] md:min-w-[190px] md:max-w-none">
       {label && <p className="font-semibold text-gray-800 mb-1.5">{label}</p>}
       {children}
     </div>

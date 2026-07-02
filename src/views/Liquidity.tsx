@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, Plus, Download, Trash2 } from 'lucide-react'
 import { Select } from '@/components/ui/Select'
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { useAppStore } from '@/store'
+import { useIsMobile, MOBILE_TOOLTIP_POSITION } from '@/hooks/useIsMobile'
 import { Layout, PageHeader } from '@/components/layout/Layout'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -26,6 +27,7 @@ const TYPE_LABELS: Record<LiquidityEntry['type'], string> = {
 const DEFAULT_LARGE_TX_THRESHOLD = 5000
 
 export function LiquidityView() {
+  const isMobile = useIsMobile()
   const [year, setYear] = useState(new Date().getFullYear())
   const [exporting, setExporting] = useState(false)
   const [showForm, setShowForm] = useState(false)
@@ -260,7 +262,7 @@ export function LiquidityView() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v) => formatCurrency(Number(v ?? 0))} labelStyle={{ fontWeight: 600 }} />
+                  <Tooltip position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined} formatter={(v) => formatCurrency(Number(v ?? 0))} labelStyle={{ fontWeight: 600 }} />
                   <Line
                     type="monotone"
                     dataKey="balance"
@@ -289,6 +291,7 @@ export function LiquidityView() {
                 <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                 <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} tick={{ fontSize: 11 }} />
                 <Tooltip
+                  position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
                   formatter={(v) => formatCurrency(Number(v ?? 0))}
                   labelStyle={{ fontWeight: 600 }}
                 />

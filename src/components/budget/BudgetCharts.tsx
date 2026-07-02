@@ -5,6 +5,7 @@ import {
 import { Card, CardHeader } from '@/components/ui/Card'
 import { Select } from '@/components/ui/Select'
 import { useAppStore } from '@/store'
+import { useIsMobile, MOBILE_TOOLTIP_POSITION } from '@/hooks/useIsMobile'
 import { formatCurrency, MONTH_NAMES_LONG } from '@/utils/budgetHelpers'
 import { budgetedAmount } from '@/utils/projection'
 import type { ProjectionMonth } from '@/utils/projection'
@@ -75,6 +76,7 @@ function monthLabel(monthId: string): string {
 // so the bars reflect overrides → baseline → legacy budgets.
 export function BudgetCharts({ months }: { months: ProjectionMonth[] }) {
   const store = useAppStore()
+  const isMobile = useIsMobile()
   const { categories } = store.settings
 
   const expenseCats = useMemo(() => categories.filter((c) => c.type === 'expense'), [categories])
@@ -180,6 +182,7 @@ export function BudgetCharts({ months }: { months: ProjectionMonth[] }) {
             <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
             <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} />
             <Tooltip
+              position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
               content={(props: any) => (
                 <BudgetBarTooltip active={props.active} payload={props.payload} label={props.label} nameMap={nameMap} />
               )}
@@ -267,7 +270,7 @@ function BudgetBarTooltip({
   const expenseRows = payload.filter((p) => p.dataKey !== 'Inkomst' && p.value > 0)
   const expenseTotal = expenseRows.reduce((s, p) => s + p.value, 0)
   return (
-    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[200px]">
+    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm min-w-[8rem] max-w-[75vw] md:min-w-[200px] md:max-w-none">
       <p className="font-semibold text-gray-800 mb-1">{label}</p>
       {[...expenseRows].reverse().map((p) => (
         <p key={p.dataKey} className="flex items-center justify-between gap-4 text-gray-600">
