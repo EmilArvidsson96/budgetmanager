@@ -18,6 +18,8 @@ import type { AppState, CoachVerdict } from '@/types'
 import { getMonthlyHistory, averageOf, type MonthHistoryPoint } from './history'
 import { buildProjection, currentMonthId, classifyAccount } from './projection'
 import { netWorthByMonth } from './report'
+import { getMonthIdForDate } from './periodUtils'
+import { getSalaryAnchors } from './salaryDetection'
 import { MONTH_NAMES_LONG, MONTH_NAMES_SHORT } from './budgetHelpers'
 
 // Swedish mortgage-interest deduction (schablon): 30 % of interest is refunded via
@@ -115,24 +117,34 @@ function prevMonthId(monthId: string): string {
   return month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, '0')}`
 }
 
+// Elapsed calendar months from period a → b (both 'YYYY-MM'). Used so per-month
+// rates divide by real time, not by array-index distance in the (gap-compacted)
+// history series.
+function monthsBetween(aId: string, bId: string): number {
+  const ay = parseInt(aId.slice(0, 4)), am = parseInt(aId.slice(5, 7))
+  const by = parseInt(bId.slice(0, 4)), bm = parseInt(bId.slice(5, 7))
+  return (by - ay) * 12 + (bm - am)
+}
+
 function labelLong(monthId: string): string {
   const year = monthId.slice(0, 4)
   const month = parseInt(monthId.slice(5, 7))
   return `${MONTH_NAMES_LONG[month - 1]} ${year}`
 }
 
-// The latest elapsed period that has real activity but no coach review yet — i.e.
-// the "avräkning" that just closed when this period's salary landed. Drives the
-// "review is due" prompt in Avstämning. Null when everything reviewable is reviewed.
+// The period that just closed when this period's salary landed — i.e. the single
+// most-recent elapsed month with activity — but only when it has no review yet.
+// Drives the "review is due" prompt in Avstämning. Null once that month is reviewed
+// (so it doesn't re-fire, and doesn't nag backward through an unreviewed backlog —
+// older months are still reachable via month navigation, just not flagged "due").
 export function coachDueMonthId(state: AppState): string | null {
   const cur = currentMonthId(state)
   const reviewable = Object.keys(state.actuals)
     .filter((id) => id < cur && (state.actuals[id].entries?.length ?? 0) > 0)
     .sort()
-  for (let i = reviewable.length - 1; i >= 0; i--) {
-    if (!state.coachReviews[reviewable[i]]) return reviewable[i]
-  }
-  return null
+  const latest = reviewable[reviewable.length - 1]
+  if (!latest) return null
+  return state.coachReviews[latest] ? null : latest
 }
 
 // Whether a coach review can be produced for this period (it has imported activity).
@@ -172,15 +184,18 @@ export function buildCoachDigest(state: AppState, monthId: string): CoachDigest 
   const netWorthDeltaMonth =
     netWorth !== null && nwPrev !== undefined ? netWorth - nwPrev : null
 
-  // Furthest-back known net worth within the trailing 6 months → "≈6 mo ago".
+  // Furthest-back known net worth within the trailing 6 history points → "≈6 mo ago".
+  // Divide by the true calendar-month span (not the array-index distance), so import
+  // gaps don't inflate the per-month rate.
   let nw6Value: number | null = null
-  let nw6Back = 0
+  let nw6MonthId: string | null = null
   for (let back = 6; back >= 1; back--) {
     const h = history[idx - back]
     if (!h) continue
     const v = nwByMonth.get(h.monthId)
-    if (v !== undefined) { nw6Value = v; nw6Back = back; break }
+    if (v !== undefined) { nw6Value = v; nw6MonthId = h.monthId; break }
   }
+  const nw6Back = nw6MonthId ? monthsBetween(nw6MonthId, monthId) : 0
   const netWorthDelta6mo =
     netWorth !== null && nw6Value !== null ? netWorth - nw6Value : null
   const netWorthPerMonth6mo =
@@ -192,8 +207,16 @@ export function buildCoachDigest(state: AppState, monthId: string): CoachDigest 
   const incomeThisMonth = cur?.income.actual ?? 0
   const savingsRateThisMonth =
     savingsThisMonth !== null && incomeThisMonth > 0 ? savingsThisMonth / incomeThisMonth : null
-  const savingsRate6mo =
-    savingsAvg6 !== null && incomeAvg6 > 0 ? savingsAvg6 / incomeAvg6 : null
+  // Rate over a CONSISTENT month set: pool savings and income over the same
+  // savingsKnown months (dividing an avg-over-known by an avg-over-all would mix
+  // month sets and misstate the rate when income differs between them).
+  const known6 = w6.filter((p) => p.savingsKnown)
+  const savingsRate6mo = (() => {
+    if (known6.length === 0) return null
+    const inc = known6.reduce((s, p) => s + p.income.actual, 0)
+    const sav = known6.reduce((s, p) => s + p.savings.actual, 0)
+    return inc > 0 ? sav / inc : null
+  })()
   if (!savingsKnown) {
     dataWarnings.push('Sparande ej mätbart denna månad (föregående månad saknar importerade saldon).')
   }
@@ -233,14 +256,24 @@ export function buildCoachDigest(state: AppState, monthId: string): CoachDigest 
     troughLabel = t.label
   }
 
-  // Upcoming planned one-off costs that pull liquidity down (largest first).
+  // Upcoming planned one-off costs that pull liquidity down (largest first). Bounded
+  // to the SAME window the trough is computed over — an outflow beyond the horizon
+  // can't be what drives a trough inside it, so it must not be surfaced as the cause.
   const todayIso = (() => {
     const d = new Date()
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   })()
+  const { monthStartDay, monthStartBusinessDay } = state.settings
+  const { anchors } = getSalaryAnchors(state)
+  const lastProjMonthId = future.length ? future[future.length - 1].monthId : monthId
   const troughDrivers: CoachTroughDriver[] = Object.values(state.liquidityPlans)
     .flatMap((p) => p.entries)
-    .filter((e) => e.date && e.date >= todayIso && e.amount < 0 && e.includeInProjection !== false)
+    .filter((e) => {
+      if (!e.date || e.amount >= 0 || e.includeInProjection === false) return false
+      if (e.date < todayIso) return false
+      const mid = getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, anchors)
+      return mid <= lastProjMonthId
+    })
     .sort((a, b) => a.amount - b.amount) // most negative first
     .slice(0, MAX_TROUGH_DRIVERS)
     .map((e) => ({

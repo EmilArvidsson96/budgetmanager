@@ -63,7 +63,6 @@ export function ReconcileView() {
     if (!s.settings.coachEnabled) return null
     const id = coachDueMonthId(s)
     return id ? { year: parseInt(id.slice(0, 4)), month: parseInt(id.slice(5, 7)) } : null
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const [year, setYear] = useState(dueSeed?.year ?? today.getFullYear())
   const [month, setMonth] = useState(dueSeed?.month ?? today.getMonth() + 1)
@@ -287,9 +286,10 @@ export function ReconcileView() {
 
       {actual && (
         <div className="space-y-5">
-          {/* AI coach — monthly review + on-request chat */}
-          <CoachReviewCard monthId={monthId} />
-          <CoachChat monthId={monthId} />
+          {/* AI coach — monthly review + on-request chat. key per month so local
+              state (chat thread, transient notes) never leaks across periods. */}
+          <CoachReviewCard key={monthId} monthId={monthId} />
+          <CoachChat key={`chat-${monthId}`} monthId={monthId} />
 
           {/* Status banner */}
           {close ? (

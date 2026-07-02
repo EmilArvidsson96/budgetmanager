@@ -71,7 +71,7 @@ Producera översikten för perioden i digesten. Svara med ENBART giltig JSON (in
 {
   "verdict": "strong" | "ok" | "watch" | "concern",   // helhetsläget denna månad
   "throughline": "den röda tråden du återvänder till, 1 mening",
-  "headline": "nettoförmögenhet nu + förändring vs förra mån och ~6 mån (kr och kr/mån)",
+  "headline": "nettoförmögenhet nu + förändring sedan förra importerade månaden och ~6 mån (kr och kr/mån). netWorthPerMonth6mo är redan per kalendermånad.",
   "savings": "realiserad sparkvot: faktiskt sparat denna månad + rullande 3/6-mån snitt, i kr och % av inkomst. Skilj uttryckligen 0 kr från omätbart.",
   "cashflow": "inkomst vs utgift denna månad + rullande snitt (inkomsten är ojämn)",
   "buffer": "likvid buffert i månaders utgifter; flagga om under 3",
@@ -194,7 +194,11 @@ export async function coachChat(
     system: systemBlocks(digest),
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
   })
-  return textOf(response)
+  const text = textOf(response)
+  // Treat an empty completion as a failure so the UI's error path engages instead
+  // of rendering a blank assistant bubble.
+  if (!text) throw new Error('Tomt svar från coachen')
+  return text
 }
 
 // ─── Deterministic offline fallback ───────────────────────────────────────────
@@ -213,16 +217,23 @@ export function templateCoachReview(digest: CoachDigest): CoachReview {
   const d = digest
 
   // Verdict ladder — savings is the master metric, buffer the top vulnerability.
+  // null = unmeasurable, NOT bad: never let a null buffer / savings-rate trip
+  // 'concern' (that would conflate unknown with zero — the trap the digest exists
+  // to avoid). Only non-null, below-threshold values count against the household.
+  const bufferBad = d.bufferMonths !== null && d.bufferMonths < d.bufferTargetMonths
+  const bufferOk = d.bufferMonths !== null && d.bufferMonths >= d.bufferTargetMonths
+  const savingsBad = d.savingsRate6mo !== null && d.savingsRate6mo <= 0
+  const savingsStrong = d.savingsRate6mo !== null && d.savingsRate6mo >= 0.15
   let verdict: CoachVerdict
   if (!d.savingsKnown) verdict = 'watch'
-  else if ((d.bufferMonths ?? 0) < d.bufferTargetMonths || (d.savingsRate6mo ?? 0) <= 0) verdict = 'concern'
-  else if ((d.savingsRate6mo ?? 0) >= 0.15 && (d.bufferMonths ?? 0) >= d.bufferTargetMonths) verdict = 'strong'
+  else if (bufferBad || savingsBad) verdict = 'concern'
+  else if (savingsStrong && bufferOk) verdict = 'strong'
   else verdict = 'ok'
 
   // Headline.
   const nwParts: string[] = []
   if (d.netWorth !== null) nwParts.push(`Nettoförmögenhet ${kr(d.netWorth)}`)
-  if (d.netWorthDeltaMonth !== null) nwParts.push(`${krSigned(d.netWorthDeltaMonth)} mot förra månaden`)
+  if (d.netWorthDeltaMonth !== null) nwParts.push(`${krSigned(d.netWorthDeltaMonth)} sedan förra importen`)
   if (d.netWorthDelta6mo !== null && d.netWorthPerMonth6mo !== null)
     nwParts.push(`${krSigned(d.netWorthDelta6mo)} på ~6 mån (${krSigned(d.netWorthPerMonth6mo)}/mån)`)
   const headline = nwParts.length ? nwParts.join(' · ') : 'Nettoförmögenhet okänd — saldon saknas i importen.'
@@ -246,7 +257,7 @@ export function templateCoachReview(digest: CoachDigest): CoachReview {
   if (d.bufferMonths === null) {
     buffer = `Likvid buffert ${kr(d.liquidNow)}. Kan inte beräkna månaders täckning utan utgiftssnitt.`
   } else {
-    const flag = d.bufferMonths < d.bufferTargetMonths ? ` — under målet ${d.bufferTargetMonths} mån. Fyll på först.` : ' — över 3-månadersmålet.'
+    const flag = d.bufferMonths < d.bufferTargetMonths ? ` — under målet ${d.bufferTargetMonths} mån. Fyll på först.` : ` — över ${d.bufferTargetMonths}-månadersmålet.`
     buffer = `Likvid buffert ${kr(d.liquidNow)} ≈ ${d.bufferMonths.toFixed(1)} månaders utgifter${flag}`
   }
 
@@ -279,7 +290,7 @@ export function templateCoachReview(digest: CoachDigest): CoachReview {
     nudge = 'Importera föregående månads saldon så sparkvoten blir mätbar — utan den siffran flyger vi blint.'
   } else if (d.bufferMonths !== null && d.bufferMonths < d.bufferTargetMonths && d.expenseAvg6mo > 0) {
     const gap = Math.max(0, d.bufferTargetMonths * d.expenseAvg6mo - d.liquidNow)
-    nudge = `Toppa bufferten till 3 månader ≈ ${kr(gap)}. Automatisera en överföring på lönedagen så det inte beror på viljestyrka.`
+    nudge = `Toppa bufferten till ${d.bufferTargetMonths} månader ≈ ${kr(gap)}. Automatisera en överföring på lönedagen så det inte beror på viljestyrka.`
   } else if (d.catchAllOverPlan !== null) {
     nudge = `Specificera Övrigt-posten (${kr(d.catchAllOverPlan)} över plan) — en oförklarad femsiffrig lucka är där sparkvoten läcker.`
   } else {
