@@ -13,7 +13,7 @@ import type {
   TxOverride,
 } from '@/types'
 import { AGREEMENT_CATEGORY_MAP, DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
-import { getMonthIdForDate, type SalaryAnchors } from '@/utils/periodUtils'
+import { getMonthIdForDate, bucketKindForCategory, type SalaryPeriodConfig } from '@/utils/periodUtils'
 import { txKey as makeTxKey } from '@/utils/transferReconciliation'
 
 // ─── Parse raw JSON files ─────────────────────────────────────────────────────
@@ -216,7 +216,7 @@ export function buildMonthEntries(
   excludeKeys?: Set<string>,
   monthStartDay = 1,
   monthStartBusinessDay = false,
-  anchors?: SalaryAnchors
+  config?: SalaryPeriodConfig
 ): ActualEntry[] {
   const catIds = new Set(categories.map((c) => c.id))
   const ruleMap = buildRuleLookup(rules)
@@ -226,8 +226,9 @@ export function buildMonthEntries(
     if (!tx.date) continue
     if (tx.transaction_type === 'transfer') continue
     if (excludeKeys && excludeKeys.has(makeTxKey(tx))) continue
-    if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) continue
 
+    // Resolve first so the period boundary can depend on whether this is listed
+    // income (income-cut boundary) vs. everything else (salary-date boundary).
     const { catId, subId } = resolveCategory(
       tx.category ?? '',
       tx.subcategory ?? '',
@@ -237,6 +238,9 @@ export function buildMonthEntries(
     )
     const catDef = categories.find((c) => c.id === catId)
     if (catDef?.type === 'transfer') continue
+
+    const kind = bucketKindForCategory(catId, subId, tx.category ?? '')
+    if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, config, kind) !== monthId) continue
 
     const key = `${catId}|||${subId}`
 
@@ -266,16 +270,21 @@ export function buildMonthlyActuals(
   monthStartBusinessDay = false,
   excludeKeys?: Set<string>,
   overrides: Record<string, TxOverride> = {},
-  anchors?: SalaryAnchors
+  config?: SalaryPeriodConfig
 ): Record<string, MonthlyActuals> {
   const { transactions, data } = imp
+  const catIds = new Set(categories.map((c) => c.id))
+  const ruleMap = buildRuleLookup(rules)
 
-  // Collect the months present (transfers + reconciled keys excluded)
+  // Collect the months present (transfers + reconciled keys excluded). Bucket with
+  // the SAME per-tx kind as buildMonthEntries so no boundary tx is orphaned.
   const months = new Set<string>()
   for (const tx of transactions) {
     if (!tx.date || tx.transaction_type === 'transfer') continue
     if (excludeKeys && excludeKeys.has(makeTxKey(tx))) continue
-    months.add(getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors))
+    const { catId, subId } = resolveCategory(tx.category ?? '', tx.subcategory ?? '', catIds, ruleMap, overrides[makeTxKey(tx)])
+    const kind = bucketKindForCategory(catId, subId, tx.category ?? '')
+    months.add(getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, config, kind))
   }
 
   const accountBalances = buildAccountBalances(data)
@@ -287,7 +296,7 @@ export function buildMonthlyActuals(
       id: ym,
       year: parseInt(yearStr),
       month: parseInt(monthStr),
-      entries: buildMonthEntries(transactions, ym, categories, rules, overrides, excludeKeys, monthStartDay, monthStartBusinessDay, anchors),
+      entries: buildMonthEntries(transactions, ym, categories, rules, overrides, excludeKeys, monthStartDay, monthStartBusinessDay, config),
       accountBalances,
       importedAt: imp.importedAt,
     }
@@ -472,13 +481,13 @@ export function getTransactionsForCategory(
   monthStartBusinessDay = false,
   excludeKeys?: Set<string>,
   overrides: Record<string, TxOverride> = {},
-  anchors?: SalaryAnchors
+  config?: SalaryPeriodConfig
 ): ZlantarTransaction[] {
   const catIds = new Set(categories.map((c) => c.id))
   const ruleMap = buildRuleLookup(rules)
 
   return transactions.filter((tx) => {
-    if (!tx.date || getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, anchors) !== monthId) return false
+    if (!tx.date) return false
     if (tx.transaction_type === 'transfer') return false
     if (excludeKeys && excludeKeys.has(makeTxKey(tx))) return false
     const { catId: resolvedCat, subId: resolvedSub } = resolveCategory(
@@ -490,6 +499,8 @@ export function getTransactionsForCategory(
     )
     if (resolvedCat !== catId) return false
     if (subId !== undefined && resolvedSub !== subId) return false
+    const kind = bucketKindForCategory(resolvedCat, resolvedSub, tx.category ?? '')
+    if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, config, kind) !== monthId) return false
     return true
   })
 }
