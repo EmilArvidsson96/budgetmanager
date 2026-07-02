@@ -464,7 +464,7 @@ export function PlanView() {
         title="Plan"
         subtitle="Likviditet & förmögenhet framåt"
         actions={
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2">
             <Button variant="secondary" size="sm" onClick={handleExport} loading={exporting}>
               <Download className="w-4 h-4" /> Exportera
             </Button>
@@ -474,12 +474,12 @@ export function PlanView() {
             <Button variant="secondary" size="sm" onClick={handleAiCopy} title="Kopiera AI-underlaget till urklipp">
               {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />} {copied ? 'Kopierad' : 'Kopiera'}
             </Button>
-            <div className="flex rounded-lg border border-warm-300 overflow-hidden text-sm">
+            <div className="flex rounded-lg border border-warm-300 overflow-x-auto max-w-full text-xs sm:text-sm">
               {VIEWS.map((v) => (
                 <button
                   key={v.id}
                   onClick={() => setView(v.id)}
-                  className={`px-3 py-1.5 font-medium transition-colors ${v.id !== VIEWS[0].id ? 'border-l border-warm-300' : ''} ${
+                  className={`px-2 sm:px-3 py-1.5 font-medium transition-colors whitespace-nowrap ${v.id !== VIEWS[0].id ? 'border-l border-warm-300' : ''} ${
                     view === v.id ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-warm-50'
                   }`}
                 >
@@ -488,12 +488,12 @@ export function PlanView() {
               ))}
             </div>
             {view !== 'history' && (
-              <div className="flex rounded-lg border border-warm-300 overflow-hidden text-sm">
+              <div className="flex rounded-lg border border-warm-300 overflow-x-auto text-xs sm:text-sm">
                 {HORIZONS.map((h) => (
                   <button
                     key={h}
                     onClick={() => setHorizon(h)}
-                    className={`px-3 py-1.5 font-medium transition-colors ${h !== HORIZONS[0] ? 'border-l border-warm-300' : ''} ${
+                    className={`px-2 sm:px-3 py-1.5 font-medium transition-colors whitespace-nowrap ${h !== HORIZONS[0] ? 'border-l border-warm-300' : ''} ${
                       horizon === h ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-warm-50'
                     }`}
                   >
@@ -516,11 +516,11 @@ export function PlanView() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Card>
             <p className="text-xs text-gray-400 mb-1">Nettoförmögenhet idag</p>
-            <p className="text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(now.netWorth)}</p>
+            <p className="text-lg sm:text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(now.netWorth)}</p>
           </Card>
           <Card>
             <p className="text-xs text-gray-400 mb-1">Om {horizon} mån</p>
-            <p className="text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(end.netWorth)}</p>
+            <p className="text-lg sm:text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(end.netWorth)}</p>
             <p className={`text-xs mt-0.5 flex items-center gap-1 ${netWorthDelta >= 0 ? 'text-green-600' : 'text-red-600'}`}>
               {netWorthDelta >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
               {formatCurrency(netWorthDelta, true)}
@@ -528,11 +528,11 @@ export function PlanView() {
           </Card>
           <Card>
             <p className="text-xs text-gray-400 mb-1">Likviditet idag</p>
-            <p className="text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(now.liquidity)}</p>
+            <p className="text-lg sm:text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(now.liquidity)}</p>
           </Card>
           <Card className={liquidityGoesNegative ? 'border-red-300 bg-red-50' : ''}>
             <p className="text-xs text-gray-400 mb-1">Lägsta likviditet</p>
-            <p className={`text-xl font-semibold tabular-nums ${liquidityGoesNegative ? 'text-red-600' : 'text-gray-900'}`}>
+            <p className={`text-lg sm:text-xl font-semibold tabular-nums ${liquidityGoesNegative ? 'text-red-600' : 'text-gray-900'}`}>
               {formatCurrency(trough.liquidity)}
             </p>
             <p className="text-xs text-gray-400 mt-0.5">{trough.label}</p>
@@ -726,7 +726,7 @@ export function PlanView() {
             </Link>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                   <th className="text-left px-4 py-2">Konto</th>
@@ -879,7 +879,7 @@ export function PlanView() {
           )}
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[560px] text-sm">
               <thead>
                 <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                   <th className="text-left px-4 py-2">Datum</th>

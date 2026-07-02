@@ -306,7 +306,7 @@ export function ReconcileView() {
               return (
                 <Card key={label}>
                   <p className="text-xs text-gray-400 mb-1">{label}</p>
-                  <p className="text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(act)}</p>
+                  <p className="text-lg md:text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(act)}</p>
                   {plan > 0 || kind === 'net' ? (
                     <p className={`text-xs mt-0.5 tabular-nums ${good ? 'text-emerald-600' : 'text-red-600'}`}>
                       plan {formatCurrency(plan)} · {formatCurrency(diff, true)}
@@ -347,10 +347,10 @@ export function ReconcileView() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                    <th className="text-left px-5 py-2">Kategori</th>
-                    <th className="text-right px-5 py-2">Plan</th>
-                    <th className="text-right px-5 py-2">Utfall</th>
-                    <th className="text-right px-5 py-2">Diff</th>
+                    <th className="text-left px-3 md:px-5 py-2">Kategori</th>
+                    <th className="text-right px-3 md:px-5 py-2">Plan</th>
+                    <th className="text-right px-3 md:px-5 py-2">Utfall</th>
+                    <th className="text-right px-3 md:px-5 py-2">Diff</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -359,15 +359,15 @@ export function ReconcileView() {
                     const over = r.cat.type === 'expense' && r.budget > 0 && diff > 0
                     return (
                       <tr key={r.cat.id} className="border-t border-warm-100">
-                        <td className="px-5 py-2.5">
+                        <td className="px-3 md:px-5 py-2.5">
                           <span className="inline-flex items-center gap-2">
                             <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: r.cat.color ?? '#94a3b8' }} />
                             <span className="text-gray-800">{r.cat.name}</span>
                           </span>
                         </td>
-                        <td className="px-5 py-2.5 text-right tabular-nums text-gray-500">{r.budget > 0 ? formatCurrency(r.budget) : '–'}</td>
-                        <td className="px-5 py-2.5 text-right tabular-nums text-gray-800">{formatCurrency(r.actual)}</td>
-                        <td className={`px-5 py-2.5 text-right tabular-nums font-medium ${over ? 'text-red-600' : 'text-gray-500'}`}>
+                        <td className="px-3 md:px-5 py-2.5 text-right tabular-nums text-gray-500">{r.budget > 0 ? formatCurrency(r.budget) : '–'}</td>
+                        <td className="px-3 md:px-5 py-2.5 text-right tabular-nums text-gray-800">{formatCurrency(r.actual)}</td>
+                        <td className={`px-3 md:px-5 py-2.5 text-right tabular-nums font-medium ${over ? 'text-red-600' : 'text-gray-500'}`}>
                           {r.budget > 0 ? formatCurrency(diff, true) : '–'}
                         </td>
                       </tr>
@@ -502,8 +502,8 @@ function WaterfallCard({ data }: { data: CashflowData }) {
           const isResult = s.id === 'net'
 
           return (
-            <div key={s.id} className={`flex items-center gap-3 ${isResult ? 'mt-1 pt-2 border-t border-warm-200' : ''}`}>
-              <span className={`text-xs w-24 md:w-28 text-right flex-shrink-0 truncate ${isResult ? `font-semibold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}` : 'text-gray-500'}`} title={s.label}>
+            <div key={s.id} className={`flex items-center gap-2 md:gap-3 ${isResult ? 'mt-1 pt-2 border-t border-warm-200' : ''}`}>
+              <span className={`text-xs w-16 md:w-28 text-right flex-shrink-0 truncate ${isResult ? `font-semibold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}` : 'text-gray-500'}`} title={s.label}>
                 {s.label}
               </span>
 
@@ -530,7 +530,7 @@ function WaterfallCard({ data }: { data: CashflowData }) {
                 />
               </div>
 
-              <span className={`text-sm w-24 text-right flex-shrink-0 tabular-nums ${isResult ? `font-bold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}` : 'font-medium text-gray-800'}`}>
+              <span className={`text-sm w-20 md:w-24 text-right flex-shrink-0 tabular-nums ${isResult ? `font-bold ${net < 0 ? 'text-red-600' : 'text-emerald-700'}` : 'font-medium text-gray-800'}`}>
                 {s.sign}{formatCurrency(s.displayValue)}
               </span>
             </div>
@@ -539,7 +539,7 @@ function WaterfallCard({ data }: { data: CashflowData }) {
       </div>
 
       {net < 0 && (
-        <p className="text-xs text-gray-400 mt-3 ml-[6.75rem] md:ml-[7.75rem]">
+        <p className="text-xs text-gray-400 mt-3 ml-0 md:ml-[7.75rem]">
           Utgifter och sparande översteg inkomsten med {formatCurrency(Math.abs(net))} denna månad.
         </p>
       )}
@@ -564,8 +564,8 @@ function WaterfallCard({ data }: { data: CashflowData }) {
             {selected.balances
               ? selected.balances.map((b) => (
                   <div key={b.accountId} className="flex items-center gap-3 px-3 py-2">
-                    <span className="flex-1 truncate text-sm text-gray-700" title={b.accountName}>{b.accountName}</span>
-                    <span className="text-xs text-gray-400 tabular-nums shrink-0">{formatCurrency(b.opening)} → {formatCurrency(b.closing)}</span>
+                    <span className="flex-1 min-w-0 truncate text-sm text-gray-700" title={b.accountName}>{b.accountName}</span>
+                    <span className="hidden sm:inline text-xs text-gray-400 tabular-nums shrink-0">{formatCurrency(b.opening)} → {formatCurrency(b.closing)}</span>
                     <span className={`text-xs tabular-nums shrink-0 w-24 text-right font-medium ${b.delta < 0 ? 'text-gray-700' : 'text-emerald-600'}`}>{formatCurrency(b.delta, true)}</span>
                   </div>
                 ))

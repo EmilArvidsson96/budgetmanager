@@ -340,7 +340,7 @@ function AccountsTab() {
         {editing && (
           <div className="mb-4 p-4 bg-brand-50 rounded-xl border border-brand-100">
             <h4 className="font-medium text-gray-800 mb-3">{editing.id.startsWith('id-') ? 'Nytt konto' : 'Redigera konto'}</h4>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">Namn</label>
                 <input
@@ -507,13 +507,13 @@ function AccountsTab() {
         <div className="space-y-2">
           {accounts.map((a) => (
             <div key={a.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
                 <div>
-                  <p className="font-medium text-sm text-gray-800">{a.name}</p>
+                  <p className="font-medium text-sm text-gray-800 truncate">{a.name}</p>
                   <p className="text-xs text-gray-400">{a.bankName ?? '–'} · {a.currency}</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-shrink-0">
                 {a.owner && <Badge variant="blue">{a.owner}</Badge>}
                 {a.interestRate !== undefined && (
                   <Badge variant="amber">{a.interestRate}%</Badge>
@@ -564,7 +564,7 @@ function RecurringTab() {
 
         {showForm && (
           <div className="mb-4 p-4 bg-brand-50 rounded-xl border border-brand-100">
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 mb-3">
               <div className="md:col-span-2">
                 <label className="text-xs font-medium text-gray-600 block mb-1">Namn</label>
                 <input
@@ -644,14 +644,14 @@ function RecurringTab() {
             const sub = cat?.subcategories.find((s) => s.id === item.subcategoryId)
             return (
               <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                <div>
-                  <p className="font-medium text-sm text-gray-800">{item.name}</p>
+                <div className="min-w-0">
+                  <p className="font-medium text-sm text-gray-800 truncate">{item.name}</p>
                   <p className="text-xs text-gray-400">
                     {cat?.name}{sub ? ` / ${sub.name}` : ''}
                     {item.dayOfMonth ? ` · dag ${item.dayOfMonth}` : ''}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-shrink-0">
                   <span className={`text-sm font-medium ${item.type === 'income' ? 'text-green-700' : 'text-gray-700'}`}>
                     {item.type === 'income' ? '+' : '−'}{item.amount.toLocaleString('sv-SE')} kr
                   </span>
@@ -779,14 +779,14 @@ function CategoriesTab() {
                       {isCore && <Badge variant="blue" size="sm">Zlantar</Badge>}
                       <button
                         onClick={() => startEdit(sub.id, sub.name)}
-                        className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                        className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
                       >
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
                       {!isCore && (
                         <button
                           onClick={() => deleteSub(sub.id)}
-                          className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity"
+                          className="md:opacity-0 md:group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -949,13 +949,13 @@ function Level3Manager() {
                     <span className="flex-1 text-sm text-gray-700">{l.name}</span>
                     <button
                       onClick={() => { setEditingId(l.id); setEditName(l.name) }}
-                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                      className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
                     >
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => deleteLevel3(l.id)}
-                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity"
+                      className="md:opacity-0 md:group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -1081,7 +1081,7 @@ function ZlantarMappingTab() {
   const renderForm = (isNew: boolean) => (
     <div className="p-4 bg-brand-50 rounded-xl border border-brand-100 space-y-3">
       <h4 className="text-sm font-medium text-gray-800">{isNew ? 'Ny regel' : 'Redigera regel'}</h4>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 items-end">
         <div>
           <label className="text-xs font-medium text-gray-600 block mb-1">Zlantar-kategori</label>
           <input
@@ -1177,10 +1177,10 @@ function ZlantarMappingTab() {
                         <span className="text-xs text-gray-400 italic">bevara underkategori</span>
                       )}
                     </div>
-                    <button onClick={() => startEdit(rule)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity">
+                    <button onClick={() => startEdit(rule)} className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity">
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
-                    <button onClick={() => store.removeZlantarRule(rule.id)} className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity">
+                    <button onClick={() => store.removeZlantarRule(rule.id)} className="md:opacity-0 md:group-hover:opacity-100 text-gray-300 hover:text-red-500 p-1 transition-opacity">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -1219,7 +1219,7 @@ function ZlantarMappingTab() {
                     <button
                       onClick={() => startAddForZlantar(zCat)}
                       title="Lägg till regel"
-                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                      className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
@@ -1239,7 +1239,7 @@ function ZlantarMappingTab() {
                     <button
                       onClick={() => startAddForZlantar(zCat)}
                       title="Lägg till kategori-regel"
-                      className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                      className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>
@@ -1252,10 +1252,10 @@ function ZlantarMappingTab() {
                     (r) => r.zlantarCategory === zCat && r.zlantarSubcategory === zSub
                   )
                   return (
-                    <div key={zSub} className="flex items-center gap-3 py-1.5 px-2 pl-8 group hover:bg-gray-50/80">
-                      <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 w-32 flex-shrink-0">{zSub}</code>
+                    <div key={zSub} className="flex items-center gap-3 py-1.5 px-2 pl-4 sm:pl-8 group hover:bg-gray-50/80">
+                      <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 w-20 sm:w-32 flex-shrink-0">{zSub}</code>
                       <ArrowRight className="w-3 h-3 text-gray-300 flex-shrink-0" />
-                      <span className="text-sm text-gray-600">
+                      <span className="text-sm text-gray-600 min-w-0">
                         {eff.catName}
                         <span className="text-gray-400"> / {eff.subName}</span>
                       </span>
@@ -1270,7 +1270,7 @@ function ZlantarMappingTab() {
                           <button
                             onClick={() => startEdit(specificRule)}
                             title="Redigera regel"
-                            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                            className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
                           >
                             <Edit2 className="w-3 h-3" />
                           </button>
@@ -1278,7 +1278,7 @@ function ZlantarMappingTab() {
                           <button
                             onClick={() => startAddForZlantar(zCat, zSub)}
                             title="Lägg till regel"
-                            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
+                            className="md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-brand-600 p-1 transition-opacity"
                           >
                             <Plus className="w-3 h-3" />
                           </button>

@@ -18,7 +18,7 @@ export function Dialog({ title, description, children, onClose }: DialogProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-xl p-6 w-full max-w-md mx-4">
+      <div className="relative bg-white rounded-2xl shadow-xl p-6 w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
         <h2 className="text-lg font-semibold text-gray-900 mb-1">{title}</h2>
         {description && <p className="text-sm text-gray-500 mb-5">{description}</p>}
         {children}

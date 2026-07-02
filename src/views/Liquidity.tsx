@@ -228,13 +228,13 @@ export function LiquidityView() {
               )}
 
               {mode === 'manual' && (
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <input
                     type="number"
                     value={plan.manualStartingBalance ?? ''}
                     onChange={(e) => setManualBalance(parseFloat(e.target.value) || 0)}
                     placeholder="0"
-                    className="border border-gray-200 rounded-md px-3 py-1.5 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                    className="border border-gray-200 rounded-md px-3 py-1.5 text-sm w-full sm:w-40 focus:outline-none focus:ring-2 focus:ring-brand-500"
                   />
                   <span className="text-sm text-gray-500">kr</span>
                   {computed && (
@@ -372,7 +372,7 @@ export function LiquidityView() {
                       Bekräftad
                     </label>
                   </div>
-                  <div className="flex items-end gap-2">
+                  <div className="col-span-2 md:col-span-1 flex items-end gap-2">
                     <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer pb-1.5">
                       <input
                         type="checkbox"
@@ -393,7 +393,7 @@ export function LiquidityView() {
 
             {/* Table */}
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[720px] text-sm">
                 <thead>
                   <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                     <th className="text-left px-4 py-2">Datum</th>
@@ -472,7 +472,7 @@ export function LiquidityView() {
           </Card>
           {/* Large transactions from imports */}
           <Card padding={false}>
-            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-5 border-b border-gray-100">
               <div>
                 <h3 className="font-semibold text-gray-900">Stora transaktioner från import</h3>
                 <p className="text-sm text-gray-500">{largeTxs.length} transaktioner för {year}</p>
@@ -489,7 +489,7 @@ export function LiquidityView() {
               </div>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[520px] text-sm">
                 <thead>
                   <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                     <th className="text-left px-4 py-2">Datum</th>

@@ -61,7 +61,7 @@ export function Select({ value, onChange, options, placeholder, className = '', 
       </button>
       {open && (
         <div
-          className={`absolute z-50 left-0 min-w-full bg-white border border-gray-200 rounded-xl shadow-xl py-1 overflow-y-auto ${openUpward ? 'bottom-full mb-1' : 'top-full mt-1'}`}
+          className={`absolute z-50 left-0 min-w-full max-w-[calc(100vw-2rem)] bg-white border border-gray-200 rounded-xl shadow-xl py-1 overflow-y-auto ${openUpward ? 'bottom-full mb-1' : 'top-full mt-1'}`}
           style={{ maxHeight: '16rem' }}
           onMouseDown={(e) => {
             // Close when clicking empty padding areas, not option buttons
@@ -88,7 +88,7 @@ export function Select({ value, onChange, options, placeholder, className = '', 
                 }`}
               onMouseDown={() => pick(o.value)}
             >
-              <span className="flex-1">{o.label}</span>
+              <span className="flex-1 truncate">{o.label}</span>
               {o.value === value && <Check className="w-3.5 h-3.5 text-brand-600 flex-shrink-0" />}
             </button>
           ))}

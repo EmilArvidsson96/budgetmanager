@@ -542,7 +542,7 @@ export function FlowView() {
 
       {/* Sticky month navigator + selected category chip */}
       <div className="sticky top-0 z-10 bg-warm-100 -mx-4 px-4 md:-mx-8 md:px-8 py-2 mb-4 border-b border-warm-200/60">
-        <div className="flex items-center justify-between max-w-5xl">
+        <div className="flex items-center justify-between max-w-5xl flex-wrap gap-y-1 min-w-0">
           <div className="flex items-center gap-1">
             <button
               onClick={prevMonth}
@@ -551,7 +551,7 @@ export function FlowView() {
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
-            <span className="text-base font-medium text-gray-800 min-w-44 text-center tabular-nums">
+            <span className="text-base font-medium text-gray-800 min-w-[6.5rem] text-center tabular-nums">
               {MONTH_NAMES_LONG[month - 1]} {year}
             </span>
             {flaggedMonths.includes(monthId) && (
@@ -575,10 +575,10 @@ export function FlowView() {
             return sc ? (
               <button
                 onClick={() => setSelectedCatId(null)}
-                className="flex items-center gap-1.5 text-xs bg-white border border-warm-200 rounded-full px-2.5 py-1 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors"
+                className="flex items-center gap-1.5 text-xs bg-white border border-warm-200 rounded-full px-2.5 py-1 text-gray-600 hover:border-gray-300 hover:text-gray-800 transition-colors min-w-0 max-w-[45%]"
               >
                 <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: sc.color ?? '#94a3b8' }} />
-                <span>{sc.name}</span>
+                <span className="truncate">{sc.name}</span>
                 <X className="w-3 h-3 text-gray-400" />
               </button>
             ) : null
@@ -785,8 +785,8 @@ export function FlowView() {
           </Card>
         ) : (
           <Card padding={false} className="overflow-hidden">
-            <div className="flex items-center justify-between px-3 md:px-5 py-3 bg-warm-50 border-b border-warm-200 text-xs text-gray-500">
-              <span>{transfers.length} överföringar · räknas inte in i budgeten</span>
+            <div className="flex items-center justify-between px-3 md:px-5 py-3 bg-warm-50 border-b border-warm-200 text-xs text-gray-500 flex-wrap gap-x-2 gap-y-0.5">
+              <span className="min-w-0 truncate">{transfers.length} överföringar · räknas inte in i budgeten</span>
               <span className="tabular-nums font-medium text-gray-700">netto {formatCurrency(transferTotal)}</span>
             </div>
             {transfers.map((tx) => (
@@ -1007,7 +1007,7 @@ function CategoryBranch({
           style={{ backgroundColor: cat.color ?? '#94a3b8' }}
         />
         <span className="font-medium text-sm text-gray-800 truncate min-w-0 flex-1">{cat.name}</span>
-        <Badge variant={cat.type === 'income' ? 'green' : cat.type === 'savings' ? 'blue' : 'gray'} size="sm">
+        <Badge variant={cat.type === 'income' ? 'green' : cat.type === 'savings' ? 'blue' : 'gray'} size="sm" className="hidden sm:inline-flex">
           {cat.type === 'income' ? 'Inkomst' : cat.type === 'savings' ? 'Spar' : 'Utgift'}
         </Badge>
         {onCategoryChart && (
@@ -1291,16 +1291,16 @@ function CategoryPicker({
 
   return (
     <div className="ml-10 md:ml-16 mb-2 flex flex-wrap items-center gap-2 bg-warm-50 border border-warm-200 rounded-lg p-2">
-      <div ref={containerRef} className="relative">
+      <div ref={containerRef} className="relative flex-1 min-w-0">
         <input
-          className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 w-56"
+          className="border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 w-full"
           value={open ? query : currentLabel}
           placeholder="Sök kategori…"
           onFocus={() => { setOpen(true); setQuery('') }}
           onChange={(e) => { setQuery(e.target.value); setOpen(true) }}
         />
         {open && filtered.length > 0 && (
-          <div className="absolute z-50 top-full mt-1 left-0 w-72 max-h-60 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg">
+          <div className="absolute z-50 top-full mt-1 left-0 w-[min(18rem,calc(100vw-5rem))] max-h-60 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg">
             {filtered.map((opt, i) => (
               <button
                 key={i}

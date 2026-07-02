@@ -395,7 +395,7 @@ export function ImportView() {
       />
 
       {/* Step indicator */}
-      <div className="flex items-center gap-2 mb-6">
+      <div className="flex flex-wrap items-center gap-2 gap-y-2 mb-6">
         {(['upload', 'preview', 'done'] as Step[]).map((s, i) => (
           <div key={s} className="flex items-center gap-2">
             <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold
@@ -405,7 +405,7 @@ export function ImportView() {
             <span className={`text-sm ${step === s ? 'font-semibold text-gray-900' : 'text-gray-400'}`}>
               {s === 'upload' ? 'Välj filer' : s === 'preview' ? 'Granska' : 'Klart'}
             </span>
-            {i < 2 && <div className="w-8 h-px bg-gray-200" />}
+            {i < 2 && <div className="w-8 h-px bg-gray-200 hidden sm:block" />}
           </div>
         ))}
       </div>
@@ -731,18 +731,18 @@ export function ImportView() {
                         const isChecked = !deselectedCatKeys.has(catKey)
                         return (
                           <label key={cat.id} className="flex items-center justify-between pl-7 py-1.5 rounded hover:bg-gray-50 cursor-pointer">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
                               <input
                                 type="checkbox"
                                 checked={isChecked}
                                 onChange={() => toggleCatKey(catKey)}
                                 className="rounded"
                               />
-                              <span className={`text-sm ${isChecked ? 'text-gray-700' : 'text-gray-400 line-through'}`}>
+                              <span className={`text-sm truncate ${isChecked ? 'text-gray-700' : 'text-gray-400 line-through'}`}>
                                 {cat.name}
                               </span>
                             </div>
-                            <span className={`text-sm ${isChecked ? 'text-gray-500' : 'text-gray-300'}`}>
+                            <span className={`text-sm shrink-0 ${isChecked ? 'text-gray-500' : 'text-gray-300'}`}>
                               {formatCurrency(cat.total)}
                             </span>
                           </label>
@@ -1018,7 +1018,7 @@ function ConflictRow({
             {incoming.date} · {formatCurrency(incoming.amount)}
           </span>
           {incoming.description && (
-            <span className="text-xs text-gray-400 ml-2 truncate">{incoming.description}</span>
+            <span className="text-xs text-gray-400 ml-2 inline-block max-w-full align-bottom truncate">{incoming.description}</span>
           )}
           <span className="text-xs text-gray-300 ml-2">{incoming.account_name}</span>
         </div>
@@ -1030,23 +1030,23 @@ function ConflictRow({
       </div>
       <div className="flex flex-wrap gap-3 text-xs">
         {categoryChanged && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-gray-400">Kategori:</span>
-            <code className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-100">
+            <code className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-100 break-all">
               {[stored.category, stored.subcategory].filter(Boolean).join(' / ') || '—'}
             </code>
             <span className="text-gray-300">→</span>
-            <code className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100">
+            <code className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100 break-all">
               {[incoming.category, incoming.subcategory].filter(Boolean).join(' / ') || '—'}
             </code>
           </div>
         )}
         {typeChanged && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-gray-400">Typ:</span>
-            <code className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-100">{stored.transaction_type}</code>
+            <code className="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-100 break-all">{stored.transaction_type}</code>
             <span className="text-gray-300">→</span>
-            <code className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100">{incoming.transaction_type}</code>
+            <code className="bg-green-50 text-green-700 px-1.5 py-0.5 rounded border border-green-100 break-all">{incoming.transaction_type}</code>
           </div>
         )}
       </div>
@@ -1095,7 +1095,7 @@ function BalanceChangeRow({ change }: { change: AccountBalanceChange }) {
         <span className="text-sm font-medium text-gray-800">{change.accountName}</span>
         {isNew && <span className="ml-2"><Badge variant="green" size="sm">Nytt</Badge></span>}
       </div>
-      <div className="flex items-center gap-3 shrink-0">
+      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 shrink-0">
         {!isNew && (
           <span className="text-xs text-gray-400">
             {formatCurrency(change.oldBalance!)} <span className="text-gray-300">→</span>
@@ -1212,19 +1212,19 @@ function ReconciliationCard({
                   )}
                 </div>
                 <div className="text-xs text-gray-500 space-y-0.5">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     <span className="text-red-500">−</span>
                     <span className="font-medium text-gray-700">{m.ownerA}</span>
                     <span className="text-gray-400">·</span>
                     <span>{m.accountAName}</span>
-                    {m.descriptionA && <span className="text-gray-400 truncate">— {m.descriptionA}</span>}
+                    {m.descriptionA && <span className="text-gray-400 min-w-0 truncate">— {m.descriptionA}</span>}
                   </div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     <span className="text-emerald-600">+</span>
                     <span className="font-medium text-gray-700">{m.ownerB}</span>
                     <span className="text-gray-400">·</span>
                     <span>{m.accountBName}</span>
-                    {m.descriptionB && <span className="text-gray-400 truncate">— {m.descriptionB}</span>}
+                    {m.descriptionB && <span className="text-gray-400 min-w-0 truncate">— {m.descriptionB}</span>}
                   </div>
                 </div>
               </div>
