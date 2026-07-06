@@ -7,7 +7,7 @@ import type {
   MonthlyActuals,
   CategoryDef,
 } from '@/types'
-import { budgetedAmount } from './projection'
+import { budgetedAmount, budgetedFlowForMonth } from './projection'
 
 const MONTH_NAMES = [
   'Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
@@ -262,7 +262,8 @@ function addYearlySheet(
 
 function addLiquiditySheet(
   wb: ExcelJS.Workbook,
-  plan: LiquidityPlan
+  plan: LiquidityPlan,
+  state: AppState
 ) {
   const ws = wb.addWorksheet(`Likviditet_${plan.year}`)
 
@@ -303,14 +304,54 @@ function addLiquiditySheet(
     rowIdx++
   }
 
-  // Sort entries by date
-  const sorted = [...plan.entries].sort((a, b) => a.date.localeCompare(b.date))
+  // Merge manual entries with one synthetic "budgeted net" row per month (income −
+  // operating expenses, same definition as the forward projection) so the running
+  // balance mirrors the on-screen Saldoprojektion. Budget rows are dated to the 1st.
+  type LedgerRow =
+    | { kind: 'entry'; date: string; entry: LiquidityPlan['entries'][number] }
+    | { kind: 'budget'; date: string; monthName: string; net: number }
+  const ledger: LedgerRow[] = plan.entries.map((entry) => ({ kind: 'entry' as const, date: entry.date, entry }))
+  for (let m = 1; m <= 12; m++) {
+    const monthStr = `${plan.year}-${String(m).padStart(2, '0')}`
+    const { income, operatingExpense } = budgetedFlowForMonth(state, monthStr)
+    const net = income - operatingExpense
+    if (net !== 0) ledger.push({ kind: 'budget', date: `${monthStr}-01`, monthName: MONTH_NAMES[m - 1], net })
+  }
+  ledger.sort((a, b) => a.date.localeCompare(b.date))
+
   let runningBalance = plan.startingBalances.reduce((s, b) => s + b.balance, 0)
 
-  for (const entry of sorted) {
+  for (const row of ledger) {
+    const r = ws.getRow(rowIdx++)
+
+    if (row.kind === 'budget') {
+      runningBalance += row.net
+      r.values = [
+        row.date.slice(0, 7),
+        `Budgeterat netto (${row.monthName})`,
+        'Budget',
+        row.net,
+        runningBalance,
+        '',
+        '',
+        'Ja',
+        '',
+      ]
+      setCurrencyFormat(r.getCell(4))
+      setCurrencyFormat(r.getCell(5))
+      r.getCell(4).font = { italic: true, color: { argb: row.net < 0 ? 'FFEF4444' : 'FF22C55E' } }
+      r.getCell(2).font = { italic: true }
+      if (runningBalance < 0) {
+        r.getCell(5).fill = {
+          type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' },
+        }
+      }
+      continue
+    }
+
+    const entry = row.entry
     const includedInProjection = entry.includeInProjection !== false
     if (includedInProjection) runningBalance += entry.amount
-    const r = ws.getRow(rowIdx++)
     const typeLabel = {
       income: 'Inkomst',
       expense: 'Utgift',
@@ -455,7 +496,7 @@ export async function exportToExcel(state: AppState, year: number): Promise<void
   // Liquidity
   const lp = liquidityPlans[String(year)]
   if (lp) {
-    addLiquiditySheet(wb, lp)
+    addLiquiditySheet(wb, lp, state)
   }
 
   // Trigger download in browser

@@ -223,7 +223,9 @@ export function computeFrozenElapsed(state: AppState): Record<string, Record<str
 
 // Planned income and operating-expense magnitudes for one period.
 // Savings/transfer categories are excluded (see file header).
-function budgetedFlowForMonth(state: AppState, monthId: string): { income: number; operatingExpense: number } {
+// Exported so future-looking views (e.g. the liquidity plan) can seed each month
+// with the same budgeted operating net the projection engine uses.
+export function budgetedFlowForMonth(state: AppState, monthId: string): { income: number; operatingExpense: number } {
   let income = 0
   let operatingExpense = 0
   for (const cat of state.settings.categories) {
