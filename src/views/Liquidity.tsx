@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/Button'
 import { formatCurrency, MONTH_NAMES_SHORT } from '@/utils/budgetHelpers'
 import { exportToExcel } from '@/utils/excelExport'
 import { computeStartingBalance } from '@/utils/zlantarParser'
+import { budgetedFlowForMonth } from '@/utils/projection'
 import { reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
 import type { LiquidityEntry } from '@/types'
 
@@ -104,18 +105,34 @@ export function LiquidityView() {
     setShowForm(false)
   }
 
-  // Build chart data: cumulative balance per month
+  // Per-month budgeted operating net (planned income − operating expenses), the
+  // same definition the forward projection uses. Added on top of the manual
+  // one-off entries so the liquidity forecast reflects each month's planned net.
+  const budgetFlow = (m: number) =>
+    budgetedFlowForMonth(store, `${year}-${String(m).padStart(2, '0')}`)
+
+  // Build chart data: cumulative balance per month. Each month's flow combines the
+  // budgeted operating net with the manual one-off entries; balance is the running
+  // sum of those deltas on top of the starting balance.
   const projectedEntries = (plan?.entries ?? []).filter((e) => e.includeInProjection !== false)
-  const chartData = MONTH_NAMES_SHORT.map((name, i) => {
-    const m = i + 1
-    const monthStr = `${year}-${String(m).padStart(2, '0')}`
+  const monthlyFlow = MONTH_NAMES_SHORT.map((name, i) => {
+    const monthStr = `${year}-${String(i + 1).padStart(2, '0')}`
     const monthEntries = projectedEntries.filter((e) => e.date.startsWith(monthStr))
-    const inflow = monthEntries.filter((e) => e.amount > 0).reduce((s, e) => s + e.amount, 0)
-    const outflow = monthEntries.filter((e) => e.amount < 0).reduce((s, e) => s + Math.abs(e.amount), 0)
-    const entriesBefore = projectedEntries.filter((e) => e.date < monthStr)
-    const balance = effectiveStartBalance + entriesBefore.reduce((s, e) => s + e.amount, 0) + monthEntries.reduce((s, e) => s + e.amount, 0)
-    return { name, inflow, outflow, balance }
+    const { income, operatingExpense } = budgetFlow(i + 1)
+    const manualNet = monthEntries.reduce((s, e) => s + e.amount, 0)
+    return {
+      name,
+      inflow: monthEntries.filter((e) => e.amount > 0).reduce((s, e) => s + e.amount, 0) + income,
+      outflow: monthEntries.filter((e) => e.amount < 0).reduce((s, e) => s + Math.abs(e.amount), 0) + operatingExpense,
+      delta: income - operatingExpense + manualNet,
+    }
   })
+  const chartData = monthlyFlow.map((r, i) => ({
+    name: r.name,
+    inflow: r.inflow,
+    outflow: r.outflow,
+    balance: effectiveStartBalance + monthlyFlow.slice(0, i + 1).reduce((s, x) => s + x.delta, 0),
+  }))
 
   const handleExport = async () => {
     setExporting(true)
@@ -124,6 +141,22 @@ export function LiquidityView() {
   }
 
   const sorted = [...(plan?.entries ?? [])].sort((a, b) => a.date.localeCompare(b.date))
+
+  // Merge manual entries with one synthetic "budgeted net" row per month (any
+  // month with a non-zero planned net), so the ledger's running balance matches
+  // the Saldoprojektion. Budget rows are dated to the 1st and always count.
+  type LedgerRow =
+    | { kind: 'entry'; date: string; entry: LiquidityEntry }
+    | { kind: 'budget'; date: string; monthLabel: string; net: number }
+  const budgetLedgerRows: LedgerRow[] = MONTH_NAMES_SHORT.map((label, i) => {
+    const monthStr = `${year}-${String(i + 1).padStart(2, '0')}`
+    const { income, operatingExpense } = budgetFlow(i + 1)
+    return { kind: 'budget' as const, date: `${monthStr}-01`, monthLabel: label, net: income - operatingExpense }
+  }).filter((r) => r.kind === 'budget' && r.net !== 0)
+  const ledger: LedgerRow[] = [
+    ...sorted.map((entry) => ({ kind: 'entry' as const, date: entry.date, entry })),
+    ...budgetLedgerRows,
+  ].sort((a, b) => a.date.localeCompare(b.date))
 
   // Large transactions from imports for the selected year
   const largeTxs = useMemo(() => {
@@ -407,7 +440,7 @@ export function LiquidityView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sorted.length === 0 && (
+                  {ledger.length === 0 && (
                     <tr>
                       <td colSpan={8} className="text-center text-gray-400 py-8">
                         Inga poster tillagda än
@@ -416,7 +449,33 @@ export function LiquidityView() {
                   )}
                   {(() => {
                     let cumulative = effectiveStartBalance
-                    return sorted.map((entry) => {
+                    return ledger.map((row) => {
+                      if (row.kind === 'budget') {
+                        cumulative += row.net
+                        return (
+                          <tr key={`budget-${row.date}`} className="border-t border-gray-100 bg-brand-50/40">
+                            <td className="px-4 py-2.5 text-gray-500">{row.date.slice(0, 7)}</td>
+                            <td className="px-4 py-2.5 font-medium text-gray-600 italic">
+                              Budgeterat netto ({row.monthLabel})
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <span className="text-xs rounded-full px-2 py-0.5 font-medium bg-brand-100 text-brand-700">
+                                Budget
+                              </span>
+                            </td>
+                            <td className={`px-4 py-2.5 text-right font-medium ${row.net >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                              {formatCurrency(row.net, true)}
+                            </td>
+                            <td className={`px-4 py-2.5 text-right font-medium ${cumulative < 0 ? 'text-red-600 bg-red-50' : 'text-gray-700'}`}>
+                              {formatCurrency(cumulative)}
+                            </td>
+                            <td className="px-4 py-2.5 text-center text-gray-300">–</td>
+                            <td className="px-4 py-2.5 text-center text-gray-300">–</td>
+                            <td className="px-4 py-2.5"></td>
+                          </tr>
+                        )
+                      }
+                      const entry = row.entry
                       if (entry.includeInProjection !== false) cumulative += entry.amount
                       return (
                         <tr key={entry.id} className="border-t border-gray-100 hover:bg-gray-50">
