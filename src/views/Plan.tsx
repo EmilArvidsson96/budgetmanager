@@ -48,6 +48,12 @@ const TYPE_LABELS: Record<LiquidityEntry['type'], string> = {
   loan_payment: 'Lånebetal.',
 }
 
+const FUNDING_LABELS: Record<NonNullable<LiquidityEntry['fundedBy']>, string> = {
+  buffer: 'Buffert',
+  savings: 'Sparande',
+  both: 'Båda (50/50)',
+}
+
 function InlineNumber({
   value,
   onCommit,
@@ -405,7 +411,7 @@ export function PlanView() {
   const carryForward = lastBudgetYear != null && endYear > lastBudgetYear
 
   // ── One-off entry handling (reuses liquidityPlans) ──────────────────────────
-  const [form, setForm] = useState<Partial<LiquidityEntry>>({ type: 'expense', date: todayIso, includeInProjection: true })
+  const [form, setForm] = useState<Partial<LiquidityEntry>>({ type: 'expense', date: todayIso, includeInProjection: true, fundedBy: 'buffer' })
   const addEntry = () => {
     if (!form.description || !form.date || !form.amount) return
     const year = form.date.slice(0, 4)
@@ -417,13 +423,14 @@ export function PlanView() {
       type: form.type ?? 'expense',
       isConfirmed: false,
       includeInProjection: form.includeInProjection === false ? false : undefined,
+      fundedBy: form.fundedBy === 'savings' || form.fundedBy === 'both' ? form.fundedBy : undefined,
     }
     if (!store.liquidityPlans[year]) {
       const plan: LiquidityPlan = { id: year, year: Number(year), entries: [], startingBalances: [], startingBalanceMode: 'computed' }
       store.upsertLiquidityPlan(plan)
     }
     store.upsertLiquidityEntry(year, entry)
-    setForm({ type: 'expense', date: form.date, includeInProjection: true })
+    setForm({ type: 'expense', date: form.date, includeInProjection: true, fundedBy: 'buffer' })
     setShowForm(false)
   }
 
@@ -990,6 +997,15 @@ export function PlanView() {
                     onChange={(e) => setForm((f) => ({ ...f, amount: parseFloat(e.target.value) }))}
                     className="w-full border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
                 </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">Täcks av</label>
+                  <Select
+                    className="w-full"
+                    value={form.fundedBy ?? 'buffer'}
+                    onChange={(e) => setForm((f) => ({ ...f, fundedBy: e.target.value as LiquidityEntry['fundedBy'] }))}
+                    options={Object.entries(FUNDING_LABELS).map(([v, l]) => ({ value: v, label: l }))}
+                  />
+                </div>
                 <div className="flex items-end gap-2">
                   <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer pb-1.5">
                     <input
@@ -1010,20 +1026,21 @@ export function PlanView() {
           )}
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] text-sm">
+            <table className="w-full min-w-[680px] text-sm">
               <thead>
                 <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                   <th className="text-left px-4 py-2">Datum</th>
                   <th className="text-left px-4 py-2">Beskrivning</th>
                   <th className="text-left px-4 py-2">Typ</th>
                   <th className="text-right px-4 py-2">Belopp</th>
+                  <th className="text-left px-4 py-2">Täcks av</th>
                   <th className="text-center px-4 py-2">Prognos</th>
                   <th className="px-4 py-2"></th>
                 </tr>
               </thead>
               <tbody>
                 {upcomingEntries.length === 0 && (
-                  <tr><td colSpan={6} className="text-center text-gray-400 py-8">Inga planerade engångsposter inom horisonten</td></tr>
+                  <tr><td colSpan={7} className="text-center text-gray-400 py-8">Inga planerade engångsposter inom horisonten</td></tr>
                 )}
                 {upcomingEntries.map(({ planYear, entry }) => (
                   <tr key={entry.id} className="border-t border-gray-100 hover:bg-gray-50">
@@ -1036,6 +1053,19 @@ export function PlanView() {
                     </td>
                     <td className={`px-4 py-2.5 text-right font-medium ${entry.amount >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {formatCurrency(entry.amount, true)}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Select
+                        className="w-32"
+                        value={entry.fundedBy ?? 'buffer'}
+                        onChange={(e) =>
+                          store.upsertLiquidityEntry(planYear, {
+                            ...entry,
+                            fundedBy: e.target.value === 'savings' || e.target.value === 'both' ? (e.target.value as LiquidityEntry['fundedBy']) : undefined,
+                          })
+                        }
+                        options={Object.entries(FUNDING_LABELS).map(([v, l]) => ({ value: v, label: l }))}
+                      />
                     </td>
                     <td className="px-4 py-2.5 text-center">
                       <input
@@ -1061,6 +1091,10 @@ export function PlanView() {
               </tbody>
             </table>
           </div>
+          <p className="text-xs text-gray-400 px-5 py-3 border-t border-gray-100">
+            "Täcks av" styr vyn Utan sparande: poster som täcks av sparande belastar sparkontona i stället för
+            buffertlikviditeten ("Båda" delar 50/50). Med sparande inräknat påverkas totalen alltid fullt ut.
+          </p>
         </Card>
         )}
       </div>

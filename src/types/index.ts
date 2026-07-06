@@ -290,6 +290,12 @@ export interface LiquidityEntry {
   // true when unset — set to false to keep a planned one-time cost on record
   // without it affecting the projected balance.
   includeInProjection?: boolean
+  // What covers (or receives) this entry when the projection excludes savings
+  // from liquidity ("Utan sparande"): 'buffer' (default) hits the buffer
+  // liquidity, 'savings' hits the savings accounts instead, 'both' splits
+  // 50/50. With savings included in liquidity everything flows through the
+  // same pool, so the distinction has no effect there.
+  fundedBy?: 'buffer' | 'savings' | 'both'
 }
 
 export interface LiquidityPlan {

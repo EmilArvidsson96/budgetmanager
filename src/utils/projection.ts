@@ -239,21 +239,34 @@ export function budgetedFlowForMonth(state: AppState, monthId: string): { income
   return { income, operatingExpense }
 }
 
-// Signed sum of manual one-off entries that fall in the given period.
-function manualNetForMonth(state: AppState, monthId: string, config?: SalaryPeriodConfig): number {
+// Signed sums of manual one-off entries that fall in the given period, split by
+// what covers them (entry.fundedBy). With savings included in liquidity there is
+// only one pool, so everything is `liquid`. When savings are excluded, entries
+// covered by savings (and half of 'both') bypass the buffer liquidity and are
+// applied to the savings accounts instead — see buildProjection.
+function manualFlowsForMonth(
+  state: AppState,
+  monthId: string,
+  config: SalaryPeriodConfig | undefined,
+  excludeSavings: boolean,
+): { liquid: number; savings: number } {
   const { monthStartDay, monthStartBusinessDay } = state.settings
-  let net = 0
+  let liquid = 0
+  let savings = 0
   for (const plan of Object.values(state.liquidityPlans)) {
     for (const e of plan.entries) {
       if (!e.date) continue
       if (e.includeInProjection === false) continue
       const kind = bucketKindForEntry(e.type)
-      if (getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, config, kind) === monthId) {
-        net += e.amount
-      }
+      if (getMonthIdForDate(e.date, monthStartDay, monthStartBusinessDay, config, kind) !== monthId) continue
+      if (!excludeSavings) { liquid += e.amount; continue }
+      const source = e.fundedBy ?? 'buffer'
+      if (source === 'savings') savings += e.amount
+      else if (source === 'both') { liquid += e.amount / 2; savings += e.amount / 2 }
+      else liquid += e.amount
     }
   }
-  return net
+  return { liquid, savings }
 }
 
 export interface ProjectionInput {
@@ -304,6 +317,22 @@ export function buildProjection({ state, startMonthId, horizon, excludeSavings =
 
   const assetAccts = accounts.filter((a) => roleOf.get(a.id) === 'asset')
   const liabilityAccts = accounts.filter((a) => roleOf.get(a.id) === 'liability')
+  const savingsAccts = accounts.filter((a) => a.type === 'savings')
+
+  // Apply a savings-funded one-off flow to the savings accounts, proportional
+  // to their current (positive) balances so withdrawals scale with account
+  // size. Returns any amount that couldn't be placed (no savings accounts) so
+  // the caller can let it fall back on liquidity instead of vanishing.
+  const applyToSavings = (amount: number): number => {
+    if (amount === 0 || savingsAccts.length === 0) return amount
+    const weights = savingsAccts.map((a) => Math.max(0, values[a.id]))
+    const totalW = weights.reduce((s, w) => s + w, 0)
+    savingsAccts.forEach((a, i) => {
+      const share = totalW > 0 ? weights[i] / totalW : 1 / savingsAccts.length
+      values[a.id] += amount * share
+    })
+    return 0
+  }
 
   const snapshotPoint = (monthId: string, netCashflow: number, isBaseline: boolean): ProjectionMonth => {
     let totalAssets = liquidity
@@ -362,10 +391,13 @@ export function buildProjection({ state, startMonthId, horizon, excludeSavings =
       if (!l.contributionIsBudgeted) loanPayments += pay
     }
 
-    // Budget-driven operating cashflow + manual one-offs.
+    // Budget-driven operating cashflow + manual one-offs. The savings-funded
+    // share of one-offs (only non-zero when excludeSavings) hits the savings
+    // accounts directly; the rest flows through liquidity as before.
     const { income, operatingExpense } = budgetedFlowForMonth(state, monthId)
-    const manualNet = manualNetForMonth(state, monthId, config)
-    const netCashflow = income - operatingExpense - contributions - loanPayments + manualNet
+    const manual = manualFlowsForMonth(state, monthId, config, excludeSavings)
+    const spill = applyToSavings(manual.savings)
+    const netCashflow = income - operatingExpense - contributions - loanPayments + manual.liquid + spill
 
     liquidity += netCashflow
 
