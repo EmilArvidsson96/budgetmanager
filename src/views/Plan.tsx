@@ -14,6 +14,7 @@ import { formatCurrency } from '@/utils/budgetHelpers'
 import { getMonthIdForDate, bucketKindForEntry } from '@/utils/periodUtils'
 import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { buildProjection, buildLiquidityHistory } from '@/utils/projection'
+import { accountDisplayLabels } from '@/utils/accountLabels'
 import { exportToExcel } from '@/utils/excelExport'
 import { buildAiBriefing } from '@/utils/aiExport'
 import { BaselineEditor } from '@/components/budget/BaselineEditor'
@@ -103,7 +104,7 @@ function LiquidityTooltip({
   active, payload, label, largeTxs, planned, stacked,
 }: {
   active?: boolean
-  payload?: Array<{ name: string; value: number; fill: string }>
+  payload?: Array<{ name: string; value: number; fill: string; dataKey?: string | number }>
   label?: string
   largeTxs: Map<string, { amount: number; description: string }[]>
   planned: Map<string, LiquidityEntry[]>
@@ -119,7 +120,7 @@ function LiquidityTooltip({
       {stacked && payload.length > 1 ? (
         <>
           {[...payload].reverse().map((p) => (
-            <p key={p.name} className="flex items-center justify-between gap-4 text-gray-600">
+            <p key={String(p.dataKey ?? p.name)} className="flex items-center justify-between gap-4 text-gray-600">
               <span className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-sm inline-block shrink-0" style={{ background: p.fill }} />
                 {p.name}
@@ -294,6 +295,11 @@ export function PlanView() {
   const assetAccounts = accounts.filter((a) => a.role === 'asset')
   const liabilityAccounts = accounts.filter((a) => a.role === 'liability')
 
+  // Account names are not unique (same name across banks/owners), so charts key
+  // series by account id and display these disambiguated labels instead.
+  const accountLabels = useMemo(() => accountDisplayLabels(store.settings.accounts), [store.settings.accounts])
+  const labelOf = (id: string, fallback: string) => accountLabels.get(id) ?? fallback
+
   // Liabilities with a linkedAssetId are netted into that asset's bar.
   // Liabilities without one appear as separate negative bars.
   const linkedLiabilities = liabilityAccounts.filter((l) => store.settings.accounts.find((a) => a.id === l.id)?.linkedAssetId)
@@ -320,10 +326,10 @@ export function PlanView() {
     const assetSegs = assetAccounts.map((a, i) => {
       const linked = liabilitiesByAsset.get(a.id) ?? []
       const loanSum = linked.reduce((s, l) => s + (m.values[l.id] ?? 0), 0)
-      return { name: a.name, value: Math.max(0, Math.round((m.values[a.id] ?? 0) + loanSum)), color: ASSET_COLORS[i % ASSET_COLORS.length] }
+      return { name: labelOf(a.id, a.name), value: Math.max(0, Math.round((m.values[a.id] ?? 0) + loanSum)), color: ASSET_COLORS[i % ASSET_COLORS.length] }
     })
     const liabSegs = unlinkedLiabilities.map((l, i) => ({
-      name: l.name, value: Math.round(m.values[l.id] ?? 0), color: LIABILITY_COLORS[i % LIABILITY_COLORS.length],
+      name: labelOf(l.id, l.name), value: Math.round(m.values[l.id] ?? 0), color: LIABILITY_COLORS[i % LIABILITY_COLORS.length],
     }))
     const totalAssets = liquid + assetSegs.reduce((s, seg) => s + seg.value, 0)
     return { label: m.label, _wealth: totalAssets, _liquid: liquid, _assetSegs: assetSegs, _liabSegs: liabSegs, Nettoförmögenhet: Math.round(m.netWorth) }
@@ -335,23 +341,25 @@ export function PlanView() {
   // that month's import; projected months split the total proportionally based on
   // starting balances (their per-account values are frozen — see buildProjection).
   // When total goes negative we zero-out the stack (the red reference line + alert cover that case).
+  // Rows are keyed by account id — names collide (several accounts share one),
+  // which would overwrite values and double-count same-named accounts.
   const liquidityStackData = useMemo(() => {
     if (!useStackedLiquidity) return liquidityData
     return liquidityMonths.map((m) => {
       const row: Record<string, string | number> = { label: m.label }
       if (m.isHistory) {
-        for (const a of posLiquidAccounts) row[a.name] = Math.max(0, Math.round(m.values[a.id] ?? 0))
+        for (const a of posLiquidAccounts) row[a.id] = Math.max(0, Math.round(m.values[a.id] ?? 0))
         return row
       }
       const total = Math.round(m.liquidity)
       if (total <= 0) {
-        for (const a of posLiquidAccounts) row[a.name] = 0
+        for (const a of posLiquidAccounts) row[a.id] = 0
       } else {
         let assigned = 0
         posLiquidAccounts.forEach((a, i) => {
           const isLast = i === posLiquidAccounts.length - 1
           const v = isLast ? total - assigned : Math.round((now.values[a.id] ?? 0) / posLiquidTotal * total)
-          row[a.name] = Math.max(0, v)
+          row[a.id] = Math.max(0, v)
           assigned += Math.max(0, v)
         })
       }
@@ -673,7 +681,8 @@ export function PlanView() {
                     <Area
                       key={a.id}
                       type="monotone"
-                      dataKey={a.name}
+                      dataKey={a.id}
+                      name={labelOf(a.id, a.name)}
                       stackId="liq"
                       stroke={LIQUID_ACCOUNT_COLORS[i % LIQUID_ACCOUNT_COLORS.length]}
                       fill={LIQUID_ACCOUNT_COLORS[i % LIQUID_ACCOUNT_COLORS.length]}
@@ -698,7 +707,7 @@ export function PlanView() {
             {useStackedLiquidity && posLiquidAccounts.map((a, i) => (
               <span key={a.id} className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: LIQUID_ACCOUNT_COLORS[i % LIQUID_ACCOUNT_COLORS.length] }} />
-                {a.name}
+                {labelOf(a.id, a.name)}
               </span>
             ))}
             {largeNonRecurringByLabel.size > 0 && (
