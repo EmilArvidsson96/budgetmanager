@@ -214,6 +214,7 @@ function WealthBarShape(props: any) {
 export function PlanView() {
   const [horizon, setHorizon] = useState<Horizon>(12)
   const [view, setView] = useState<PlanViewMode>('wealth')
+  const [excludeSavings, setExcludeSavings] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -263,10 +264,10 @@ export function PlanView() {
   const startMonthId = getMonthIdForDate(todayIso, settings.monthStartDay, settings.monthStartBusinessDay, config, 'neutral')
 
   const projection = useMemo(
-    () => buildProjection({ state: store, startMonthId, horizon }),
+    () => buildProjection({ state: store, startMonthId, horizon, excludeSavings }),
     // recompute when inputs that affect the projection change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [store.settings.accounts, store.monthlyBudgets, store.yearlyBudgets, store.liquidityPlans, store.importSnapshots, startMonthId, horizon, config]
+    [store.settings.accounts, store.monthlyBudgets, store.yearlyBudgets, store.liquidityPlans, store.importSnapshots, startMonthId, horizon, config, excludeSavings]
   )
 
   const { months, accounts } = projection
@@ -278,9 +279,9 @@ export function PlanView() {
   // `months` never contains elapsed periods). Built from actual closing balances,
   // not simulated. Other tabs/KPIs keep using `months` unchanged.
   const liquidityHistory = useMemo(
-    () => buildLiquidityHistory(store, startMonthId, LIQUIDITY_HISTORY_MONTHS),
+    () => buildLiquidityHistory(store, startMonthId, LIQUIDITY_HISTORY_MONTHS, excludeSavings),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [store.actuals, store.settings.accounts, startMonthId]
+    [store.actuals, store.settings.accounts, startMonthId, excludeSavings]
   )
   const liquidityMonths = useMemo(() => [...liquidityHistory, ...months], [liquidityHistory, months])
 
@@ -529,11 +530,11 @@ export function PlanView() {
             </p>
           </Card>
           <Card>
-            <p className="text-xs text-gray-400 mb-1">Likviditet idag</p>
+            <p className="text-xs text-gray-400 mb-1">Likviditet idag{excludeSavings ? ' (exkl. sparande)' : ''}</p>
             <p className="text-lg sm:text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(now.liquidity)}</p>
           </Card>
           <Card className={liquidityGoesNegative ? 'border-red-300 bg-red-50' : ''}>
-            <p className="text-xs text-gray-400 mb-1">Lägsta likviditet</p>
+            <p className="text-xs text-gray-400 mb-1">Lägsta likviditet{excludeSavings ? ' (exkl. sparande)' : ''}</p>
             <p className={`text-lg sm:text-xl font-semibold tabular-nums ${liquidityGoesNegative ? 'text-red-600' : 'text-gray-900'}`}>
               {formatCurrency(trough.liquidity)}
             </p>
@@ -619,7 +620,30 @@ export function PlanView() {
         {/* Liquidity */}
         {view === 'liquidity' && (
         <Card>
-          <CardHeader title="Likviditet över tid" subtitle="Kassa månad för månad — per konto, inkl. de senaste 2 månaderna" />
+          <CardHeader
+            title="Likviditet över tid"
+            subtitle="Kassa månad för månad — per konto, inkl. de senaste 2 månaderna"
+            action={
+              <div className="flex rounded-lg border border-warm-300 overflow-hidden text-xs sm:text-sm">
+                <button
+                  onClick={() => setExcludeSavings(false)}
+                  className={`px-2 sm:px-3 py-1.5 font-medium transition-colors whitespace-nowrap ${
+                    !excludeSavings ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-warm-50'
+                  }`}
+                >
+                  Med sparande
+                </button>
+                <button
+                  onClick={() => setExcludeSavings(true)}
+                  className={`px-2 sm:px-3 py-1.5 font-medium transition-colors border-l border-warm-300 whitespace-nowrap ${
+                    excludeSavings ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-warm-50'
+                  }`}
+                >
+                  Utan sparande
+                </button>
+              </div>
+            }
+          />
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={liquidityStackData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />

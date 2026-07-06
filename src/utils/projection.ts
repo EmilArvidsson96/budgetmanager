@@ -52,8 +52,13 @@ export interface ProjectionResult {
 // projection never invents growth the user didn't ask for.
 const num = (v: number | undefined): number => (typeof v === 'number' && isFinite(v) ? v : 0)
 
-export function classifyAccount(acc: Account): AccountRole {
+// `excludeSavings` narrows "liquidity" down to dispense/buffer-style accounts —
+// savings accounts (type 'savings') are reclassified as 'asset' instead of
+// 'liquid' so they drop out of the liquidity total while still counting
+// toward net worth.
+export function classifyAccount(acc: Account, excludeSavings = false): AccountRole {
   if (acc.type === 'loan' || acc.type === 'credit') return 'liability'
+  if (excludeSavings && acc.type === 'savings') return 'asset'
   if (acc.includeInLiquidity) return 'liquid'
   return 'asset'
 }
@@ -253,9 +258,10 @@ export interface ProjectionInput {
   state: AppState
   startMonthId: string
   horizon: number   // number of future months (e.g. 12, 24, 36)
+  excludeSavings?: boolean   // when true, savings accounts count as assets, not liquidity
 }
 
-export function buildProjection({ state, startMonthId, horizon }: ProjectionInput): ProjectionResult {
+export function buildProjection({ state, startMonthId, horizon, excludeSavings = false }: ProjectionInput): ProjectionResult {
   const accounts = state.settings.accounts.filter((a) => a.includeInNetWorth !== false)
   const { config } = getSalaryAnchors(state)
 
@@ -270,7 +276,7 @@ export function buildProjection({ state, startMonthId, horizon }: ProjectionInpu
     id: a.id,
     name: a.name,
     type: a.type,
-    role: classifyAccount(a),
+    role: classifyAccount(a, excludeSavings),
   }))
   const roleOf = new Map(meta.map((m) => [m.id, m.role]))
 
@@ -378,9 +384,9 @@ export function buildProjection({ state, startMonthId, horizon }: ProjectionInpu
 //
 // A month is only included when it has an actual balance snapshot; months
 // without imported data (a gap) are silently skipped rather than guessed at.
-export function buildLiquidityHistory(state: AppState, startMonthId: string, count: number): ProjectionMonth[] {
+export function buildLiquidityHistory(state: AppState, startMonthId: string, count: number, excludeSavings = false): ProjectionMonth[] {
   const accounts = state.settings.accounts.filter((a) => a.includeInNetWorth !== false)
-  const roleOf = new Map(accounts.map((a) => [a.id, classifyAccount(a)]))
+  const roleOf = new Map(accounts.map((a) => [a.id, classifyAccount(a, excludeSavings)]))
 
   const monthIds: string[] = []
   let monthId = startMonthId
