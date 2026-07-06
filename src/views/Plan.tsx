@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Trash2, Settings as SettingsIcon, TrendingUp, TrendingDown, AlertTriangle, Download, Sparkles, Copy, Check } from 'lucide-react'
+import { Plus, Trash2, Pencil, Settings as SettingsIcon, TrendingUp, TrendingDown, AlertTriangle, Download, Sparkles, Copy, Check } from 'lucide-react'
 import { Select } from '@/components/ui/Select'
 import {
   ComposedChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceDot,
@@ -375,11 +375,28 @@ export function PlanView() {
 
   // ── One-off entry handling (reuses liquidityPlans) ──────────────────────────
   const [form, setForm] = useState<Partial<LiquidityEntry>>({ type: 'expense', date: todayIso, includeInProjection: true })
-  const addEntry = () => {
+  const [editing, setEditing] = useState<{ id: string; planYear: string } | null>(null)
+  const closeForm = () => {
+    setShowForm(false)
+    setEditing(null)
+    setForm({ type: 'expense', date: todayIso, includeInProjection: true })
+  }
+  const startEdit = (planYear: string, entry: LiquidityEntry) => {
+    setEditing({ id: entry.id, planYear })
+    setForm({
+      date: entry.date,
+      description: entry.description,
+      amount: Math.abs(entry.amount),
+      type: entry.type,
+      includeInProjection: entry.includeInProjection !== false,
+    })
+    setShowForm(true)
+  }
+  const saveEntry = () => {
     if (!form.description || !form.date || !form.amount) return
     const year = form.date.slice(0, 4)
     const entry: LiquidityEntry = {
-      id: newId(),
+      id: editing?.id ?? newId(),
       date: form.date,
       description: form.description,
       amount: form.type === 'expense' || form.type === 'loan_payment' ? -Math.abs(form.amount) : Math.abs(form.amount),
@@ -391,9 +408,9 @@ export function PlanView() {
       const plan: LiquidityPlan = { id: year, year: Number(year), entries: [], startingBalances: [], startingBalanceMode: 'computed' }
       store.upsertLiquidityPlan(plan)
     }
+    if (editing && editing.planYear !== year) store.removeLiquidityEntry(editing.planYear, editing.id)
     store.upsertLiquidityEntry(year, entry)
-    setForm({ type: 'expense', date: form.date, includeInProjection: true })
-    setShowForm(false)
+    closeForm()
   }
 
   // Upcoming one-off entries within the horizon.
@@ -829,7 +846,7 @@ export function PlanView() {
               <h3 className="font-semibold text-gray-900">Planerade engångsposter</h3>
               <p className="text-sm text-gray-500">{upcomingEntries.length} poster inom horisonten</p>
             </div>
-            <Button size="sm" onClick={() => setShowForm(true)}><Plus className="w-4 h-4" /> Lägg till</Button>
+            <Button size="sm" onClick={() => { setEditing(null); setShowForm(true) }}><Plus className="w-4 h-4" /> Lägg till</Button>
           </div>
 
           {showForm && (
@@ -874,8 +891,8 @@ export function PlanView() {
                 </div>
               </div>
               <div className="flex gap-2">
-                <Button size="sm" onClick={addEntry}>Lägg till</Button>
-                <Button size="sm" variant="secondary" onClick={() => setShowForm(false)}>Avbryt</Button>
+                <Button size="sm" onClick={saveEntry}>{editing ? 'Spara' : 'Lägg till'}</Button>
+                <Button size="sm" variant="secondary" onClick={closeForm}>Avbryt</Button>
               </div>
             </div>
           )}
@@ -923,9 +940,14 @@ export function PlanView() {
                       />
                     </td>
                     <td className="px-4 py-2.5">
-                      <button onClick={() => store.removeLiquidityEntry(planYear, entry.id)} className="text-gray-300 hover:text-red-500 transition-colors">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        <button onClick={() => startEdit(planYear, entry)} className="text-gray-300 hover:text-brand-600 transition-colors">
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => store.removeLiquidityEntry(planYear, entry.id)} className="text-gray-300 hover:text-red-500 transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
