@@ -1,7 +1,9 @@
 import type {
   ZlantarData,
+  ZlantarRawAccount,
   ZlantarTransaction,
   ZlantarImport,
+  ImportSnapshot,
   MonthlyActuals,
   ActualEntry,
   AccountBalance,
@@ -51,12 +53,21 @@ export function extractOwner(data: ZlantarData): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined
 }
 
+// The ONE id scheme for accounts coming out of a Zlantar export. Without an
+// account number the fallback must include the owner: two owners can each have
+// a "Sparkonto", and a name-only id would make their balances overwrite each
+// other on every import. deriveAccounts and buildAccountBalances both use this
+// so a balance always finds its account.
+export function zlantarAccountId(acc: ZlantarRawAccount, owner: string | undefined): string {
+  return acc.account_number || [acc.name, owner].filter(Boolean).join('_')
+}
+
 export function deriveAccounts(data: ZlantarData): Account[] {
   const owner = extractOwner(data)
   const result: Account[] = []
   for (const bank of data.banks ?? []) {
     for (const acc of bank.accounts ?? []) {
-      const id = acc.account_number || [acc.name, owner].filter(Boolean).join('_')
+      const id = zlantarAccountId(acc, owner)
       if (!id) continue
       result.push({
         id,
@@ -308,10 +319,11 @@ export function buildMonthlyActuals(
 // ─── Account balance snapshot ─────────────────────────────────────────────────
 
 export function buildAccountBalances(data: ZlantarData): AccountBalance[] {
+  const owner = extractOwner(data)
   const result: AccountBalance[] = []
   for (const bank of data.banks ?? []) {
     for (const acc of bank.accounts ?? []) {
-      const accountId = acc.account_number || acc.name
+      const accountId = zlantarAccountId(acc, owner)
       if (!accountId) continue
       result.push({
         accountId,
@@ -319,6 +331,7 @@ export function buildAccountBalances(data: ZlantarData): AccountBalance[] {
         accountType: normalizeAccountType(acc.type),
         balance: acc.balance,
         currency: 'SEK',
+        owner,
       })
     }
   }
@@ -335,7 +348,59 @@ export function mergeAccountBalances(
 ): AccountBalance[] {
   if (next.length === 0) return prev
   const nextIds = new Set(next.map((ab) => ab.accountId))
-  return [...next, ...prev.filter((ab) => !nextIds.has(ab.accountId))]
+  const nextNames = new Set(next.map((ab) => ab.accountName))
+  return [
+    ...next,
+    ...prev.filter(
+      (ab) =>
+        !nextIds.has(ab.accountId) &&
+        // Legacy entries were keyed by bare account name (no owner). When the
+        // same-named account now arrives under an owner-qualified id, the old
+        // entry is a stale duplicate — carrying it forward would double-count.
+        !(ab.accountId === ab.accountName && nextNames.has(ab.accountName))
+    ),
+  ]
+}
+
+// ─── Removed-account detection ────────────────────────────────────────────────
+//
+// A Zlantar export always contains ALL of that owner's current accounts, so an
+// account that used to show up in imports but is absent from a new data.json has
+// most likely been closed/removed at the bank. The carry-forward merge above
+// would otherwise keep its last balance alive forever with no signal.
+
+export interface RemovedAccountCandidate {
+  account: Account
+  lastKnownBalance: number | null
+}
+
+export function findRemovedAccountCandidates(
+  data: ZlantarData,
+  accounts: Account[],
+  latestSnapshot: ImportSnapshot | null
+): RemovedAccountCandidate[] {
+  const banks = data.banks ?? []
+  // A tx-only upload (no banks) says nothing about which accounts still exist.
+  if (banks.length === 0 || !latestSnapshot) return []
+
+  const incomingIds = new Set(buildAccountBalances(data).map((ab) => ab.accountId))
+  const owner = extractOwner(data)?.toLowerCase()
+  const incomingBanks = new Set(banks.map((b) => formatBankName(b.name).toLowerCase()))
+  const trackedBalances = new Map(latestSnapshot.accountBalances.map((ab) => [ab.accountId, ab.balance]))
+
+  return accounts
+    .filter((a) => {
+      if (a.closedAt) return false
+      if (incomingIds.has(a.id)) return false
+      // Only accounts that imports have actually tracked — manually added ones
+      // (e.g. a property) are never in an export and would be flagged forever.
+      if (!trackedBalances.has(a.id)) return false
+      // Scope to what this upload covers: the exporting owner's accounts when
+      // the export names one, otherwise accounts at the banks it contains.
+      if (owner) return a.owner?.trim().toLowerCase() === owner
+      return a.bankName != null && incomingBanks.has(a.bankName.toLowerCase())
+    })
+    .map((a) => ({ account: a, lastKnownBalance: trackedBalances.get(a.id) ?? null }))
 }
 
 // True when two balance sets describe the same accounts with the same balances.

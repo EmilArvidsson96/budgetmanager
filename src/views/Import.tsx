@@ -6,8 +6,8 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Select } from '@/components/ui/Select'
 import { Badge } from '@/components/ui/Badge'
-import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories, buildAccountBalances, diffAccountBalances, resolveTxCategory } from '@/utils/zlantarParser'
-import type { AccountBalanceChange } from '@/utils/zlantarParser'
+import { parseZlantarFiles, buildMonthlyActuals, deriveAccounts, deriveRecurringItems, findUnknownCategories, buildAccountBalances, diffAccountBalances, resolveTxCategory, findRemovedAccountCandidates, extractOwner } from '@/utils/zlantarParser'
+import type { AccountBalanceChange, RemovedAccountCandidate } from '@/utils/zlantarParser'
 import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
 import { getMonthIdForDate, bucketKindForCategory } from '@/utils/periodUtils'
 import { getSalaryAnchors } from '@/utils/salaryDetection'
@@ -43,7 +43,9 @@ export function ImportView() {
   const [conflicts, setConflicts] = useState<ConflictItem[]>([])
   const [conflictsExpanded, setConflictsExpanded] = useState(false)
   const [balanceChanges, setBalanceChanges] = useState<AccountBalanceChange[]>([])
-  const [doneSummary, setDoneSummary] = useState<{ months: number; balances: number; accounts: number; recurring: number } | null>(null)
+  const [removedCandidates, setRemovedCandidates] = useState<RemovedAccountCandidate[]>([])
+  const [removedAccountIds, setRemovedAccountIds] = useState<Set<string>>(new Set())
+  const [doneSummary, setDoneSummary] = useState<{ months: number; balances: number; accounts: number; recurring: number; removed: number } | null>(null)
 
   const dataRef = useRef<HTMLInputElement>(null)
   const txRef = useRef<HTMLInputElement>(null)
@@ -114,6 +116,11 @@ export function ImportView() {
         : null
       const incomingBalances = buildAccountBalances(imp.data)
       setBalanceChanges(diffAccountBalances(latestSnapshot?.accountBalances ?? [], incomingBalances))
+
+      // Accounts that used to be in imports but are gone from this data.json —
+      // probably removed at the bank. Surfaced for confirmation, never auto-closed.
+      setRemovedCandidates(findRemovedAccountCandidates(imp.data, store.settings.accounts, latestSnapshot))
+      setRemovedAccountIds(new Set())
 
       const existingAccountIds = new Set(store.settings.accounts.map((a) => a.id))
       const existingRecurringIds = new Set(store.settings.recurringItems.map((r) => r.id))
@@ -285,8 +292,11 @@ export function ImportView() {
       balances: changedBalances.length,
       accounts: newAccounts.filter((a) => selectedAccountIds.has(a.id)).length,
       recurring: newRecurring.filter((r) => selectedRecurringIds.has(r.id)).length,
+      removed: removedAccountIds.size,
     })
-    store.setZlantarImport(parsedImport)
+    const removedIds = [...removedAccountIds]
+    store.setZlantarImport(parsedImport, removedIds.length > 0 ? { removedAccountIds: removedIds } : undefined)
+    for (const id of removedIds) store.markAccountClosed(id)
     for (const [ym, act] of Object.entries(preview)) {
       if (!selectedMonths.has(ym)) continue
       const filteredEntries = act.entries.filter(
@@ -354,8 +364,17 @@ export function ImportView() {
     setConflicts([])
     setConflictsExpanded(false)
     setBalanceChanges([])
+    setRemovedCandidates([])
+    setRemovedAccountIds(new Set())
     setDoneSummary(null)
   }
+
+  const toggleRemoved = (id: string) =>
+    setRemovedAccountIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
 
   const toggleMatch = (id: string) =>
     setAcceptedMatchIds((prev) => {
@@ -513,7 +532,7 @@ export function ImportView() {
       {step === 'preview' && preview && (
         <div className="space-y-4">
           {/* Nothing new */}
-          {months.length === 0 && newAccounts.length === 0 && newRecurring.length === 0 && transferMatches.length === 0 && changedBalances.length === 0 && (
+          {months.length === 0 && newAccounts.length === 0 && newRecurring.length === 0 && transferMatches.length === 0 && changedBalances.length === 0 && removedCandidates.length === 0 && (
             <Card>
               <div className="flex items-start gap-3">
                 <Info className="w-5 h-5 text-brand-600 mt-0.5 shrink-0" />
@@ -551,9 +570,36 @@ export function ImportView() {
             />
           )}
 
+          {/* data.json without an owner name — same-named accounts can't be told apart */}
+          {parsedImport && (parsedImport.data.banks?.length ?? 0) > 0 && !extractOwner(parsedImport.data) && (
+            <Card>
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+                <div>
+                  <h3 className="font-semibold text-gray-800 mb-1">Importen saknar ägarnamn</h3>
+                  <p className="text-sm text-gray-500">
+                    Filens <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">user.first_name</code> är tomt.
+                    Konton utan kontonummer kan då inte skiljas från en annan ägares konto med samma namn,
+                    och riskerar att skriva över varandra. Kontrollera att exporten kommer från rätt
+                    Zlantar-profil med namnet ifyllt.
+                  </p>
+                </div>
+              </div>
+            </Card>
+          )}
+
           {/* Account balance updates from data.json */}
           {changedBalances.length > 0 && (
             <AccountBalancesCard changes={changedBalances} />
+          )}
+
+          {/* Accounts gone from this data.json — possibly removed at the bank */}
+          {removedCandidates.length > 0 && (
+            <RemovedAccountsCard
+              candidates={removedCandidates}
+              selectedIds={removedAccountIds}
+              onToggle={toggleRemoved}
+            />
           )}
 
           {/* Transfer reconciliation between owners */}
@@ -620,6 +666,7 @@ export function ImportView() {
                       />
                       <span className="text-sm font-medium text-gray-800">{a.name}</span>
                       {a.bankName && <span className="text-xs text-gray-400">{a.bankName}</span>}
+                      {a.owner && <Badge variant="blue">{a.owner}</Badge>}
                     </div>
                     <Badge variant={a.type === 'loan' ? 'red' : a.type === 'savings' || a.type === 'isk' ? 'blue' : 'gray'}>
                       {a.type}
@@ -782,7 +829,8 @@ export function ImportView() {
                 selectedAccountIds.size === 0 &&
                 selectedRecurringIds.size === 0 &&
                 acceptedMatchIds.size === 0 &&
-                changedBalances.length === 0
+                changedBalances.length === 0 &&
+                removedAccountIds.size === 0
               }
             >
               <CheckCircle className="w-4 h-4" />
@@ -799,7 +847,7 @@ export function ImportView() {
         <Card className="text-center py-12">
           <CheckCircle className="w-12 h-12 text-green-500 mx-auto mb-4" />
           <h3 className="text-xl font-semibold text-gray-800 mb-2">Import klar!</h3>
-          <p className={`text-gray-500 ${doneSummary.accounts > 0 || doneSummary.recurring > 0 ? 'mb-1' : 'mb-6'}`}>
+          <p className={`text-gray-500 ${doneSummary.accounts > 0 || doneSummary.recurring > 0 || doneSummary.removed > 0 ? 'mb-1' : 'mb-6'}`}>
             {doneSummary.months === 0 && doneSummary.balances > 0 ? (
               <>
                 {doneSummary.balances} {doneSummary.balances === 1 ? 'kontosaldo' : 'kontosaldon'} uppdaterades och en ny
@@ -812,15 +860,16 @@ export function ImportView() {
               </>
             )}
           </p>
-          {(doneSummary.accounts > 0 || doneSummary.recurring > 0) && (
+          {(doneSummary.accounts > 0 || doneSummary.recurring > 0 || doneSummary.removed > 0) && (
             <p className="text-gray-500 mb-6">
-              {doneSummary.accounts > 0 && (
-                <>{doneSummary.accounts} {doneSummary.accounts === 1 ? 'nytt konto' : 'nya konton'} lades till</>
-              )}
-              {doneSummary.accounts > 0 && doneSummary.recurring > 0 && ' · '}
-              {doneSummary.recurring > 0 && (
-                <>{doneSummary.recurring} {doneSummary.recurring === 1 ? 'återkommande post' : 'återkommande poster'} lades till</>
-              )}
+              {[
+                doneSummary.accounts > 0 &&
+                  `${doneSummary.accounts} ${doneSummary.accounts === 1 ? 'nytt konto' : 'nya konton'} lades till`,
+                doneSummary.recurring > 0 &&
+                  `${doneSummary.recurring} ${doneSummary.recurring === 1 ? 'återkommande post' : 'återkommande poster'} lades till`,
+                doneSummary.removed > 0 &&
+                  `${doneSummary.removed} ${doneSummary.removed === 1 ? 'konto markerades som avslutat' : 'konton markerades som avslutade'}`,
+              ].filter(Boolean).join(' · ')}
               .
             </p>
           )}
@@ -1139,6 +1188,69 @@ function BalanceChangeRow({ change }: { change: AccountBalanceChange }) {
         )}
       </div>
     </div>
+  )
+}
+
+// ─── Accounts missing from this data.json (possibly removed) ─────────────────
+
+function RemovedAccountsCard({
+  candidates,
+  selectedIds,
+  onToggle,
+}: {
+  candidates: RemovedAccountCandidate[]
+  selectedIds: Set<string>
+  onToggle: (id: string) => void
+}) {
+  return (
+    <Card padding={false}>
+      <div className="p-4 border-b border-gray-100 flex items-start gap-3">
+        <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+        <div>
+          <h3 className="font-semibold text-gray-900">
+            {candidates.length} {candidates.length === 1 ? 'konto saknas' : 'konton saknas'} i importen
+          </h3>
+          <p className="text-sm text-gray-500">
+            Kontona har funnits i tidigare importer men finns inte i den här filen — de kan ha
+            avslutats hos banken. Markera de som verkligen är borttagna, så slutar deras saldo
+            räknas med. Omarkerade konton behåller sitt senaste kända saldo.
+          </p>
+        </div>
+      </div>
+      <div className="divide-y divide-gray-50">
+        {candidates.map(({ account, lastKnownBalance }) => {
+          const checked = selectedIds.has(account.id)
+          return (
+            <label
+              key={account.id}
+              className="flex items-center justify-between gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => onToggle(account.id)}
+                  className="rounded shrink-0"
+                />
+                <div className="min-w-0">
+                  <span className={`text-sm font-medium ${checked ? 'text-gray-800' : 'text-gray-700'}`}>
+                    {account.name}
+                  </span>
+                  <span className="text-xs text-gray-400 ml-2">{account.bankName ?? '–'}</span>
+                </div>
+                {account.owner && <Badge variant="blue">{account.owner}</Badge>}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {lastKnownBalance != null && (
+                  <span className="text-sm text-gray-500">{formatCurrency(lastKnownBalance)}</span>
+                )}
+                {checked && <Badge variant="red">Avslutas</Badge>}
+              </div>
+            </label>
+          )
+        })}
+      </div>
+    </Card>
   )
 }
 

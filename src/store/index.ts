@@ -480,6 +480,53 @@ function migrateV14(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, coachReviews: (raw.coachReviews as Record<string, CoachReview>) ?? {} }
 }
 
+// v15 → v16: balance snapshots used to be keyed by `account_number || name`
+// while accounts are keyed `account_number || name_owner`. Accounts without an
+// account number therefore stored balances under a bare-name id: two owners'
+// same-named accounts overwrote each other on every import, and the owner-
+// qualified account never found its balance. buildAccountBalances now uses the
+// account id scheme; this re-keys already-stored name-keyed balance entries to
+// the account with that name when the match is unambiguous. Ambiguous entries
+// (two accounts share the name — the collided case) are left as-is: the stored
+// value is unattributable, and the Konton page lets the user clear it.
+function migrateV15(raw: Record<string, unknown>): Record<string, unknown> {
+  const settings = raw.settings as AppSettings | undefined
+  const accounts = settings?.accounts ?? []
+  if (accounts.length === 0) return raw
+
+  const ids = new Set(accounts.map((a) => a.id))
+  const byName = new Map<string, Account | null>()   // null = ambiguous name
+  for (const a of accounts) {
+    byName.set(a.name, byName.has(a.name) ? null : a)
+  }
+
+  const remap = (ab: AccountBalance): AccountBalance => {
+    if (ids.has(ab.accountId)) return ab
+    const match = byName.get(ab.accountId)
+    if (!match) return ab
+    return { ...ab, accountId: match.id, owner: ab.owner ?? match.owner }
+  }
+  const remapList = (list: AccountBalance[] | undefined): AccountBalance[] =>
+    (list ?? []).map(remap)
+
+  const actuals = { ...(raw.actuals as Record<string, MonthlyActuals> | undefined) } as Record<string, MonthlyActuals>
+  for (const ym of Object.keys(actuals)) {
+    actuals[ym] = { ...actuals[ym], accountBalances: remapList(actuals[ym].accountBalances) }
+  }
+
+  const importSnapshots = ((raw.importSnapshots as ImportSnapshot[] | undefined) ?? []).map((s) => ({
+    ...s,
+    accountBalances: remapList(s.accountBalances),
+  }))
+
+  const liquidityPlans = { ...(raw.liquidityPlans as Record<string, LiquidityPlan> | undefined) } as Record<string, LiquidityPlan>
+  for (const yr of Object.keys(liquidityPlans)) {
+    liquidityPlans[yr] = { ...liquidityPlans[yr], startingBalances: remapList(liquidityPlans[yr].startingBalances) }
+  }
+
+  return { ...raw, actuals, importSnapshots, liquidityPlans }
+}
+
 // Rebuild one already-imported month's actuals from allTransactions + overrides,
 // preserving the snapshot's accountBalances / importedAt. Runs after every
 // re-categorization so aggregated budget totals stay in sync with the transactions.
@@ -619,6 +666,11 @@ interface AppStore extends AppState {
   setCategories: (cats: CategoryDef[]) => void
   upsertAccount: (account: Account) => void
   removeAccount: (id: string) => void
+  // Close/reopen without losing history; closed accounts leave liquidity + net worth.
+  markAccountClosed: (id: string) => void
+  reopenAccount: (id: string) => void
+  // Stop carrying an orphaned balance entry forward (removes it from the latest snapshot).
+  dropCarriedBalance: (accountId: string) => void
   upsertRecurring: (item: RecurringItem) => void
   removeRecurring: (id: string) => void
 
@@ -653,8 +705,9 @@ interface AppStore extends AppState {
   upsertZlantarRule: (rule: ZlantarCategoryRule) => void
   removeZlantarRule: (id: string) => void
 
-  // Zlantar import
-  setZlantarImport: (imp: ZlantarImport) => void
+  // Zlantar import. removedAccountIds = accounts the user confirmed as removed
+  // in this import; their balances stop being carried forward.
+  setZlantarImport: (imp: ZlantarImport, opts?: { removedAccountIds?: string[] }) => void
 
   // Per-transaction category overrides (keyed by txKey)
   setTransactionOverride: (txId: string, override: TxOverride) => void
@@ -838,11 +891,7 @@ export const useAppStore = create<AppStore>()(
             // but preserve balances for accounts that belong to a different partner's import
             // and are absent from this one — so re-importing one partner's data never wipes
             // the other partner's account balances from the snapshot.
-            const newIds = new Set(actuals.accountBalances.map((ab) => ab.accountId))
-            const mergedBalances = [
-              ...actuals.accountBalances,
-              ...existing.accountBalances.filter((ab) => !newIds.has(ab.accountId)),
-            ]
+            const mergedBalances = mergeAccountBalances(existing.accountBalances, actuals.accountBalances)
             nextActuals = { ...state.actuals, [actuals.id]: { ...actuals, accountBalances: mergedBalances } }
           }
           // A freshly imported month that has already elapsed gets its plan frozen now.
@@ -905,7 +954,7 @@ export const useAppStore = create<AppStore>()(
           return { settings: newSettings, actuals: recomputeAllActuals(state, newSettings) }
         }),
 
-      setZlantarImport: (imp) =>
+      setZlantarImport: (imp, opts) =>
         set((state) => {
           // A plain Set can't tell "already imported" apart from "a second,
           // genuinely distinct transaction that happens to share a txKey"
@@ -936,10 +985,12 @@ export const useAppStore = create<AppStore>()(
           const prevSnapshot = state.importSnapshots.length > 0
             ? state.importSnapshots.reduce((a, b) => (a.importedAt > b.importedAt ? a : b))
             : null
+          // Accounts the user confirmed as removed stop being carried forward.
+          const removed = new Set(opts?.removedAccountIds ?? [])
           const mergedBalances = mergeAccountBalances(
             prevSnapshot?.accountBalances ?? [],
             incomingBalances
-          )
+          ).filter((ab) => !removed.has(ab.accountId))
 
           // Record a new snapshot only when this upload actually changes the
           // balances — re-uploading an identical data.json doesn't pile up dupes,
@@ -951,13 +1002,72 @@ export const useAppStore = create<AppStore>()(
               ? state.importSnapshots
               : [
                   ...state.importSnapshots,
-                  { id: imp.importedAt, importedAt: imp.importedAt, accountBalances: mergedBalances } satisfies ImportSnapshot,
+                  {
+                    id: imp.importedAt,
+                    importedAt: imp.importedAt,
+                    accountBalances: mergedBalances,
+                    owner: extractOwner(imp.data),
+                    importedAccountIds: incomingBalances.map((ab) => ab.accountId),
+                  } satisfies ImportSnapshot,
                 ]
 
           return {
             lastZlantarImport: imp,
             allTransactions: [...state.allTransactions, ...newTxs],
             importSnapshots: snapshots,
+          }
+        }),
+
+      markAccountClosed: (id) =>
+        set((state) => {
+          const settings = {
+            ...state.settings,
+            accounts: state.settings.accounts.map((a) =>
+              a.id === id
+                ? { ...a, closedAt: new Date().toISOString(), includeInLiquidity: false, includeInNetWorth: false }
+                : a
+            ),
+          }
+          // Also stop the balance from carrying forward: strip it from the
+          // latest snapshot (older snapshots keep it — history stays truthful).
+          if (state.importSnapshots.length === 0) return { settings }
+          const latest = state.importSnapshots.reduce((a, b) => (a.importedAt > b.importedAt ? a : b))
+          if (!latest.accountBalances.some((ab) => ab.accountId === id)) return { settings }
+          return {
+            settings,
+            importSnapshots: state.importSnapshots.map((s) =>
+              s.id === latest.id
+                ? { ...s, accountBalances: s.accountBalances.filter((ab) => ab.accountId !== id) }
+                : s
+            ),
+          }
+        }),
+
+      reopenAccount: (id) =>
+        set((state) => ({
+          settings: {
+            ...state.settings,
+            accounts: state.settings.accounts.map((a) =>
+              a.id === id
+                ? { ...a, closedAt: undefined, includeInLiquidity: a.type !== 'loan', includeInNetWorth: true }
+                : a
+            ),
+          },
+        })),
+
+      // Remove one account's balance from the LATEST snapshot only, so it stops
+      // carrying forward into future imports and drops out of current totals.
+      // Older snapshots keep it — history stays truthful.
+      dropCarriedBalance: (accountId) =>
+        set((state) => {
+          if (state.importSnapshots.length === 0) return {}
+          const latest = state.importSnapshots.reduce((a, b) => (a.importedAt > b.importedAt ? a : b))
+          const filtered = latest.accountBalances.filter((ab) => ab.accountId !== accountId)
+          if (filtered.length === latest.accountBalances.length) return {}
+          return {
+            importSnapshots: state.importSnapshots.map((s) =>
+              s.id === latest.id ? { ...s, accountBalances: filtered } : s
+            ),
           }
         }),
 
@@ -1038,7 +1148,7 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
-      version: 15,
+      version: 16,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
@@ -1056,6 +1166,7 @@ export const useAppStore = create<AppStore>()(
         if (version < 13) state = migrateV12(state)
         if (version < 14) state = migrateV13(state)
         if (version < 15) state = migrateV14(state)
+        if (version < 16) state = migrateV15(state)
         return state
       },
       // On load: for salary-anchored users re-bucket actuals first (period labels

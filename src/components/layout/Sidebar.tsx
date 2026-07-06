@@ -11,6 +11,7 @@ import {
   ListTree,
   List,
   FileText,
+  Wallet,
   MoreHorizontal,
   X,
 } from 'lucide-react'
@@ -21,6 +22,7 @@ const NAV_ITEMS = [
   { to: '/transaktioner',  icon: List,          label: 'Transaktioner',  short: 'Trans.' },
   { to: '/avstamning',     icon: CheckCircle2,  label: 'Avstämning',     short: 'Avst.' },
   { to: '/rapport',        icon: FileText,      label: 'Rapport',        short: 'Rapport' },
+  { to: '/konton',         icon: Wallet,        label: 'Konton',         short: 'Konton' },
   { to: '/kvitton',        icon: Receipt,       label: 'Matkvitton',     short: 'Kvitto' },
   { to: '/installningar',  icon: Settings,      label: 'Inställningar',  short: 'Inst.' },
   { to: '/hjalp',          icon: HelpCircle,    label: 'Hjälp',          short: 'Hjälp' },

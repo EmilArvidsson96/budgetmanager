@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Plus, Trash2, Edit2, X, Check, ArrowRight, RefreshCw } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Layout, PageHeader } from '@/components/layout/Layout'
@@ -34,8 +35,16 @@ const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = Object.fromEntries(
   ACCOUNT_TYPES.map((t) => [t.value, t.label])
 ) as Record<AccountType, string>
 
+type SettingsTab = 'general' | 'accounts' | 'recurring' | 'categories' | 'mapping' | 'api' | 'sync' | 'backup'
+const SETTINGS_TABS: SettingsTab[] = ['general', 'accounts', 'recurring', 'categories', 'mapping', 'api', 'sync', 'backup']
+
 export function SettingsView() {
-  const [tab, setTab] = useState<'general' | 'accounts' | 'recurring' | 'categories' | 'mapping' | 'api' | 'sync' | 'backup'>('general')
+  // ?tab=accounts deep-links straight to a tab (used by the Konton page).
+  const [searchParams] = useSearchParams()
+  const requested = searchParams.get('tab') as SettingsTab | null
+  const [tab, setTab] = useState<SettingsTab>(
+    requested && SETTINGS_TABS.includes(requested) ? requested : 'general'
+  )
 
   return (
     <Layout>
@@ -632,6 +641,7 @@ function AccountsTab() {
                 </div>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
+                {a.closedAt && <Badge variant="gray">Avslutat</Badge>}
                 {a.owner && <Badge variant="blue">{a.owner}</Badge>}
                 {a.interestRate !== undefined && (
                   <Badge variant="amber">{a.interestRate}%</Badge>

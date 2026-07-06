@@ -123,6 +123,10 @@ export interface Account {
   // When set the loan is netted into that asset in the wealth chart instead of
   // appearing as a separate negative bar. Multiple loans can share the same asset.
   linkedAssetId?: string
+  // Set when the account has been closed/removed at the bank (detected by an
+  // import that no longer contains it, or marked manually). Closed accounts are
+  // kept for history but excluded from balances, liquidity and net worth.
+  closedAt?: string
 }
 
 export type AccountType =
@@ -252,12 +256,22 @@ export interface AccountBalance {
   accountType: AccountType
   balance: number
   currency: string
+  // Owner of the export the balance came from (data.user.first_name). Lets two
+  // owners' same-named accounts stay apart even without an account number.
+  owner?: string
 }
 
 export interface ImportSnapshot {
   id: string             // = importedAt ISO string
   importedAt: string     // ISO timestamp
   accountBalances: AccountBalance[]
+  // Provenance (set on snapshots recorded after v16): whose export this upload
+  // was and which account IDs it actually contained. accountBalances also holds
+  // carried-forward balances from other owners' earlier uploads, so this is the
+  // only way to tell "was in THIS import" from "copied from the previous one" —
+  // which is what removed-account detection needs.
+  owner?: string
+  importedAccountIds?: string[]
 }
 
 // ─── Liquidity ────────────────────────────────────────────────────────────────
