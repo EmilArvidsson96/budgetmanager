@@ -8,7 +8,7 @@
 
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { Sparkles, TrendingUp, PiggyBank, Wallet, Coins, AlertTriangle, Target } from 'lucide-react'
+import { Sparkles, TrendingUp, PiggyBank, Wallet, Coins, AlertTriangle, Target, HandCoins } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -156,6 +156,7 @@ export function CoachReviewCard({ monthId }: { monthId: string }) {
           <Section icon={<Wallet className="w-4 h-4" />} label="Kassaflöde" text={review.cashflow} />
           <Section icon={<Coins className="w-4 h-4" />} label="Buffert" text={review.buffer} />
           <Section icon={<AlertTriangle className="w-4 h-4" />} label="Avvikelser mot plan" text={review.variances} />
+          <Section icon={<HandCoins className="w-4 h-4" />} label="Kvar att röra er med" text={review.spendingSpace ?? ''} />
           <Section icon={<TrendingUp className="w-4 h-4" />} label="Likviditet framåt" text={review.lookahead} />
         </div>
 

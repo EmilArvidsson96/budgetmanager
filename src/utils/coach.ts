@@ -37,6 +37,7 @@ Appen har redan gjort ALL aritmetik. Du får ett litet, färdigberäknat "digest
 - "savingsThisMonth" = förändringen i saldo på spar-/ISK-/investeringskonton (utgående − ingående), ALDRIG en summa av överföringar. Kan vara negativ = uttag ur bufferten.
 - "savingsKnown" avgör om sparandet ÖVERHUVUDTAGET gick att mäta. savingsKnown=false betyder OMÄTBART (föregående månad ej importerad) — det är NÅGOT HELT ANNAT än 0 kr sparat. Påstå aldrig "0 % sparkvot" när savingsKnown=false; säg att det inte gick att mäta och varför.
 - Inkomsten är ojämn (månadsbrutto har varierat ~64k–135k). Döm ALDRIG på en enskild månad — använd de rullande snitten (3/6/12 mån) som finns i digesten.
+- "nextPeriod" (när satt) beskriver perioden som just öppnats — månadsskiftets fråga "hur mycket har vi kvar att röra oss med?": income (faktisk lön när importerad, annars plan; se incomeSource) − bills (fasta räkningar) = afterBills ("kvar efter räkningar"); minus variablePlanned (rörlig budget) och savingsPlanned = margin (fritt, obundet utrymme). suggestedPerPerson är appens deterministiska förslag på eget utrymme per person, REDAN sänkt med förra månadens överdrag (holdBack; lastMonthTough=true betyder att månaden som stängdes drog över plan eller tog ur bufferten). Använd förslaget som ankare och justera med omdöme — höj det aldrig när lastMonthTough är sann; sparandet går alltid före eget utrymme.
 
 HUSHÅLLETS KONTEXT (varaktig):
 - Äger sitt boende (BRF-radhus, köpt ~mitten av 2025). Bostaden är den dominerande tillgången; bolånet den dominerande skulden.
@@ -76,6 +77,7 @@ Producera översikten för perioden i digesten. Svara med ENBART giltig JSON (in
   "cashflow": "inkomst vs utgift denna månad + rullande snitt (inkomsten är ojämn)",
   "buffer": "likvid buffert i månaders utgifter; flagga om under 3",
   "variances": "de största avvikelserna plan mot utfall, störst först; flagga en Övrigt-post som drar iväg",
+  "spendingSpace": "kvar att röra er med i nya perioden (från nextPeriod): inkomst − räkningar = X (≈ Y var); efter rörlig budget och sparande återstår fritt utrymme Z. Avsluta med hur mycket ni bör tilldela er själva VAR — utgå från suggestedPerPerson och håll igen om förra månaden var tuff (säg varför, koppla till största avvikelsen). Om nextPeriod är null: tom sträng.",
   "lookahead": "projicerad likviditetsbotten kommande 6–12 mån och vad som driver den; är botten trygg?",
   "nudge": "EN konkret, kvantifierad åtgärd för kommande månad (t.ex. 'styr X kr till ISK på lönedagen')"
 }
@@ -89,6 +91,7 @@ interface ParsedReview {
   cashflow?: string
   buffer?: string
   variances?: string
+  spendingSpace?: string
   lookahead?: string
   nudge?: string
 }
@@ -167,6 +170,7 @@ export async function generateCoachReview(
     cashflow: s(parsed.cashflow),
     buffer: s(parsed.buffer),
     variances: s(parsed.variances),
+    spendingSpace: s(parsed.spendingSpace),
     lookahead: s(parsed.lookahead),
     nudge: s(parsed.nudge),
   }
@@ -272,6 +276,25 @@ export function templateCoachReview(digest: CoachDigest): CoachReview {
     variances = `Störst över plan: ${top}.${catchAll}`
   }
 
+  // Spending space — "kvar att röra er med" in the period that just opened.
+  let spendingSpace = ''
+  if (d.nextPeriod) {
+    const n = d.nextPeriod
+    const src = n.incomeSource === 'actual' ? 'inkomst som kommit in' : 'inkomst enligt plan'
+    const ladder = `${n.monthLabel}: ${kr(n.income)} (${src}) − ${kr(n.bills)} räkningar = ${kr(n.afterBills)} kvar att röra er med (≈ ${kr(n.afterBillsPerPerson)} var). Efter rörlig budget ${kr(n.variablePlanned)} och planerat sparande ${kr(n.savingsPlanned)} återstår ${krSigned(n.margin)} fritt.`
+    let rec: string
+    if (n.margin <= 0) {
+      rec = ' Planen tilldelar redan hela inkomsten — inget eget utrymme att fördela.'
+    } else if (n.lastMonthTough && n.suggestedPerPerson <= 0) {
+      rec = ` Förra månaden drog ${kr(n.holdBack)} över — hoppa över eget utrymme denna månad och låt marginalen läka sparandet.`
+    } else if (n.lastMonthTough) {
+      rec = ` Förra månaden drog ${kr(n.holdBack)} över — håll igen: tilldela er högst ${kr(n.suggestedPerPerson)} var (inte ${kr(n.marginPerPerson)}).`
+    } else {
+      rec = ` Planen höll — ~${kr(n.suggestedPerPerson)} var i eget utrymme ryms.`
+    }
+    spendingSpace = ladder + rec
+  }
+
   // Look-ahead.
   let lookahead: string
   if (d.troughLiquidity === null) {
@@ -309,6 +332,7 @@ export function templateCoachReview(digest: CoachDigest): CoachReview {
     cashflow,
     buffer,
     variances,
+    spendingSpace,
     lookahead,
     nudge,
   }

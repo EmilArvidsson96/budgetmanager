@@ -366,6 +366,11 @@ export interface CoachReview {
   cashflow: string         // income vs expense, trailing averages
   buffer: string           // liquid runway in months
   variances: string        // biggest plan-vs-actual gaps
+  // "Kvar att röra er med" for the period that just opened: room after bills +
+  // the recommended personal allowance, tempered by how the reviewed month went.
+  // Optional: absent on reviews saved before the field existed, and on reviews
+  // of historical months (no live next period to allocate).
+  spendingSpace?: string
   lookahead: string        // projected liquidity trough + its drivers
   nudge: string            // the single concrete, quantified suggestion for next month
 }

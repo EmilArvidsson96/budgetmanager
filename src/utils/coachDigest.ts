@@ -21,6 +21,7 @@ import { netWorthByMonth } from './report'
 import { getMonthIdForDate, bucketKindForEntry } from './periodUtils'
 import { getSalaryAnchors } from './salaryDetection'
 import { MONTH_NAMES_LONG, MONTH_NAMES_SHORT } from './budgetHelpers'
+import { buildMonthOutcome, buildSpendingSpace, nextMonthIdOf, type SpendingSpace } from './spendingSpace'
 
 // Swedish mortgage-interest deduction (schablon): 30 % of interest is refunded via
 // tax, up to 100k interest/yr. We use the flat 30 % as an approximation and let the
@@ -100,6 +101,13 @@ export interface CoachDigest {
   mortgageRateNominal: number | null     // fraction, balance-weighted
   mortgageRateRealAfterTax: number | null
   forcedAmortPerMonth: number | null     // sum of monthlyPayment on liabilities
+
+  // 8. spending space for the period that opens as this one closes ("kvar att
+  //    röra er med"): income − bills = afterBills; − variable plan − savings plan
+  //    = margin. suggestedPerPerson is the app's deterministic allowance proposal,
+  //    already reduced by the reviewed month's overrun (holdBack). Null when the
+  //    reviewed month isn't at the current boundary (its next period is history).
+  nextPeriod: SpendingSpace | null
 
   // continuity (previous review)
   prevNudge: string | null
@@ -307,6 +315,14 @@ export function buildCoachDigest(state: AppState, monthId: string): CoachDigest 
   const rateNominal = weightedRateDen > 0 ? (weightedRateNum / weightedRateDen) / 100 : null
   const rateReal = rateNominal !== null ? rateNominal * (1 - INTEREST_DEDUCTION) : null
 
+  // ── Spending space for the period that just opened ──────────────────────────
+  // Only at the live boundary — for older reviewed months the "next period" is
+  // itself history and a forward allowance would be meaningless.
+  const nextPeriod =
+    nextMonthIdOf(monthId) >= currentMonthId(state)
+      ? buildSpendingSpace(state, monthId, buildMonthOutcome(state, monthId))
+      : null
+
   // ── Continuity ────────────────────────────────────────────────────────────--
   const prev = state.coachReviews[prevMonthId(monthId)]
 
@@ -361,6 +377,8 @@ export function buildCoachDigest(state: AppState, monthId: string): CoachDigest 
     mortgageRateNominal: rateNominal !== null ? r4(rateNominal) : null,
     mortgageRateRealAfterTax: rateReal !== null ? r4(rateReal) : null,
     forcedAmortPerMonth: hasAmort ? r(forcedAmort) : null,
+
+    nextPeriod,
 
     prevNudge: prev?.nudge ?? null,
     prevThroughline: prev?.throughline ?? null,

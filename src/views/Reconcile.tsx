@@ -7,11 +7,12 @@ import { Button } from '@/components/ui/Button'
 import { MONTH_NAMES_LONG, makeMonthId, formatCurrency } from '@/utils/budgetHelpers'
 import { getMonthIdForDate, bucketKindForCategory } from '@/utils/periodUtils'
 import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
-import { budgetedAmount } from '@/utils/projection'
+import { budgetedAmount, currentMonthId } from '@/utils/projection'
 import { reconcileTransfers, reconciledKeysFromRecords, txKey } from '@/utils/transferReconciliation'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import { CoachReviewCard } from '@/components/coach/CoachReviewCard'
 import { CoachChat } from '@/components/coach/CoachChat'
+import { SpendingSpaceCard } from '@/components/reconcile/SpendingSpaceCard'
 import { coachDueMonthId } from '@/utils/coachDigest'
 import type { ZlantarTransaction, ZlantarCategoryRule, TxOverride } from '@/types'
 
@@ -55,13 +56,20 @@ function resolveCategory(
 
 export function ReconcileView() {
   const today = new Date()
-  // When the coach is on and a review is due, open on the month that just closed
-  // (the "avräkning" to review) instead of the in-progress calendar month. Seeded
-  // once — manual month navigation still works. getState() avoids reordering hooks.
+  // Open on the month that needs reconciling instead of the in-progress calendar
+  // month: the coach's due month when the coach is on, otherwise the most recent
+  // elapsed month with activity that hasn't been closed yet. Seeded once — manual
+  // month navigation still works. getState() avoids reordering hooks.
   const dueSeed = useMemo(() => {
     const s = useAppStore.getState()
-    if (!s.settings.coachEnabled) return null
-    const id = coachDueMonthId(s)
+    let id = s.settings.coachEnabled ? coachDueMonthId(s) : null
+    if (!id) {
+      const cur = currentMonthId(s)
+      const unclosed = Object.keys(s.actuals)
+        .filter((m) => m < cur && (s.actuals[m].entries?.length ?? 0) > 0 && !s.monthCloses[m])
+        .sort()
+      id = unclosed[unclosed.length - 1] ?? null
+    }
     return id ? { year: parseInt(id.slice(0, 4)), month: parseInt(id.slice(5, 7)) } : null
   }, [])
   const [year, setYear] = useState(dueSeed?.year ?? today.getFullYear())
@@ -254,7 +262,7 @@ export function ReconcileView() {
     <Layout>
       <PageHeader
         title="Avstämning"
-        subtitle="Stäm av månaden mot planen och stäng den."
+        subtitle="Stäng månaden som gått och se vad ni har att röra er med i den nya."
         actions={
           close ? (
             <Button variant="secondary" size="sm" onClick={() => store.reopenMonth(monthId)}>
@@ -336,6 +344,10 @@ export function ReconcileView() {
               )
             })}
           </div>
+
+          {/* Utrymme i nya perioden — "kvar att röra er med" (only at the live
+              month boundary; historical months keep the plain review below). */}
+          <SpendingSpaceCard reviewedMonthId={monthId} />
 
           {/* Kassaflöde waterfall */}
           {cashflowData && (cashflowData.income > 0 || cashflowData.totalExpenses > 0) && (
