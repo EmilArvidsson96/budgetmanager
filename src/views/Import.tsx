@@ -43,6 +43,7 @@ export function ImportView() {
   const [conflicts, setConflicts] = useState<ConflictItem[]>([])
   const [conflictsExpanded, setConflictsExpanded] = useState(false)
   const [balanceChanges, setBalanceChanges] = useState<AccountBalanceChange[]>([])
+  const [doneSummary, setDoneSummary] = useState<{ months: number; balances: number; accounts: number; recurring: number } | null>(null)
 
   const dataRef = useRef<HTMLInputElement>(null)
   const txRef = useRef<HTMLInputElement>(null)
@@ -274,6 +275,17 @@ export function ImportView() {
 
   const confirmImport = () => {
     if (!preview || !parsedImport) return
+    // Snapshot the summary counts before mutating the store: setZlantarImport()
+    // appends these transactions to store.allTransactions, which the `preview`/
+    // `importedMonths` memos depend on — right after the mutation they'd
+    // recompute as if these transactions already existed, making everything
+    // look like "0 imported" on the done screen even though the import succeeded.
+    setDoneSummary({
+      months: importedMonths.length,
+      balances: changedBalances.length,
+      accounts: newAccounts.filter((a) => selectedAccountIds.has(a.id)).length,
+      recurring: newRecurring.filter((r) => selectedRecurringIds.has(r.id)).length,
+    })
     store.setZlantarImport(parsedImport)
     for (const [ym, act] of Object.entries(preview)) {
       if (!selectedMonths.has(ym)) continue
@@ -342,6 +354,7 @@ export function ImportView() {
     setConflicts([])
     setConflictsExpanded(false)
     setBalanceChanges([])
+    setDoneSummary(null)
   }
 
   const toggleMatch = (id: string) =>
@@ -782,23 +795,35 @@ export function ImportView() {
       )}
 
       {/* Step 3: Done */}
-      {step === 'done' && (
+      {step === 'done' && doneSummary && (
         <Card className="text-center py-12">
           <CheckCircle className="w-12 h-12 text-green-500 mx-auto mb-4" />
           <h3 className="text-xl font-semibold text-gray-800 mb-2">Import klar!</h3>
-          <p className="text-gray-500 mb-6">
-            {importedMonths.length === 0 && changedBalances.length > 0 ? (
+          <p className={`text-gray-500 ${doneSummary.accounts > 0 || doneSummary.recurring > 0 ? 'mb-1' : 'mb-6'}`}>
+            {doneSummary.months === 0 && doneSummary.balances > 0 ? (
               <>
-                {changedBalances.length} {changedBalances.length === 1 ? 'kontosaldo' : 'kontosaldon'} uppdaterades och en ny
+                {doneSummary.balances} {doneSummary.balances === 1 ? 'kontosaldo' : 'kontosaldon'} uppdaterades och en ny
                 ögonblicksbild sparades. Saldohistoriken syns under Likviditet.
               </>
             ) : (
               <>
-                {importedMonths.length} {importedMonths.length === 1 ? 'månad' : 'månader'} med utfallsdata har importerats.
+                {doneSummary.months} {doneSummary.months === 1 ? 'månad' : 'månader'} med utfallsdata har importerats.
                 Gå till månads- eller årsbudgeten för att jämföra med dina budgetar.
               </>
             )}
           </p>
+          {(doneSummary.accounts > 0 || doneSummary.recurring > 0) && (
+            <p className="text-gray-500 mb-6">
+              {doneSummary.accounts > 0 && (
+                <>{doneSummary.accounts} {doneSummary.accounts === 1 ? 'nytt konto' : 'nya konton'} lades till</>
+              )}
+              {doneSummary.accounts > 0 && doneSummary.recurring > 0 && ' · '}
+              {doneSummary.recurring > 0 && (
+                <>{doneSummary.recurring} {doneSummary.recurring === 1 ? 'återkommande post' : 'återkommande poster'} lades till</>
+              )}
+              .
+            </p>
+          )}
           <div className="flex justify-center gap-3">
             <Button variant="secondary" onClick={reset}>Importera mer</Button>
           </div>
