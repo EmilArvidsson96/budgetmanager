@@ -489,6 +489,11 @@ export interface AppSettings {
   // Shows raw per-transaction identifiers (txKey, index, account fields) in the
   // transaction list, plus a report of any txKey collisions across allTransactions.
   debugMode?: boolean
+  // Buffer/liquidity target (SEK) drawn as a goal line on the Plan view's
+  // liquidity chart, with indicators for when the projection first reaches or
+  // falls below it. Compared against the liquidity as displayed, i.e. it
+  // follows the "med/utan sparande" toggle. Unset = no goal line.
+  liquidityGoal?: number
 }
 
 // Per-transaction category override, keyed by txKey (date|amount|description|

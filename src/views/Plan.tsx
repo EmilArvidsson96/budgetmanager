@@ -370,6 +370,28 @@ export function PlanView() {
 
   const liquidityGoesNegative = trough && trough.liquidity < 0
 
+  // ── Buffer/liquidity goal ───────────────────────────────────────────────────
+  // Compared against the projected liquidity as displayed (so it follows the
+  // med/utan sparande toggle). Only projection months count — the indicators
+  // answer "when will I be caught up / fall below", not "when was I".
+  const liquidityGoal = settings.liquidityGoal
+  const goalStatus = useMemo(() => {
+    if (liquidityGoal == null || liquidityGoal <= 0) return null
+    const startsAbove = now.liquidity >= liquidityGoal
+    // First crossing in each direction, in chronological order.
+    const events: { kind: 'reach' | 'drop'; label: string; monthId: string }[] = []
+    let above = startsAbove
+    for (const m of months.slice(1)) {
+      const isAbove = m.liquidity >= liquidityGoal
+      if (isAbove !== above) {
+        const kind = isAbove ? 'reach' : 'drop'
+        if (!events.some((e) => e.kind === kind)) events.push({ kind, label: m.label, monthId: m.monthId })
+      }
+      above = isAbove
+    }
+    return { startsAbove, events }
+  }, [months, liquidityGoal, now])
+
   const minLiabilityValue = unlinkedLiabilities.length > 0
     ? Math.min(...months.map(m => unlinkedLiabilities.reduce((s, l) => s + (m.values[l.id] ?? 0), 0)))
     : 0
@@ -652,11 +674,58 @@ export function PlanView() {
               </div>
             }
           />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 mb-3 text-xs sm:text-sm">
+            <label className="flex items-center gap-1.5 text-gray-500">
+              <span className="whitespace-nowrap">Buffertmål</span>
+              <span className="w-28">
+                <InlineNumber
+                  value={liquidityGoal}
+                  onCommit={(v) => store.updateSettings({ liquidityGoal: v != null && v > 0 ? v : undefined })}
+                  format={(v) => formatCurrency(v)}
+                  placeholder="Sätt mål…"
+                />
+              </span>
+            </label>
+            {goalStatus && goalStatus.events.map((e, i) => {
+              const recovery = goalStatus.startsAbove || goalStatus.events.slice(0, i).some((x) => x.kind === 'drop')
+              return e.kind === 'reach' ? (
+                <span key={`${e.kind}-${e.monthId}`} className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 whitespace-nowrap">
+                  <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
+                  {recovery ? 'Åter över målet' : 'Ikapp målet'} i {e.label}
+                </span>
+              ) : (
+                <span key={`${e.kind}-${e.monthId}`} className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200 whitespace-nowrap">
+                  <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
+                  Under målet i {e.label}
+                </span>
+              )
+            })}
+            {goalStatus && goalStatus.events.length === 0 && (
+              goalStatus.startsAbove ? (
+                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200 whitespace-nowrap">
+                  <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
+                  Över målet hela perioden
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
+                  Når inte målet inom {horizon} mån
+                </span>
+              )
+            )}
+          </div>
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={liquidityStackData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
-              <YAxis tickFormatter={tickFmt} tick={{ fontSize: 11 }} />
+              <YAxis
+                tickFormatter={tickFmt}
+                tick={{ fontSize: 11 }}
+                // Keep the goal line visible even when it sits above the curve.
+                domain={liquidityGoal != null && liquidityGoal > 0
+                  ? [0, (dataMax: number) => Math.max(dataMax * 1.02, liquidityGoal * 1.1)]
+                  : undefined}
+              />
               <Tooltip position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined} content={(props: any) => (
                 <LiquidityTooltip
                   active={props.active}
@@ -668,6 +737,15 @@ export function PlanView() {
                 />
               )} />
               <ReferenceLine y={0} stroke="#dc2626" strokeDasharray="3 3" />
+              {liquidityGoal != null && liquidityGoal > 0 && (
+                <ReferenceLine
+                  y={liquidityGoal}
+                  stroke="#059669"
+                  strokeDasharray="6 3"
+                  strokeWidth={1.5}
+                  label={{ value: `Mål ${tickFmt(liquidityGoal)}`, position: 'insideLeft', fontSize: 10, fill: '#059669', dy: -7 }}
+                />
+              )}
               {liquidityHistory.length > 0 && (
                 <ReferenceLine
                   x={now.label}
@@ -701,6 +779,18 @@ export function PlanView() {
               {liquidityData.filter((d) => plannedByLabel.has(d.label)).map((d) => (
                 <ReferenceDot key={`p-${d.label}`} x={d.label} y={d.Likviditet} r={9} fill="#7c3aed" fillOpacity={0.25} stroke="#7c3aed" strokeWidth={2} />
               ))}
+              {/* Flag: months where the projection first crosses the buffer goal */}
+              {liquidityGoal != null && liquidityGoal > 0 && goalStatus?.events.map((e) => (
+                <ReferenceDot
+                  key={`g-${e.kind}-${e.monthId}`}
+                  x={e.label}
+                  y={liquidityGoal}
+                  r={5}
+                  fill={e.kind === 'reach' ? '#059669' : '#dc2626'}
+                  stroke="white"
+                  strokeWidth={2}
+                />
+              ))}
             </ComposedChart>
           </ResponsiveContainer>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-gray-500">
@@ -710,6 +800,12 @@ export function PlanView() {
                 {labelOf(a.id, a.name)}
               </span>
             ))}
+            {liquidityGoal != null && liquidityGoal > 0 && (
+              <span className="flex items-center gap-1.5">
+                <span className="w-4 border-t-2 border-dashed border-emerald-600 inline-block" />
+                Buffertmål
+              </span>
+            )}
             {largeNonRecurringByLabel.size > 0 && (
               <span className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
