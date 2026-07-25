@@ -148,9 +148,22 @@ function derivedSubColor(baseColor: string, index: number, total: number): strin
 }
 
 export function FlowView() {
+  const store = useAppStore()
+  const { settings, allTransactions, transactionOverrides, groceryReceipts, reconciliations } = store
+  const { categories, zlantarCategoryRules, monthStartDay, monthStartBusinessDay } = settings
+  const { config, flaggedMonths } = useSalaryAnchors()
+
+  // Default to the current RECONCILIATION period, not the raw calendar month —
+  // with a custom period-start day or salary-anchored months, the two can differ
+  // (e.g. a payday-anchored period already opens next calendar month's label
+  // before the calendar itself turns over), and this is the main day-to-day view
+  // where a freshly opened period should show up without manual navigation.
   const today = new Date()
-  const [year, setYear] = useState(today.getFullYear())
-  const [month, setMonth] = useState(today.getMonth() + 1)
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const currentPeriodId = getMonthIdForDate(todayIso, monthStartDay, monthStartBusinessDay, config, 'neutral')
+
+  const [year, setYear] = useState(() => parseInt(currentPeriodId.slice(0, 4)))
+  const [month, setMonth] = useState(() => parseInt(currentPeriodId.slice(5, 7)))
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set())
   const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
@@ -158,11 +171,6 @@ export function FlowView() {
   const [openInbox, setOpenInbox] = useState<string | null>(null)
   const [selectedCatId, setSelectedCatId] = useState<string | null>(null)
   const largeTxThreshold = 5000
-
-  const store = useAppStore()
-  const { settings, allTransactions, transactionOverrides, groceryReceipts, reconciliations } = store
-  const { categories, zlantarCategoryRules, monthStartDay, monthStartBusinessDay } = settings
-  const { config, flaggedMonths } = useSalaryAnchors()
 
   // Resolve a transaction's BucketKind (listed income vs. other) so period
   // bucketing can apply the type-dependent boundary. Memoized rule lookup keeps

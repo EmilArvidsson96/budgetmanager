@@ -55,25 +55,27 @@ function resolveCategory(
 }
 
 export function ReconcileView() {
-  const today = new Date()
   // Open on the month that needs reconciling instead of the in-progress calendar
   // month: the coach's due month when the coach is on, otherwise the most recent
   // elapsed month with activity that hasn't been closed yet. Seeded once — manual
   // month navigation still works. getState() avoids reordering hooks.
   const dueSeed = useMemo(() => {
     const s = useAppStore.getState()
+    const cur = currentMonthId(s)
     let id = s.settings.coachEnabled ? coachDueMonthId(s) : null
     if (!id) {
-      const cur = currentMonthId(s)
       const unclosed = Object.keys(s.actuals)
         .filter((m) => m < cur && (s.actuals[m].entries?.length ?? 0) > 0 && !s.monthCloses[m])
         .sort()
-      id = unclosed[unclosed.length - 1] ?? null
+      // Falls back to the current reconciliation period (not raw calendar
+      // "today") so a custom period-start day or salary anchoring that has
+      // already opened a new labelled period is reflected here too.
+      id = unclosed[unclosed.length - 1] ?? cur
     }
-    return id ? { year: parseInt(id.slice(0, 4)), month: parseInt(id.slice(5, 7)) } : null
+    return { year: parseInt(id.slice(0, 4)), month: parseInt(id.slice(5, 7)) }
   }, [])
-  const [year, setYear] = useState(dueSeed?.year ?? today.getFullYear())
-  const [month, setMonth] = useState(dueSeed?.month ?? today.getMonth() + 1)
+  const [year, setYear] = useState(dueSeed.year)
+  const [month, setMonth] = useState(dueSeed.month)
   const store = useAppStore()
   const { settings, actuals, monthCloses, reconciliations, allTransactions, transactionOverrides } = store
   const { categories, monthStartDay, monthStartBusinessDay, zlantarCategoryRules } = settings
