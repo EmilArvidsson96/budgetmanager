@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
+import { indexedDbStorage } from '@/utils/indexedDbStorage'
 import type {
   AppState,
   AppSettings,
@@ -1148,6 +1149,11 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'budgethanteraren-v1',
+      // IndexedDB instead of the default localStorage — the persisted state
+      // (transaction history, snapshots, receipts...) outgrows localStorage's
+      // ~5-10 MB quota after enough imports, which used to make every store
+      // update throw QuotaExceededError mid-action (see indexedDbStorage.ts).
+      storage: createJSONStorage(() => indexedDbStorage),
       version: 16,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
