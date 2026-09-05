@@ -15,6 +15,39 @@ import { extractAppStateForSync } from '@/utils/githubSync'
 // carry a full app-state snapshot that can include real financial data.
 const REPORT_ENDPOINT = 'https://budgetmanager-report.emil-arvidsson.workers.dev'
 
+// GitHub issue bodies cap out at 65536 characters total, and the raw store
+// (years of imported transactions) can run into megabytes — sending it whole
+// would mean shipping most of it over mobile data just to have it discarded
+// server-side. Large arrays/maps (allTransactions, transactionOverrides, …)
+// are collapsed to a count plus a small recent sample instead: still enough
+// to say "how much data, and what did the last bit of it look like" without
+// the entire history riding along.
+const MAX_COLLECTION_ITEMS = 25
+const SAMPLE_SIZE = 10
+const MAX_APP_STATE_CHARS = 55_000
+
+function summarizeForReport(state: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(state)) {
+    if (Array.isArray(value) && value.length > MAX_COLLECTION_ITEMS) {
+      out[key] = { _count: value.length, _recentSample: value.slice(-SAMPLE_SIZE) }
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const entries = Object.entries(value as Record<string, unknown>)
+      out[key] = entries.length > MAX_COLLECTION_ITEMS
+        ? { _count: entries.length, _recentSample: Object.fromEntries(entries.slice(-SAMPLE_SIZE)) }
+        : value
+    } else {
+      out[key] = value
+    }
+  }
+  return out
+}
+
+function truncateJson(value: unknown, maxChars: number): string {
+  const text = JSON.stringify(value)
+  return text.length > maxChars ? `${text.slice(0, maxChars)}…[trunkerad]` : text
+}
+
 type ReportKind = 'bug' | 'enhancement'
 type SubmitState = 'idle' | 'sending' | 'sent' | 'error'
 
@@ -55,7 +88,8 @@ export function ReportIssueButton({ atBottom }: ReportIssueButtonProps) {
       viewport: `${window.innerWidth}x${window.innerHeight}`,
       userAgent: navigator.userAgent,
     }
-    const appState = extractAppStateForSync(useAppStore.getState() as unknown as Record<string, unknown>)
+    const rawState = extractAppStateForSync(useAppStore.getState() as unknown as Record<string, unknown>)
+    const appState = truncateJson(summarizeForReport(rawState), MAX_APP_STATE_CHARS)
 
     try {
       const res = await fetch(REPORT_ENDPOINT, {

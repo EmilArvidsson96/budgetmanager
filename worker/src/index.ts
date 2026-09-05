@@ -15,7 +15,10 @@ export interface Env {
 
 const REPO = 'EmilArvidsson96/budgetmanager_data'
 const ALLOWED_ORIGIN = 'https://emilarvidsson96.github.io'
-const MAX_BODY_BYTES = 500_000
+// The client already trims appState to a bounded summary (counts + a recent
+// sample, not the full transaction history) before sending, so the upload is
+// normally well under 100KB — this cap is just a safety margin above that.
+const MAX_BODY_BYTES = 200_000
 const MAX_ISSUE_BODY_CHARS = 60_000
 
 interface ReportPayload {
@@ -23,7 +26,8 @@ interface ReportPayload {
   title?: string
   description?: string
   context?: Record<string, unknown>
-  appState?: unknown
+  /** Pre-serialized JSON string (already summarized/truncated client-side) — inserted as-is, not re-encoded. */
+  appState?: string
 }
 
 function corsHeaders(): HeadersInit {
@@ -75,8 +79,8 @@ export default {
     }
 
     const bodyParts = [description, '', '---', '**Kontext:**', '```json', JSON.stringify(payload.context ?? {}, null, 2), '```']
-    if (payload.appState !== undefined) {
-      bodyParts.push('', '**App-state:**', '```json', truncate(JSON.stringify(payload.appState, null, 2), MAX_ISSUE_BODY_CHARS), '```')
+    if (payload.appState) {
+      bodyParts.push('', '**App-state (sammanfattad):**', '```json', truncate(payload.appState, MAX_ISSUE_BODY_CHARS), '```')
     }
 
     const ghRes = await fetch(`https://api.github.com/repos/${REPO}/issues`, {
