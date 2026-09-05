@@ -3,7 +3,6 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { APP_VERSION } from '../../version'
 import {
   LineChart,
-  CheckCircle2,
   Settings,
   TrendingUp,
   HelpCircle,
@@ -20,7 +19,6 @@ const NAV_ITEMS = [
   { to: '/plan',           icon: LineChart,     label: 'Plan',           short: 'Plan' },
   { to: '/floede',         icon: ListTree,      label: 'Flöde',          short: 'Flöde' },
   { to: '/transaktioner',  icon: List,          label: 'Transaktioner',  short: 'Trans.' },
-  { to: '/avstamning',     icon: CheckCircle2,  label: 'Avstämning',     short: 'Avst.' },
   { to: '/rapport',        icon: FileText,      label: 'Rapport',        short: 'Rapport' },
   { to: '/konton',         icon: Wallet,        label: 'Konton',         short: 'Konton' },
   { to: '/kvitton',        icon: Receipt,       label: 'Matkvitton',     short: 'Kvitto' },
@@ -29,9 +27,11 @@ const NAV_ITEMS = [
 ]
 
 // The mobile bottom bar only has room for a handful of items before it gets
-// cramped, so we keep the four most-used sections in the bar and tuck the rest
+// cramped, so we keep the most-used sections in the bar and tuck the rest
 // behind a "Mer" sheet. Desktop still shows the full list in the sidebar.
-const PRIMARY_PATHS = ['/plan', '/floede', '/avstamning', '/rapport']
+// Flöde now absorbs the old Avstämning ritual, so it's the one stop for
+// day-to-day follow-up + monthly close.
+const PRIMARY_PATHS = ['/plan', '/floede', '/rapport']
 const primaryItems = NAV_ITEMS.filter((i) => PRIMARY_PATHS.includes(i.to))
 const overflowItems = NAV_ITEMS.filter((i) => !PRIMARY_PATHS.includes(i.to))
 const SHEET_ID = 'mobile-more-sheet'

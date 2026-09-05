@@ -2,7 +2,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { PlanView }             from './views/Plan'
 import { AccountsView }         from './views/Accounts'
 import { ReportView }           from './views/Report'
-import { ReconcileView }        from './views/Reconcile'
 import { LiquidityView }        from './views/Liquidity'
 import { ImportView }           from './views/Import'
 import { SettingsView }         from './views/Settings'
@@ -27,7 +26,7 @@ function AppRoutes() {
       <Route path="/likviditet-gammal" element={<LiquidityView />} />
       <Route path="/floede"         element={<FlowView />} />
       <Route path="/rapport"        element={<ReportView />} />
-      <Route path="/avstamning"     element={<ReconcileView />} />
+      <Route path="/avstamning"     element={<Navigate to="/floede" replace />} />
       <Route path="/transaktioner"  element={<TransactionListView />} />
       <Route path="/konton"         element={<AccountsView />} />
       <Route path="/importera"      element={<ImportView />} />

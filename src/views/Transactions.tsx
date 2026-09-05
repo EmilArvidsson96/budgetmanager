@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ElementType, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Search, X, Pencil, RotateCcw, Upload, Tag, ArrowLeftRight, AlertTriangle, Banknote, CheckCircle2, TrendingUp, Sparkles, SlidersHorizontal } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search, X, Pencil, RotateCcw, Upload, Tag, ArrowLeftRight, AlertTriangle, Banknote, CheckCircle2, TrendingUp, Sparkles, SlidersHorizontal, Lock, Unlock } from 'lucide-react'
 import {
-  PieChart, Pie, Cell,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import { useAppStore } from '@/store'
@@ -19,12 +18,17 @@ import {
   makeMonthId,
   formatCurrency,
 } from '@/utils/budgetHelpers'
-import { budgetedAmount, baselineTarget } from '@/utils/projection'
+import { budgetedAmount, baselineTarget, currentMonthId } from '@/utils/projection'
 import { suggestForCategory, seasonalHint } from '@/utils/budgetSuggestions'
 import { getMonthIdForDate, getPeriodProgress, bucketKindForCategory, type BucketKind } from '@/utils/periodUtils'
 import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import { txKey, reconciledKeysFromRecords, reconcileTransfers } from '@/utils/transferReconciliation'
+import { coachDueMonthId } from '@/utils/coachDigest'
+import { CoachReviewCard } from '@/components/coach/CoachReviewCard'
+import { CoachChat } from '@/components/coach/CoachChat'
+import { SpendingSpaceCard } from '@/components/reconcile/SpendingSpaceCard'
+import { WaterfallCard } from '@/components/reconcile/Waterfall'
 import { GROCERY_CATEGORY_LABELS } from '@/types'
 import type {
   CategoryDef,
@@ -108,13 +112,6 @@ interface CatGroup {
   uncategorized: ResolvedTx[]
 }
 
-interface DonutSlice {
-  catId: string
-  name: string
-  value: number
-  color: string
-}
-
 interface TrendDatum {
   monthId: string
   label: string
@@ -149,21 +146,33 @@ function derivedSubColor(baseColor: string, index: number, total: number): strin
 
 export function FlowView() {
   const store = useAppStore()
-  const { settings, allTransactions, transactionOverrides, groceryReceipts, reconciliations } = store
+  const { settings, allTransactions, transactionOverrides, groceryReceipts, reconciliations, actuals, monthCloses } = store
   const { categories, zlantarCategoryRules, monthStartDay, monthStartBusinessDay } = settings
   const { config, flaggedMonths } = useSalaryAnchors()
 
-  // Default to the current RECONCILIATION period, not the raw calendar month —
-  // with a custom period-start day or salary-anchored months, the two can differ
-  // (e.g. a payday-anchored period already opens next calendar month's label
-  // before the calendar itself turns over), and this is the main day-to-day view
-  // where a freshly opened period should show up without manual navigation.
-  const today = new Date()
-  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-  const currentPeriodId = getMonthIdForDate(todayIso, monthStartDay, monthStartBusinessDay, config, 'neutral')
+  // Open on the month that needs reconciling instead of always the raw calendar
+  // month: the coach's due month when the coach is on, otherwise the most recent
+  // elapsed month with activity that hasn't been closed yet, otherwise the
+  // current RECONCILIATION period (not raw calendar "today" — with a custom
+  // period-start day or salary-anchored months, the two can differ, e.g. a
+  // payday-anchored period already opens next calendar month's label before the
+  // calendar itself turns over). Seeded once — manual month navigation still
+  // works. getState() avoids reordering hooks.
+  const dueSeed = useMemo(() => {
+    const s = useAppStore.getState()
+    const cur = currentMonthId(s)
+    let id = s.settings.coachEnabled ? coachDueMonthId(s) : null
+    if (!id) {
+      const unclosed = Object.keys(s.actuals)
+        .filter((m) => m < cur && (s.actuals[m].entries?.length ?? 0) > 0 && !s.monthCloses[m])
+        .sort()
+      id = unclosed[unclosed.length - 1] ?? cur
+    }
+    return { year: parseInt(id.slice(0, 4)), month: parseInt(id.slice(5, 7)) }
+  }, [])
 
-  const [year, setYear] = useState(() => parseInt(currentPeriodId.slice(0, 4)))
-  const [month, setMonth] = useState(() => parseInt(currentPeriodId.slice(5, 7)))
+  const [year, setYear] = useState(dueSeed.year)
+  const [month, setMonth] = useState(dueSeed.month)
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set())
   const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
@@ -185,6 +194,18 @@ export function FlowView() {
   const monthId = makeMonthId(year, month)
   const seasonHint = seasonalHint(month)
 
+  const actual = actuals[monthId]
+  const close = monthCloses[monthId]
+
+  // Note follows the selected month — reset during render when the month
+  // changes (React's recommended alternative to a setState-in-effect).
+  const [note, setNote] = useState(close?.note ?? '')
+  const [noteMonth, setNoteMonth] = useState(monthId)
+  if (noteMonth !== monthId) {
+    setNoteMonth(monthId)
+    setNote(close?.note ?? '')
+  }
+
   const reconciledKeys = useMemo(() => reconciledKeysFromRecords(reconciliations), [reconciliations])
 
   const prevMonth = () => {
@@ -194,6 +215,149 @@ export function FlowView() {
   const nextMonth = () => {
     if (month === 12) { setMonth(1); setYear((y) => y + 1) }
     else setMonth((m) => m + 1)
+  }
+
+  // Cashflow data for the waterfall — income and expenses come from the raw
+  // transactions (so each bar can list the exact transactions behind it,
+  // excluding already-reconciled transfer-matches, same as the category tree
+  // below). Savings is measured as the balance change of the savings-type
+  // accounts over the month — closing minus opening — NOT from transfer
+  // transactions: money is always routed through a spender account first, so
+  // counting the transfers would massively double-count. Each bar also carries
+  // its budgeted amount, for the ghost overlay + plus/minus label.
+  const prevMonthId = makeMonthId(month === 1 ? year - 1 : year, month === 1 ? 12 : month - 1)
+  const cashflowData = useMemo(() => {
+    if (!actual) return null
+    const catIds = new Set(categories.map((c) => c.id))
+    const ruleMap = buildRuleLookup(zlantarCategoryRules ?? DEFAULT_ZLANTAR_RULES)
+
+    let income = 0
+    const incomeTxs: ZlantarTransaction[] = []
+    const expenseByCat: Record<string, { total: number; txs: ZlantarTransaction[] }> = {}
+
+    for (const tx of allTransactions) {
+      if (!tx.date) continue
+      if (tx.transaction_type === 'transfer') continue
+      if (reconciledKeys.has(txKey(tx))) continue
+
+      const { catId, subId } = resolveCategory(
+        tx.category ?? '', tx.subcategory ?? '',
+        catIds, ruleMap, transactionOverrides[txKey(tx)]
+      )
+      const kind = bucketKindForCategory(catId, subId, tx.category ?? '')
+      if (getMonthIdForDate(tx.date, monthStartDay, monthStartBusinessDay, config, kind) !== monthId) continue
+      const cat = categories.find((c) => c.id === catId)
+      if (!cat) continue
+      if (cat.type === 'income') { income += tx.amount; incomeTxs.push(tx) }
+      else if (cat.type === 'expense') {
+        const e = expenseByCat[catId] ?? { total: 0, txs: [] }
+        e.total += tx.amount
+        e.txs.push(tx)
+        expenseByCat[catId] = e
+      }
+    }
+
+    const incomeBudget = categories
+      .filter((c) => c.type === 'income')
+      .reduce((s, c) => s + Math.abs(budgetedAmount(store, monthId, c.id)), 0)
+    const savingsBudget = categories
+      .filter((c) => c.type === 'savings')
+      .reduce((s, c) => s + Math.abs(budgetedAmount(store, monthId, c.id)), 0)
+    const totalExpenseBudget = categories
+      .filter((c) => c.type === 'expense')
+      .reduce((s, c) => s + Math.abs(budgetedAmount(store, monthId, c.id)), 0)
+
+    // Savings from balance change of savings-type accounts.
+    const savingsTypes = new Set<string>(['savings', 'isk', 'investment'])
+    const openingMap = new Map(
+      (actuals[prevMonthId]?.accountBalances ?? []).map((ab) => [ab.accountId, ab.balance])
+    )
+    const savingsAccounts = actual.accountBalances
+      .filter((ab) => savingsTypes.has(ab.accountType))
+      .map((ab) => {
+        const opening = openingMap.get(ab.accountId)
+        const closing = ab.balance
+        return {
+          accountId: ab.accountId,
+          accountName: ab.accountName,
+          opening: opening ?? closing,
+          closing,
+          delta: opening === undefined ? 0 : closing - opening,
+          known: opening !== undefined,
+        }
+      })
+      .filter((a) => a.delta !== 0)
+    const netSavings = savingsAccounts.reduce((s, a) => s + a.delta, 0)
+
+    const expenseGroups = categories
+      .filter((c) => c.type === 'expense' && expenseByCat[c.id])
+      .map((c) => ({
+        catId: c.id,
+        catName: c.name,
+        catColor: c.color ?? '#94a3b8',
+        total: Math.abs(expenseByCat[c.id].total),
+        budget: Math.abs(budgetedAmount(store, monthId, c.id)),
+        txs: expenseByCat[c.id].txs,
+      }))
+    const totalExpenses = expenseGroups.reduce((s, g) => s + g.total, 0)
+
+    return {
+      income, incomeBudget, incomeTxs,
+      netSavings, savingsBudget, savingsAccounts,
+      totalExpenses, totalExpenseBudget, expenseGroups,
+      plannedNet: incomeBudget - totalExpenseBudget - savingsBudget,
+    }
+  }, [actual, actuals, prevMonthId, allTransactions, categories, zlantarCategoryRules, transactionOverrides, monthStartDay, monthStartBusinessDay, config, monthId, reconciledKeys, store])
+
+  // Per-category plan vs actual (from the imported snapshot) — feeds the
+  // Result KPI row and the month-close snapshot. Kept independent from
+  // cashflowData above (which recomputes live off allTransactions): this
+  // mirrors what the month was actually closed against historically, so a
+  // closed month's "drifted" check stays meaningful.
+  const rows = useMemo(() => {
+    const actualByCat = new Map<string, number>()
+    for (const e of actual?.entries ?? []) {
+      actualByCat.set(e.categoryId, (actualByCat.get(e.categoryId) ?? 0) + e.totalAmount)
+    }
+    return categories
+      .map((cat) => {
+        const budget = Math.abs(budgetedAmount(store, monthId, cat.id))
+        const act = Math.abs(actualByCat.get(cat.id) ?? 0)
+        return { cat, budget, actual: act }
+      })
+      .filter((r) => r.budget > 0 || r.actual > 0)
+  }, [actual, categories, store, monthId])
+
+  const totals = useMemo(() => {
+    let income = 0, expense = 0, savings = 0
+    for (const r of rows) {
+      if (r.cat.type === 'income') income += r.actual
+      else if (r.cat.type === 'savings') savings += r.actual
+      else if (r.cat.type === 'expense') expense += r.actual
+    }
+    return { income, expense, savings, net: income - expense - savings }
+  }, [rows])
+
+  const planned = useMemo(() => {
+    let income = 0, expense = 0, savings = 0
+    for (const r of rows) {
+      if (r.cat.type === 'income') income += r.budget
+      else if (r.cat.type === 'savings') savings += r.budget
+      else if (r.cat.type === 'expense') expense += r.budget
+    }
+    return { income, expense, savings, net: income - expense - savings }
+  }, [rows])
+
+  // Has the outcome drifted since the month was closed?
+  const drifted = close ? Math.round(close.net) !== Math.round(totals.net) : false
+
+  const doClose = () => {
+    store.closeMonth({
+      monthId,
+      closedAt: new Date().toISOString(),
+      note: note.trim() || undefined,
+      income: totals.income, expense: totals.expense, savings: totals.savings, net: totals.net,
+    })
   }
 
   const groups = useMemo<CatGroup[]>(() => {
@@ -374,21 +538,6 @@ export function FlowView() {
   }
   const toggleInbox = (key: string) => setOpenInbox((cur) => (cur === key ? null : key))
 
-  // Donut: spending share by expense category for the selected month.
-  const donutData = useMemo<DonutSlice[]>(() => {
-    return groups
-      .filter((g) => g.cat.type === 'expense')
-      .map((g) => ({
-        catId: g.cat.id,
-        name: g.cat.name,
-        value: Math.abs(g.total),
-        color: g.cat.color ?? '#94a3b8',
-      }))
-      .filter((d) => d.value > 0)
-      .sort((a, b) => b.value - a.value)
-  }, [groups])
-  const donutTotal = donutData.reduce((s, d) => s + d.value, 0)
-
   // Stacked bar: last 6 months of expense by category (respects search/month-start config).
   const trendData = useMemo<TrendDatum[]>(() => {
     const catIds = new Set(categories.map((c) => c.id))
@@ -551,11 +700,22 @@ export function FlowView() {
     <Layout>
       <PageHeader
         title="Flöde"
-        subtitle="Följ upp transaktionerna och håll dig inom planen."
+        subtitle="Följ transaktionerna, se hur inkomsten dräneras mot plan och stäm av månaden."
         actions={
-          <Link to="/importera">
-            <Button variant="secondary" size="sm"><Upload className="w-4 h-4" /> Importera</Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link to="/importera">
+              <Button variant="secondary" size="sm"><Upload className="w-4 h-4" /> Importera</Button>
+            </Link>
+            {close ? (
+              <Button variant="secondary" size="sm" onClick={() => store.reopenMonth(monthId)}>
+                <Unlock className="w-4 h-4" /> Öppna igen
+              </Button>
+            ) : (
+              <Button size="sm" onClick={doClose} disabled={!actual}>
+                <Lock className="w-4 h-4" /> Stäng månaden
+              </Button>
+            )}
+          </div>
         }
       />
 
@@ -666,6 +826,92 @@ export function FlowView() {
         </InboxRow>
       </Card>
 
+      {/* Avstämning: month result, drain-vs-plan waterfall, and the close ritual */}
+      {actual ? (
+        <div className="space-y-5 mb-5">
+          {/* AI coach — monthly review + on-request chat. key per month so local
+              state (chat thread, transient notes) never leaks across periods. */}
+          <CoachReviewCard key={monthId} monthId={monthId} />
+          <CoachChat key={`chat-${monthId}`} monthId={monthId} />
+
+          {/* Status banner */}
+          {close ? (
+            <div className={`flex items-start gap-2 text-sm rounded-xl px-4 py-3 border ${drifted ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
+              {drifted ? <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" /> : <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />}
+              <div>
+                <p className="font-medium">
+                  Stängd {new Date(close.closedAt).toLocaleDateString('sv-SE')} · netto {formatCurrency(close.net, true)}
+                </p>
+                {drifted && <p className="text-xs mt-0.5">Siffrorna har ändrats sedan avslutet (netto nu {formatCurrency(totals.net, true)}). Öppna igen och stäng om för att uppdatera.</p>}
+                {close.note && !drifted && <p className="text-xs mt-0.5">{close.note}</p>}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-sm bg-warm-100 border border-warm-300 text-gray-600 rounded-xl px-4 py-3">
+              <Unlock className="w-4 h-4 shrink-0" /> Månaden är inte avstämd ännu.
+            </div>
+          )}
+
+          {/* Result KPIs */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {([
+              ['Inkomst', totals.income, planned.income, 'income'],
+              ['Utgifter', totals.expense, planned.expense, 'expense'],
+              ['Sparande', totals.savings, planned.savings, 'savings'],
+              ['Netto', totals.net, planned.net, 'net'],
+            ] as const).map(([label, act, plan, kind]) => {
+              const diff = act - plan
+              // For expenses, spending less than planned is good (green).
+              const good = kind === 'expense' ? diff <= 0 : diff >= 0
+              return (
+                <Card key={label}>
+                  <p className="text-xs text-gray-400 mb-1">{label}</p>
+                  <p className="text-lg md:text-xl font-semibold text-gray-900 tabular-nums">{formatCurrency(act)}</p>
+                  {plan > 0 || kind === 'net' ? (
+                    <p className={`text-xs mt-0.5 tabular-nums ${good ? 'text-emerald-600' : 'text-red-600'}`}>
+                      plan {formatCurrency(plan)} · {formatCurrency(diff, true)}
+                    </p>
+                  ) : (
+                    <p className="text-xs mt-0.5 text-gray-300">ingen plan</p>
+                  )}
+                </Card>
+              )
+            })}
+          </div>
+
+          {/* Kassaflöde waterfall — the drain, with each bar's budget shown as a
+              transparent ghost behind the actual, plus a plus/minus vs plan. */}
+          {cashflowData && (cashflowData.income > 0 || cashflowData.totalExpenses > 0) && (
+            <WaterfallCard data={cashflowData} />
+          )}
+
+          {/* Utrymme i nya perioden — "kvar att röra er med" (only at the live
+              month boundary; historical months keep the plain review above). */}
+          <SpendingSpaceCard reviewedMonthId={monthId} />
+
+          {/* Note + close */}
+          {!close && (
+            <Card>
+              <CardHeader title="Anteckning" subtitle="Valfri kommentar som sparas med avslutet" />
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={2}
+                placeholder="t.ex. Extra utgift för bilservice i juni"
+                className="w-full border border-warm-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
+              />
+              <div className="mt-3">
+                <Button onClick={doClose}><Lock className="w-4 h-4" /> Stäng månaden</Button>
+              </div>
+            </Card>
+          )}
+        </div>
+      ) : (
+        <Card className="text-center py-8 mb-5">
+          <p className="text-gray-500 text-sm">Inga importerade transaktioner för {MONTH_NAMES_LONG[month - 1]} {year} ännu.</p>
+        </Card>
+      )}
+
       {/* This month vs plan — editable per-month overrides */}
       {planRows.length > 0 && (
         <Card className="mb-5">
@@ -739,24 +985,11 @@ export function FlowView() {
               activeSubs={catTimeline.activeSubs}
               onClose={() => setSelectedCatId(null)}
             />
-          ) : (donutData.length > 0 || trendHasData) && (
-            <div className="grid md:grid-cols-2 gap-4 mb-6">
-              {donutData.length > 0 && (
-                <Card padding={false} className="p-3 md:p-5">
-                  <CardHeader
-                    title="Utgifter per kategori"
-                    subtitle={`${MONTH_NAMES_LONG[month - 1]} ${year}`}
-                  />
-                  <CategoryDonut data={donutData} total={donutTotal} onCategoryClick={setSelectedCatId} />
-                </Card>
-              )}
-              {trendHasData && (
-                <Card padding={false} className="p-3 md:p-5">
-                  <CardHeader title="Utgifter senaste 6 månaderna" subtitle="Klicka på en kategori för att se trend" />
-                  <CategoryTrendBar data={trendData} categories={expenseCategories} onCategoryClick={setSelectedCatId} />
-                </Card>
-              )}
-            </div>
+          ) : trendHasData && (
+            <Card padding={false} className="p-3 md:p-5 mb-6">
+              <CardHeader title="Utgifter senaste 6 månaderna" subtitle="Klicka på en kategori för att se trend" />
+              <CategoryTrendBar data={trendData} categories={expenseCategories} onCategoryClick={setSelectedCatId} />
+            </Card>
           )}
 
           {/* Summary */}
@@ -1341,72 +1574,6 @@ function CategoryPicker({
           <RotateCcw className="w-3.5 h-3.5" /> Återställ
         </Button>
       )}
-    </div>
-  )
-}
-
-// ─── Category donut ───────────────────────────────────────────────────────────
-
-function CategoryDonut({ data, total, onCategoryClick }: { data: DonutSlice[]; total: number; onCategoryClick?: (catId: string) => void }) {
-  const isMobile = useIsMobile()
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr] gap-3 items-center">
-      <ResponsiveContainer width="100%" height={200}>
-        <PieChart>
-          <Pie
-            data={data}
-            dataKey="value"
-            nameKey="name"
-            cx="50%"
-            cy="50%"
-            innerRadius="44%"
-            outerRadius="86%"
-            stroke="none"
-          >
-            {data.map((entry) => (
-              <Cell
-                key={entry.catId}
-                fill={entry.color}
-                style={{ cursor: onCategoryClick ? 'pointer' : 'default' }}
-                onClick={() => onCategoryClick?.(entry.catId)}
-              />
-            ))}
-          </Pie>
-          <Tooltip
-            position={isMobile ? MOBILE_TOOLTIP_POSITION : undefined}
-            formatter={(v, _name, item) => {
-              const num = Number(v ?? 0)
-              const pct = total > 0 ? ((num / total) * 100).toFixed(0) : 0
-              const name = (item as { payload?: { name?: string } } | undefined)?.payload?.name ?? ''
-              return [`${formatCurrency(num)} (${pct}%)`, name]
-            }}
-            labelStyle={{ display: 'none' }}
-            contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e7e2d3' }}
-          />
-        </PieChart>
-      </ResponsiveContainer>
-      <div className="space-y-1 max-h-52 overflow-y-auto pr-1">
-        {data.map((entry) => (
-          <div
-            key={entry.catId}
-            className={`flex items-center gap-2 rounded px-1 -mx-1 py-0.5 transition-colors ${onCategoryClick ? 'cursor-pointer hover:bg-warm-100' : ''}`}
-            onClick={() => onCategoryClick?.(entry.catId)}
-          >
-            <div
-              className="w-2.5 h-2.5 rounded-full shrink-0"
-              style={{ backgroundColor: entry.color }}
-            />
-            <span className="text-xs text-gray-700 flex-1 truncate">{entry.name}</span>
-            <span className="text-xs text-gray-400 shrink-0 w-9 text-right tabular-nums">
-              {total > 0 ? ((entry.value / total) * 100).toFixed(0) : 0}%
-            </span>
-          </div>
-        ))}
-        <div className="pt-1.5 mt-1 border-t border-warm-100 flex justify-between text-xs font-semibold text-gray-900">
-          <span>Totalt</span>
-          <span className="tabular-nums">{formatCurrency(total)}</span>
-        </div>
-      </div>
     </div>
   )
 }
