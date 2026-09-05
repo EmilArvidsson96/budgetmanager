@@ -505,6 +505,11 @@ export interface AppSettings {
   // falls below it. Compared against the liquidity as displayed, i.e. it
   // follows the "med/utan sparande" toggle. Unset = no goal line.
   liquidityGoal?: number
+  // Zlantar account ids (see zlantarAccountId) the user has explicitly chosen
+  // not to import as a "new account". Zlantar keeps exporting old/closed
+  // accounts (especially loans) indefinitely, so without this they'd look
+  // "new" again on every subsequent import and get pre-checked by default.
+  excludedZlantarAccountIds?: string[]
 }
 
 // Per-transaction category override, keyed by txKey (date|amount|description|

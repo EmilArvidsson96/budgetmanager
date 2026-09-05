@@ -528,6 +528,14 @@ function migrateV15(raw: Record<string, unknown>): Record<string, unknown> {
   return { ...raw, actuals, importSnapshots, liquidityPlans }
 }
 
+// v16 → v17: add excludedZlantarAccountIds — accounts declined during a Zlantar
+// import no longer come back pre-checked as "new" on every subsequent import.
+function migrateV16(raw: Record<string, unknown>): Record<string, unknown> {
+  const settings = { ...(raw.settings as Record<string, unknown> | undefined) }
+  if (settings.excludedZlantarAccountIds === undefined) settings.excludedZlantarAccountIds = []
+  return { ...raw, settings }
+}
+
 // Rebuild one already-imported month's actuals from allTransactions + overrides,
 // preserving the snapshot's accountBalances / importedAt. Runs after every
 // re-categorization so aggregated budget totals stay in sync with the transactions.
@@ -659,6 +667,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   accounts: [],
   recurringItems: [],
   zlantarCategoryRules: DEFAULT_ZLANTAR_RULES,
+  excludedZlantarAccountIds: [],
 }
 
 interface AppStore extends AppState {
@@ -667,6 +676,9 @@ interface AppStore extends AppState {
   setCategories: (cats: CategoryDef[]) => void
   upsertAccount: (account: Account) => void
   removeAccount: (id: string) => void
+  // Remember/forget a Zlantar account id the user chose not to import, so it
+  // stays unchecked (instead of pre-checked) as "new" on later imports.
+  setZlantarAccountExcluded: (id: string, excluded: boolean) => void
   // Close/reopen without losing history; closed accounts leave liquidity + net worth.
   markAccountClosed: (id: string) => void
   reopenAccount: (id: string) => void
@@ -788,7 +800,9 @@ export const useAppStore = create<AppStore>()(
       upsertAccount: (account) =>
         set((state) => {
           const accounts = state.settings.accounts.filter((a) => a.id !== account.id)
-          return { settings: { ...state.settings, accounts: [...accounts, account] } }
+          const excludedZlantarAccountIds = (state.settings.excludedZlantarAccountIds ?? [])
+            .filter((id) => id !== account.id)
+          return { settings: { ...state.settings, accounts: [...accounts, account], excludedZlantarAccountIds } }
         }),
 
       removeAccount: (id) =>
@@ -798,6 +812,15 @@ export const useAppStore = create<AppStore>()(
             accounts: state.settings.accounts.filter((a) => a.id !== id),
           },
         })),
+
+      setZlantarAccountExcluded: (id, excluded) =>
+        set((state) => {
+          const current = state.settings.excludedZlantarAccountIds ?? []
+          const excludedZlantarAccountIds = excluded
+            ? (current.includes(id) ? current : [...current, id])
+            : current.filter((i) => i !== id)
+          return { settings: { ...state.settings, excludedZlantarAccountIds } }
+        }),
 
       upsertRecurring: (item) =>
         set((state) => {
@@ -1154,7 +1177,7 @@ export const useAppStore = create<AppStore>()(
       // ~5-10 MB quota after enough imports, which used to make every store
       // update throw QuotaExceededError mid-action (see indexedDbStorage.ts).
       storage: createJSONStorage(() => indexedDbStorage),
-      version: 16,
+      version: 17,
       migrate: (persistedState: unknown, version: number) => {
         let state = (persistedState ?? {}) as Record<string, unknown>
         if (version < 1) state = migrateV0(state)
@@ -1173,6 +1196,7 @@ export const useAppStore = create<AppStore>()(
         if (version < 14) state = migrateV13(state)
         if (version < 15) state = migrateV14(state)
         if (version < 16) state = migrateV15(state)
+        if (version < 17) state = migrateV16(state)
         return state
       },
       // On load: for salary-anchored users re-bucket actuals first (period labels

@@ -127,10 +127,16 @@ export function ImportView() {
       const newAccs = accounts.filter((a) => !existingAccountIds.has(a.id))
       const newRec = recurring.filter((r) => !existingRecurringIds.has(r.id))
 
+      // Accounts the user previously declined to import stay unchecked (but
+      // still listed, in case they change their mind) — Zlantar keeps exporting
+      // old/closed accounts (especially loans) indefinitely, so without this
+      // they'd look "new" again and get pre-checked on every import.
+      const excludedIds = new Set(store.settings.excludedZlantarAccountIds ?? [])
+
       setParsedImport(imp)
       setNewAccounts(newAccs)
       setNewRecurring(newRec)
-      setSelectedAccountIds(new Set(newAccs.map((a) => a.id)))
+      setSelectedAccountIds(new Set(newAccs.filter((a) => !excludedIds.has(a.id)).map((a) => a.id)))
       setSelectedRecurringIds(new Set(newRec.map((r) => r.id)))
       setDeselectedCatKeys(new Set())
       setExpandedMonths(new Set())
@@ -307,6 +313,7 @@ export function ImportView() {
     }
     for (const acc of newAccounts) {
       if (selectedAccountIds.has(acc.id)) store.upsertAccount(acc)
+      else store.setZlantarAccountExcluded(acc.id, true)
     }
     for (const rec of newRecurring) {
       if (selectedRecurringIds.has(rec.id)) store.upsertRecurring(rec)
