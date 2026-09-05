@@ -302,8 +302,8 @@ export function WaterfallCard({ data }: { data: CashflowData }) {
                 ))
               : selectedTxs.map((tx, i) => (
                   <div key={txKey(tx) + i} className="flex items-center gap-3 px-3 py-2">
-                    <span className="text-xs text-gray-400 tabular-nums w-20 shrink-0">{tx.date}</span>
-                    <span className="flex-1 truncate text-sm text-gray-700" title={tx.description || undefined}>{tx.description || '—'}</span>
+                    <span className="text-xs text-gray-400 tabular-nums w-16 shrink-0 truncate">{tx.date.slice(0, 10)}</span>
+                    <span className="flex-1 min-w-0 truncate text-sm text-gray-700" title={tx.description || undefined}>{tx.description || '—'}</span>
                     <span className={`text-xs tabular-nums shrink-0 ${tx.amount < 0 ? 'text-gray-700' : 'text-emerald-600'}`}>{formatCurrency(tx.amount)}</span>
                   </div>
                 ))}

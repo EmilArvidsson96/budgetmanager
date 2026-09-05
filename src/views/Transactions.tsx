@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ElementType, ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Search, X, Pencil, RotateCcw, Upload, Tag, ArrowLeftRight, AlertTriangle, Banknote, CheckCircle2, TrendingUp, Sparkles, SlidersHorizontal, Lock, Unlock } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search, X, Pencil, RotateCcw, Upload, Tag, ArrowLeftRight, AlertTriangle, Banknote, CheckCircle2, TrendingUp, Sparkles, SlidersHorizontal, Lock, Unlock, Undo2 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
@@ -24,6 +24,7 @@ import { getMonthIdForDate, getPeriodProgress, bucketKindForCategory, type Bucke
 import { useSalaryAnchors } from '@/hooks/useSalaryAnchors'
 import { DEFAULT_ZLANTAR_RULES } from '@/store/defaultCategories'
 import { txKey, reconciledKeysFromRecords, reconcileTransfers } from '@/utils/transferReconciliation'
+import { reconcileRefunds } from '@/utils/refundReconciliation'
 import { coachDueMonthId } from '@/utils/coachDigest'
 import { CoachReviewCard } from '@/components/coach/CoachReviewCard'
 import { CoachChat } from '@/components/coach/CoachChat'
@@ -381,6 +382,21 @@ export function FlowView() {
     return { income, expense, savings, net: income - expense - savings }
   }, [rows])
 
+  // Projected landing: a category that hasn't crossed its budget yet is
+  // assumed to land exactly on it (the best guess for "the rest of the month
+  // goes to plan"); a category that's already over/under keeps its current
+  // actual, since there's no plan left to project it against.
+  const projected = useMemo(() => {
+    let income = 0, expense = 0, savings = 0
+    for (const r of rows) {
+      const landing = Math.max(r.actual, r.budget)
+      if (r.cat.type === 'income') income += landing
+      else if (r.cat.type === 'savings') savings += landing
+      else if (r.cat.type === 'expense') expense += landing
+    }
+    return { income, expense, savings, net: income - expense - savings }
+  }, [rows])
+
   // Has the outcome drifted since the month was closed?
   const drifted = close ? Math.round(close.net) !== Math.round(totals.net) : false
 
@@ -512,6 +528,20 @@ export function FlowView() {
     })
   }, [allTransactions, settings.accounts, settings.partnerName, reconciledKeys])
 
+  // ── Inbox signal: refunds not yet matched to the expense they reverse ─────────
+  // Without this, a refund shows up as income while the original purchase is
+  // still sitting in expenses — inflating both sides of the month for money
+  // that never really left.
+  const pendingRefundMatches = useMemo<TransferMatch[]>(() => {
+    return reconcileRefunds({
+      transactions: allTransactions,
+      categories,
+      zlantarCategoryRules: zlantarCategoryRules ?? DEFAULT_ZLANTAR_RULES,
+      transactionOverrides,
+      alreadyReconciledKeys: reconciledKeys,
+    })
+  }, [allTransactions, categories, zlantarCategoryRules, transactionOverrides, reconciledKeys])
+
   // ── Inbox signal 3: categories over plan this month ───────────────────────────
   const overBudget = useMemo(() => {
     return categories
@@ -564,7 +594,7 @@ export function FlowView() {
     [categories, store, monthId]
   )
 
-  const inboxTotal = uncategorizedTxs.length + pendingMatches.length + overBudget.length + largeTxs.length
+  const inboxTotal = uncategorizedTxs.length + pendingMatches.length + pendingRefundMatches.length + overBudget.length + largeTxs.length
 
   const confirmMatch = (m: TransferMatch) => {
     store.addReconciliationRecord({ id: `rec-${m.id}`, importedAt: new Date().toISOString(), matches: [m] })
@@ -833,6 +863,20 @@ export function FlowView() {
           ))}
         </InboxRow>
 
+        <InboxRow icon={Undo2} color="purple" label="Återbetalningar att matcha mot kostnad" count={pendingRefundMatches.length}
+          open={openInbox === 'refunds'} onToggle={() => toggleInbox('refunds')}>
+          {pendingRefundMatches.slice(0, 12).map((m) => (
+            <div key={m.id} className="flex items-center gap-2 px-4 md:px-5 py-2.5 border-t border-warm-100">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-gray-700 truncate">{m.descriptionA || '—'} <span className="text-gray-300">·</span> återbetalning: {m.descriptionB || '—'}</div>
+                <div className="text-[11px] text-gray-400 truncate tabular-nums">{m.dateA.slice(0, 10)} → {m.dateB.slice(0, 10)}{m.daysDiff > 0 ? ` · ${Math.round(m.daysDiff)} dgr` : ''} · {m.accountAName}</div>
+              </div>
+              <span className="text-sm tabular-nums font-medium text-gray-700 shrink-0">{formatCurrency(m.amount)}</span>
+              <Button size="sm" variant="secondary" onClick={() => confirmMatch(m)}>Matcha</Button>
+            </div>
+          ))}
+        </InboxRow>
+
         <InboxRow icon={AlertTriangle} color="red" label="Kategorier över plan" count={overBudget.length}
           open={openInbox === 'over'} onToggle={() => toggleInbox('over')}>
           {overBudget.map((r) => (
@@ -896,6 +940,8 @@ export function FlowView() {
               const diff = act - plan
               // For expenses, spending less than planned is good (green).
               const good = kind === 'expense' ? diff <= 0 : diff >= 0
+              const projDiff = kind === 'net' ? projected.net - planned.net : null
+              const projGood = projDiff !== null && projDiff >= 0
               return (
                 <Card key={label}>
                   <p className="text-xs text-gray-400 mb-1">{label}</p>
@@ -906,6 +952,11 @@ export function FlowView() {
                     </p>
                   ) : (
                     <p className="text-xs mt-0.5 text-gray-300">ingen plan</p>
+                  )}
+                  {projDiff !== null && (
+                    <p className={`text-xs mt-1 pt-1 border-t border-warm-100 tabular-nums ${projGood ? 'text-emerald-600' : 'text-red-600'}`}>
+                      prognos {formatCurrency(projected.net)} · {formatCurrency(projDiff, true)}
+                    </p>
                   )}
                 </Card>
               )
@@ -1227,7 +1278,7 @@ function InboxRow({
   icon: Icon, color, label, count, open, onToggle, last, children,
 }: {
   icon: ElementType
-  color: 'amber' | 'blue' | 'red' | 'gray'
+  color: 'amber' | 'blue' | 'red' | 'gray' | 'purple'
   label: string
   count: number
   open: boolean
@@ -1235,7 +1286,7 @@ function InboxRow({
   last?: boolean
   children: ReactNode
 }) {
-  const colorMap = { amber: 'text-amber-500', blue: 'text-blue-500', red: 'text-red-500', gray: 'text-gray-400' }
+  const colorMap = { amber: 'text-amber-500', blue: 'text-blue-500', red: 'text-red-500', gray: 'text-gray-400', purple: 'text-purple-500' }
   const disabled = count === 0
   return (
     <div className={last ? '' : 'border-b border-warm-100'}>
