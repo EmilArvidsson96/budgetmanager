@@ -13,7 +13,7 @@ import { extractAppStateForSync } from '@/utils/githubSync'
 // what keeps the GitHub token (needed to create the issue) off the client.
 // Reports go to the PRIVATE data repo, not the public app repo, because they
 // carry a full app-state snapshot that can include real financial data.
-const REPORT_ENDPOINT = 'https://budgetmanager-report.YOUR-SUBDOMAIN.workers.dev'
+const REPORT_ENDPOINT = 'https://budgetmanager-report.emil-arvidsson.workers.dev'
 
 type ReportKind = 'bug' | 'enhancement'
 type SubmitState = 'idle' | 'sending' | 'sent' | 'error'
@@ -47,12 +47,6 @@ export function ReportIssueButton({ atBottom }: ReportIssueButtonProps) {
     if (!canSubmit) return
     setSubmitState('sending')
     setErrorMessage('')
-
-    if (REPORT_ENDPOINT.includes('YOUR-SUBDOMAIN')) {
-      setSubmitState('error')
-      setErrorMessage('rapportfunktionen är inte färdiginstallerad än (worker-URL saknas)')
-      return
-    }
 
     const context = {
       route: location.pathname,
