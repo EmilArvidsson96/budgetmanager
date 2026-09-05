@@ -31,6 +31,7 @@ import { SpendingSpaceCard } from '@/components/reconcile/SpendingSpaceCard'
 import { WaterfallCard } from '@/components/reconcile/Waterfall'
 import { GROCERY_CATEGORY_LABELS } from '@/types'
 import type {
+  AppState,
   CategoryDef,
   ZlantarTransaction,
   ZlantarCategoryRule,
@@ -144,6 +145,22 @@ function derivedSubColor(baseColor: string, index: number, total: number): strin
   return `#${toHex(blend(r))}${toHex(blend(g))}${toHex(blend(b))}`
 }
 
+// Month that needs reconciling instead of the raw calendar month: the coach's
+// due month when the coach is on, otherwise the most recent elapsed month with
+// activity that hasn't been closed yet, otherwise the current period. Shared
+// by the initial seed and by the post-hydration re-seed below.
+function dueMonthSeed(s: AppState): { year: number; month: number } {
+  const cur = currentMonthId(s)
+  let id = s.settings.coachEnabled ? coachDueMonthId(s) : null
+  if (!id) {
+    const unclosed = Object.keys(s.actuals)
+      .filter((m) => m < cur && (s.actuals[m].entries?.length ?? 0) > 0 && !s.monthCloses[m])
+      .sort()
+    id = unclosed[unclosed.length - 1] ?? cur
+  }
+  return { year: parseInt(id.slice(0, 4)), month: parseInt(id.slice(5, 7)) }
+}
+
 export function FlowView() {
   const store = useAppStore()
   const { settings, allTransactions, transactionOverrides, groceryReceipts, reconciliations, actuals, monthCloses } = store
@@ -151,28 +168,42 @@ export function FlowView() {
   const { config, flaggedMonths } = useSalaryAnchors()
 
   // Open on the month that needs reconciling instead of always the raw calendar
-  // month: the coach's due month when the coach is on, otherwise the most recent
-  // elapsed month with activity that hasn't been closed yet, otherwise the
-  // current RECONCILIATION period (not raw calendar "today" — with a custom
-  // period-start day or salary-anchored months, the two can differ, e.g. a
-  // payday-anchored period already opens next calendar month's label before the
-  // calendar itself turns over). Seeded once — manual month navigation still
-  // works. getState() avoids reordering hooks.
+  // month (see dueMonthSeed above) — not raw calendar "today", since with a
+  // custom period-start day or salary-anchored months the two can differ, e.g.
+  // a payday-anchored period already opens next calendar month's label before
+  // the calendar itself turns over). Seeded once on mount — manual month
+  // navigation still works. getState() avoids reordering hooks.
+  //
+  // The store hydrates from IndexedDB asynchronously and there's no app-wide
+  // hydration gate, so on a cold load this can run before hydration finishes
+  // and see empty actuals/monthCloses, seeding the calendar-period fallback
+  // instead of the month that actually needs review. wasHydrated records
+  // whether that happened so the effect below can re-seed once real data
+  // lands, without clobbering manual navigation that happened in the meantime.
   const dueSeed = useMemo(() => {
     const s = useAppStore.getState()
-    const cur = currentMonthId(s)
-    let id = s.settings.coachEnabled ? coachDueMonthId(s) : null
-    if (!id) {
-      const unclosed = Object.keys(s.actuals)
-        .filter((m) => m < cur && (s.actuals[m].entries?.length ?? 0) > 0 && !s.monthCloses[m])
-        .sort()
-      id = unclosed[unclosed.length - 1] ?? cur
-    }
-    return { year: parseInt(id.slice(0, 4)), month: parseInt(id.slice(5, 7)) }
+    return { ...dueMonthSeed(s), wasHydrated: useAppStore.persist.hasHydrated() }
   }, [])
 
   const [year, setYear] = useState(dueSeed.year)
   const [month, setMonth] = useState(dueSeed.month)
+  const userNavigatedRef = useRef(false)
+
+  useEffect(() => {
+    if (dueSeed.wasHydrated) return
+    const reseed = () => {
+      if (userNavigatedRef.current) return
+      const seed = dueMonthSeed(useAppStore.getState())
+      setYear(seed.year)
+      setMonth(seed.month)
+    }
+    // Hydration may have finished in the gap between the seed above and this
+    // effect running — catch up immediately instead of waiting on an event
+    // that already fired (onFinishHydration only notifies future listeners).
+    if (useAppStore.persist.hasHydrated()) { reseed(); return }
+    return useAppStore.persist.onFinishHydration(reseed)
+  }, [dueSeed])
+
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set())
   const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
@@ -209,10 +240,12 @@ export function FlowView() {
   const reconciledKeys = useMemo(() => reconciledKeysFromRecords(reconciliations), [reconciliations])
 
   const prevMonth = () => {
+    userNavigatedRef.current = true
     if (month === 1) { setMonth(12); setYear((y) => y - 1) }
     else setMonth((m) => m - 1)
   }
   const nextMonth = () => {
+    userNavigatedRef.current = true
     if (month === 12) { setMonth(1); setYear((y) => y + 1) }
     else setMonth((m) => m + 1)
   }
